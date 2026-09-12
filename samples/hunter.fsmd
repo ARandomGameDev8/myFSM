@@ -1,0 +1,142 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     samples/hunter.fsmb  (1668 bytes)
+ format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x0000004E   42 B   2
+   [2]  Runtime    0x0000004E .. 0x000000B3   101 B  5
+   [3]  Temporary  0x000000B3 .. 0x00000108   85 B   6
+   [4]  State      0x00000108 .. 0x0000012A   34 B   3
+   [5]  Token      0x0000012A .. 0x00000288   350 B  38
+   [6]  AST        0x00000288 .. 0x00000652   970 B  88
+   [7]  FSM        0x00000652 .. 0x00000684   50 B   3
+
+ SECTION [1] GLOBAL VARIABLES (2)
+   #0  attackRange     float         = 2.5f
+   #1  fleeBelow       float         = 25f
+
+ SECTION [2] RUNTIME VARIABLES (5)
+   #0  player          Object3D              owner=external  slot 0
+   #1  hunter          Object3D              owner=dsl (Controller-owned)  slot 1
+   #2  agent           NavMeshAgent          owner=dsl (Controller-owned)  slot 2
+   #3  health          float                 owner=external  slot 3
+   #4  playerVisible   bool                  owner=external  slot 4
+
+ SECTION [3] TEMPORARY VARIABLES (6)
+   #0  lastSeenDist    float         depth 1   state: Hunt
+   #1  dist            float         depth 2   state: Hunt
+   #2  toPlayer        Vector3       depth 3   state: Hunt
+   #3  away            Vector3       depth 2   state: Flee
+   #4  ticks           int           depth 1   state: Lost
+   #5  dest            Vector3       depth 2   state: Lost
+
+ SECTION [4] STATES (3)
+   #0  Hunt            ast root #0
+   #1  Flee            ast root #42
+   #2  Lost            ast root #64
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Hunt' — 20 instruction(s) ---
+   0   ASSIGN  lastSeenDist = 999f
+   1   ASSIGN  dist = getDistanceTo(hunter, player)
+   2   ASSIGN  lastSeenDist = dist
+   3   CLAIM   agent.position
+   4   CLAIM   agent.velocity
+   5   CALL    stopMovement(agent)   [fn 0x062A]
+   6   RELEASE agent.position
+   7   RELEASE agent.velocity
+   8   CLAIM   hunter.rotation
+   9   CALL    lookAt(hunter, player)   [fn 0x0700]
+   10  RELEASE hunter.rotation
+   11  ASSIGN  toPlayer = directionTo(hunter, player)
+   12  CLAIM   agent.position
+   13  CLAIM   agent.velocity
+   14  CALL    moveTowards(agent, toPlayer, 3.5f)   [fn 0x0624]
+   15  RELEASE agent.position
+   16  RELEASE agent.velocity
+   17  GOTO    Flee
+   18  GOTO    Lost
+   19  GOTO    Hunt
+
+--- state #1 'Flee' — 8 instruction(s) ---
+   0   ASSIGN  away = getFleeDirection(getPosition(hunter), getPosition(player))
+   1   CLAIM   agent.position
+   2   CLAIM   agent.velocity
+   3   CALL    sprintTowards(agent, away, 1.5f)   [fn 0x061E]
+   4   RELEASE agent.position
+   5   RELEASE agent.velocity
+   6   GOTO    Hunt
+   7   GOTO    Flee
+
+--- state #2 'Lost' — 10 instruction(s) ---
+   0   ASSIGN  ticks = 0
+   1   ASSIGN  dest = getWanderVector(getPosition(hunter), 5f)
+   2   CLAIM   agent.position
+   3   CLAIM   agent.velocity
+   4   CALL    moveTowards(agent, dest, 2f)   [fn 0x0624]
+   5   RELEASE agent.position
+   6   RELEASE agent.velocity
+   7   ASSIGN  ticks = (ticks + 1)
+   8   GOTO    Hunt
+   9   GOTO    Lost
+
+ SECTION [6] AST (88 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Hunt' ---
+#[0] STATE   [ENTRY]
+   #[1] TEMP float lastSeenDist
+   #[2] ASSIGN lastSeenDist = 999f
+   #[4] ACTIONS
+      #[5] TEMP float dist
+      #[6] ASSIGN dist = getDistanceTo(hunter, player)
+      #[10] ASSIGN lastSeenDist = dist
+      #[12] IF    cond: (dist <= attackRange)
+         #[16] CALL stopMovement(NavMeshAgent)
+         #[18] CALL lookAt(Object3D, Object3D)
+      #[21] ELSE
+         #[22] TEMP Vector3 toPlayer
+         #[23] ASSIGN toPlayer = directionTo(hunter, player)
+         #[27] CALL moveTowards(NavMeshAgent, Vector3, float)
+   #[31] TRAVERSALS
+      #[32] IF    cond: (health < fleeBelow)
+         #[36] GOTO Flee
+      #[37] IF    cond: !playerVisible
+         #[40] GOTO Lost
+      #[41] GOTO Hunt
+
+--- state #1 'Flee' ---
+#[42] STATE
+   #[43] ACTIONS
+      #[44] TEMP Vector3 away
+      #[45] ASSIGN away = getFleeDirection(getPosition(hunter), getPosition(player))
+      #[51] CALL sprintTowards(NavMeshAgent, Vector3, float)
+   #[55] TRAVERSALS
+      #[56] IF    cond: ((health >= fleeBelow) && playerVisible)
+         #[62] GOTO Hunt
+      #[63] GOTO Flee
+
+--- state #2 'Lost' ---
+#[64] STATE
+   #[65] TEMP int ticks
+   #[66] ASSIGN ticks = 0
+   #[68] ACTIONS
+      #[69] TEMP Vector3 dest
+      #[70] ASSIGN dest = getWanderVector(getPosition(hunter), 5f)
+      #[75] CALL moveTowards(NavMeshAgent, Vector3, float)
+      #[79] ASSIGN ticks = (ticks + 1)
+   #[83] TRAVERSALS
+      #[84] IF    cond: playerVisible
+         #[86] GOTO Hunt
+      #[87] GOTO Lost
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   Hunt         -> Flee
+   Hunt         -> Lost
+   Hunt         -> Hunt
+   Flee         -> Hunt
+   Flee         -> Flee
+   Lost         -> Hunt
+   Lost         -> Lost

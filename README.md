@@ -18,6 +18,8 @@ Works exactly like `g++ foo.cpp -o foo`:
 ./bin/fsmc my_state.fsm                 # → my_state.fsmb (next to the source)
 ./bin/fsmc my_state.fsm -o out.fsmb     # → explicit output path
 ./bin/fsmc --help                       # usage
+# disassemble a binary back to a human-readable .fsmd (debugging):
+./bin/fsmc -d out.fsmb                  # → out.fsmd   (or: -d out.fsmb -o - for stdout)
 ```
 
 Prefer a plain `fsmc` command from any directory? Install it once:
@@ -43,7 +45,7 @@ make clean                              # remove fsmc/build/
 |------|---------|
 | 0 | compiled successfully |
 | 1 | usage / I/O error (bad arguments, missing input file) |
-| 2 | compile error — `file:line:col: message` on stderr; **no `.fsmb` is ever emitted**, not even partially |
+| 2 | compile error — `file:line:col: message` on stderr; **no `.fsmb` is ever emitted**, not even partially. (Also used for an invalid/corrupt `.fsmb` in `-d` disassemble mode.) |
 
 ### Try the bundled fixtures
 
@@ -67,11 +69,13 @@ fsmc/                  the compiler (CMake project)
   include/  src/       hand-rolled lexer, recursive-descent parser, scoping,
                        six named compiler passes (symbols → AST → goto
                        collection → FSM adjacency → serialization → linking),
-                       byte-exact two-phase serializer, module reader
-  tests/               10 CTest suites + fixtures (golden bytes pinned)
+                       byte-exact two-phase serializer, module reader,
+                       disassembler (-d → .fsmd)
+  tests/               11 CTest suites + fixtures (golden bytes pinned)
 bin/fsmc               terminal driver: auto-builds the compiler once, then
                        runs it (this is what makes the g++-like workflow)
 Makefile               repo-root convenience targets (see above)
+samples/               three complete example FSMs + their .fsmd dumps
 ```
 
 ## Requirements

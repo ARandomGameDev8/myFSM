@@ -723,7 +723,16 @@ fsm.fsm:8:9:  warning: bare goto before any if: subsequent statements are dead c
 |---|---|
 | 0 | compiled; `.fsmb` written (message `input.fsm -> output.fsmb (N bytes)`) |
 | 1 | usage / I/O error (bad arguments, missing input file, unwritable output) |
-| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. |
+| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. (Also: the input to `-d` disassemble mode is not a valid/corrupt `.fsmb` module.) |
+
+**Debugging binaries:** `fsmc -d module.fsmb [-o module.fsmd]` (or `-o -`
+for stdout) walks the binary back through the module reader, validates every
+address/reference/function-id/token-type, and prints a human-readable dump:
+header + section map, decoded constant values, runtime vars with owner and
+binding slot, temps with depth/state, per-state instruction streams
+(`CLAIM var.field` / `CALL fn(resolved, args)` / `GOTO State`), the full AST
+tree per state, and the goto transition table. Corrupt or truncated modules
+are rejected with exit 2 and no dump written.
 
 ## 20. What is NOT allowed
 

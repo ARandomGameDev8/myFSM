@@ -4,7 +4,8 @@
 little-endian `.fsmb` binary module, byte-for-byte per spec v0.3 §3.
 
 ```
-fsmc input.fsm -o output.fsmb
+fsmc input.fsm -o output.fsmb       # compile
+fsmc -d input.fsmb -o input.fsmd    # disassemble (read back + human-readable dump; -o - = stdout)
 ```
 
 The **language reference** (syntax of every feature, all types/functions,
@@ -606,6 +607,7 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
 | `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, Tier-3 owner promotion, round-trip read-back & compare, corruption rejection, determinism |
 | `golden_bytes` | **pinned 401-byte module** for `tests/fixtures/minimal.fsm` (hand-verified), header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), claim field names, decoded literals (scalars + vectors), corrupted/truncated module rejection, deterministic dump output |
 
 Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`
 (if/else-if/else, temps at all three depths, Traversals with two ifs + bare

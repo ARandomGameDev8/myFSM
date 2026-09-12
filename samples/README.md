@@ -10,6 +10,15 @@ path. These three are complete, working AIs you can compile right now:
 ./bin/fsmc samples/guard.fsm
 ```
 
+Each binary has a committed human-readable twin (a `.fsmd` disassembly —
+header, section map, decoded values, resolved names, per-state instruction
+streams, AST trees, transition table). Regenerate or create your own:
+
+```sh
+./bin/fsmc -d samples/guard.fsmb             # -> samples/guard.fsmd
+./bin/fsmc -d samples/guard.fsmb -o -        # print to stdout
+```
+
 | File | What it demonstrates |
 |---|---|
 | `patrol.fsm` | 4-state cycle, state-level temps, `goTo` / `stopMovement` claims |

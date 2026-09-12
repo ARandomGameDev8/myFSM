@@ -26,6 +26,7 @@ add_library(fsmc_lib STATIC
   src/passes.cpp
   src/serializer.cpp
   src/module_reader.cpp
+  src/disassembler.cpp
 )
 target_include_directories(fsmc_lib
   PUBLIC
@@ -54,6 +55,7 @@ add_executable(fsmc_tests
   tests/test_traversals.cpp
   tests/test_passes.cpp
   tests/test_golden_bytes.cpp
+  tests/test_disassemble.cpp
 )
 target_link_libraries(fsmc_tests PRIVATE fsmc_lib)
 target_compile_definitions(fsmc_tests PRIVATE
@@ -62,6 +64,7 @@ target_compile_definitions(fsmc_tests PRIVATE
 
 set(FSMC_TEST_SUITES
   lib_types lib_functions lexer parser scope overloads traversals passes golden_bytes
+  disassemble
 )
 foreach(suite IN LISTS FSMC_TEST_SUITES)
   add_test(NAME ${suite} COMMAND fsmc_tests ${suite})
