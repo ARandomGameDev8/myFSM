@@ -1,0 +1,8 @@
+// Traversals needs at least one goto.
+State A {
+    Actions {
+    }
+    Traversals {
+    } // ERROR: no goto
+}
+@ENTRY A

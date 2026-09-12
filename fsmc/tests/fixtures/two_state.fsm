@@ -1,0 +1,42 @@
+// two_state.fsm — if / else if / else, temps at all three depths,
+// Traversals with two ifs + a bare default goto.
+const float chaseRange = 10.0f;
+
+var Object3D player;
+var Object3D enemy;
+var NavMeshAgent agent;
+var bool enemyVisible;
+
+State Chase {
+    temp float lastDist = 99.0f; // depth 1: state entry / exit lifetime
+    Actions {
+        temp float dist = getDistanceTo(player, enemy); // depth 2
+        lastDist = dist;
+        if (enemyVisible) {
+            temp Vector3 dir = normalize(directionTo(player, enemy)); // depth 3
+            moveTowards(agent, dir, 5.0f);
+        } else if (lastDist < 3.0f) {
+            followTarget(agent, enemy);
+        } else {
+            stopMovement(agent);
+        }
+    }
+    Traversals {
+        if (lastDist < 1.0f) { goto Flee; }
+        if (!enemyVisible) { goto Flee; }
+        goto Chase;
+    }
+}
+
+State Flee {
+    Actions {
+        temp Vector3 away = getFleeDirection(getPosition(player), getPosition(enemy));
+        moveTowards(agent, away, 8.0f);
+    }
+    Traversals {
+        if (!enemyVisible) { goto Chase; }
+        goto Flee;
+    }
+}
+
+@ENTRY Chase

@@ -1,0 +1,12 @@
+// A bare {} block is not allowed.
+State A {
+    Actions {
+        temp int x = 1;
+        {
+        } // ERROR: unexpected block
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A

@@ -1,0 +1,13 @@
+// A non-goto statement inside a Traversals if body.
+var AnimationController3D ctrl;
+State A {
+    Actions {
+    }
+    Traversals {
+        if (true) {
+            setAnimation(ctrl, "run"); // ERROR
+            goto A;
+        }
+    }
+}
+@ENTRY A

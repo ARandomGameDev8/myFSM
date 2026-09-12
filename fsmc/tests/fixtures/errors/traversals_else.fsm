@@ -1,0 +1,10 @@
+// No else in Traversals.
+var bool ready;
+State A {
+    Actions {
+    }
+    Traversals {
+        if (ready) { goto A; } else { goto A; } // ERROR: else not allowed
+    }
+}
+@ENTRY A
