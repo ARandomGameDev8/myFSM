@@ -7,6 +7,10 @@ little-endian `.fsmb` binary module, byte-for-byte per spec v0.3 §3.
 fsmc input.fsm -o output.fsmb
 ```
 
+The **language reference** (syntax of every feature, all types/functions,
+operator and scoping rules, all diagnostics) lives in [`LANGUAGE.md`](LANGUAGE.md);
+this document covers the compiler pipeline and the binary format.
+
 * **Languages/tools**: C++17, standard library only. Hand-rolled lexer +
   recursive-descent parser (no Bison/Flex/ANTLR). No third-party dependencies.
 * **Build**: CMake ≥ 3.16. Targets: `fsmc` (CLI), `fsmc_tests` (tests via CTest).

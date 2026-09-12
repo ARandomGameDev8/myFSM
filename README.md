@@ -4,6 +4,11 @@
 Reads one `.fsm` source file, emits one little-endian `.fsmb` binary (36-byte
 header + 7 sections), byte-for-byte deterministic.
 
+- **Writing `.fsm` files?** → [`fsmc/LANGUAGE.md`](fsmc/LANGUAGE.md) — the full
+  language reference: syntax of every feature, all 21 types, all 179 function
+  overloads, type rules, scoping, and every compile error.
+- **Binary format / design** → [`fsmc/DESIGN.md`](fsmc/DESIGN.md)
+
 ## Compile a .fsm file (terminal)
 
 Works exactly like `g++ foo.cpp -o foo`:
@@ -53,6 +58,7 @@ make clean                              # remove fsmc/build/
 ```
 fsmc/                  the compiler (CMake project)
   CMakeLists.txt       fsmc_lib + fsmc CLI + fsmc_tests, CTest wiring
+  LANGUAGE.md          the full language reference (syntax of every feature)
   DESIGN.md            normative binary layout, full 179-entry function ID
                        table, CLAIM/RELEASE encoding, scope + overload rules,
                        and the 7 documented deviations from spec v0.3
