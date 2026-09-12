@@ -1,0 +1,61 @@
+// samples/hunter.fsm — a classic Hunt / Flee / Lost AI.
+//
+// Shows: if / else-if / else, temps at all three depths, vector math
+// (component-wise +, scalar *), the && operator, and multiple Tier 3
+// navigation calls with different claims (moveTowards claims
+// position+velocity, lookAt claims rotation).
+
+const float attackRange = 2.5f;
+const float fleeBelow   = 25.0f;
+
+var Object3D     player;
+var Object3D     hunter;
+var NavMeshAgent agent;
+var float        health;
+var bool         playerVisible;
+
+State Hunt {
+    temp float lastSeenDist = 999.0f;     // depth 1: persists across ticks
+    Actions {
+        temp float dist = getDistanceTo(hunter, player);      // depth 2
+        lastSeenDist = dist;
+        if (dist <= attackRange) {
+            stopMovement(agent);
+            lookAt(hunter, player);
+        } else {
+            temp Vector3 toPlayer = directionTo(hunter, player);  // depth 3
+            moveTowards(agent, toPlayer, 3.5f);
+        }
+    }
+    Traversals {
+        if (health < fleeBelow) { goto Flee; }
+        if (!playerVisible)    { goto Lost; }
+        goto Hunt;
+    }
+}
+
+State Flee {
+    Actions {
+        temp Vector3 away = getFleeDirection(getPosition(hunter), getPosition(player));
+        sprintTowards(agent, away, 1.5f);
+    }
+    Traversals {
+        if (health >= fleeBelow && playerVisible) { goto Hunt; }
+        goto Flee;
+    }
+}
+
+State Lost {
+    temp int ticks = 0;
+    Actions {
+        temp Vector3 dest = getWanderVector(getPosition(hunter), 5.0f);
+        moveTowards(agent, dest, 2.0f);
+        ticks = ticks + 1;
+    }
+    Traversals {
+        if (playerVisible) { goto Hunt; }
+        goto Lost;
+    }
+}
+
+@ENTRY Hunt
