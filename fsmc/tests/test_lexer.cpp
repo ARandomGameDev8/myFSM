@@ -99,6 +99,24 @@ TEST(lexer, floor_division_after_value_is_not_a_comment) {
     ASSERT_EQ(t[1].kind, Tok::SlashSlash);
 }
 
+TEST(lexer, floor_division_after_an_identifier_ignores_whitespace) {
+    // the value run is not broken by spaces: an identifier before `//` makes it
+    // the operator, which is why `@ENTRY Idle // note` is not a comment
+    Diagnostics d;
+    auto t = toks("total // count", d);
+    ASSERT_FALSE(d.hasErrors());
+    ASSERT_EQ(t.size(), std::size_t(4)); // total, //, count, End
+    ASSERT_EQ(t[0].kind, Tok::Ident);
+    ASSERT_EQ(t[1].kind, Tok::SlashSlash);
+    ASSERT_EQ(t[2].kind, Tok::Ident);
+
+    // a newline does break it
+    Diagnostics d2;
+    auto t2 = toks("total\n// count", d2);
+    ASSERT_FALSE(d2.hasErrors());
+    ASSERT_EQ(t2.size(), std::size_t(2)); // total, End
+}
+
 TEST(lexer, comment_after_statement_is_a_comment) {
     Diagnostics d;
     auto t = toks("x; // floor divide\n5 // 2", d);

@@ -19,6 +19,17 @@ struct ScopeGuard {
     explicit ScopeGuard(ScopeStack& s) : stack(s) { stack.push(); }
     ~ScopeGuard() { stack.pop(); }
 };
+
+// `//` directly after a value on the same line is the floor-division operator,
+// not a comment (LANGUAGE.md §2). The one construct that ends without a `;` is
+// `@ENTRY <State>`, so a trailing comment there — `@ENTRY Idle // the start` —
+// is lexed as an operator and lands here as a confusing "unexpected token";
+// append the rule so the fix is obvious.
+std::string slashSlashHint(const lex::Token& t) {
+    if (t.kind != lex::Tok::SlashSlash) return std::string();
+    return " — note: '//' after a value on the same line is floor division, not a "
+           "comment; put this comment on its own line";
+}
 } // namespace
 
 Parser::Parser(const std::vector<lex::Token>& tokens, Diagnostics& diag)
@@ -98,7 +109,8 @@ void Parser::parseTopLevel() {
             case lex::Tok::Entry: parseEntry(); break;
             default:
                 errorAt(cur(), "unexpected token '" + cur().text +
-                                 "' at top level (expected const, var, State, or @ENTRY)");
+                                 "' at top level (expected const, var, State, or @ENTRY)" +
+                                 slashSlashHint(cur()));
                 next();
                 break;
         }
@@ -502,7 +514,8 @@ bool Parser::parseOneActionStmt(std::vector<Stmt>& out) {
             return true;
         }
         default:
-            errorAt(cur(), "unexpected token '" + cur().text + "' in statement position");
+            errorAt(cur(), "unexpected token '" + cur().text + "' in statement position" +
+                               slashSlashHint(cur()));
             next();
             return true;
     }

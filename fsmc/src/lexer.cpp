@@ -115,10 +115,11 @@ struct Lexer {
                 continue;
             }
             if (c == '/' && peek(1) == '/') {
-                // '//' is floor division when it directly follows a value
-                // token character (no intervening whitespace); otherwise it
-                // starts a line comment. (Same rule C-like languages need to
-                // coexist with a floor-division operator.)
+                // '//' is floor division when the last significant character
+                // is a value character — a letter, digit, ')', ']' or a closing
+                // quote — with only whitespace in between; otherwise it starts a
+                // line comment. Whitespace alone does not break the value run, so
+                // `7 // 2` divides while `x; // note` comments (LANGUAGE.md §2).
                 if (std::isalnum(static_cast<unsigned char>(lastValueChar)) ||
                     lastValueChar == ')' || lastValueChar == ']' || lastValueChar == '"') {
                     break; // the operator path in run() will consume it

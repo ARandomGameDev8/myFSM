@@ -117,6 +117,37 @@ TEST(parser, const_floordiv_rounds_toward_negative_infinity) {
     ASSERT_EQ(fh::le32(r.src.globals[1].constBytes, 0), uint32_t(int32_t(-4)));
 }
 
+TEST(parser, a_comment_after_entry_is_floor_division_and_the_error_says_so) {
+    // `//` whose last significant character is a value character is the
+    // floor-division operator, not a comment — whitespace does not break the
+    // run (LANGUAGE.md §2, DESIGN.md deviation 5). `@ENTRY X` is the one
+    // top-level item with no terminating `;`, so a trailing comment there is
+    // the classic trap; the diagnostic names the rule instead of leaving a bare
+    // "unexpected token".
+    const std::string body =
+        "var bool flag;\n"
+        "State A {\n"
+        "    Actions { Start { } Update { } }\n"
+        "    Traversals {\n"
+        "        if (flag) { goto A; }\n"
+        "        goto A;\n"
+        "    }\n"
+        "}\n";
+    auto r = fh::compile(body + "@ENTRY A // the start state\n");
+    ASSERT_FALSE(r.ok);
+    ASSERT_TRUE(fh::hasErrorContaining(r, "unexpected token '//' at top level"));
+    ASSERT_TRUE(fh::hasErrorContaining(
+        r, "'//' after a value on the same line is floor division, not a comment"));
+    // a floor-division reading also drags the comment's words in as tokens
+    ASSERT_TRUE(fh::hasErrorContaining(r, "unexpected token 'the' at top level"));
+
+    // the same file with the comment on its own line compiles cleanly
+    auto ok = fh::compile(body + "// the start state\n@ENTRY A\n");
+    ASSERT_TRUE(ok.ok);
+    ASSERT_EQ(ok.errors, 0);
+    ASSERT_EQ(ok.warnings, 0);
+}
+
 TEST(parser, const_reference_must_be_declared_earlier) {
     auto r = fh::compile("const int a = b;\nconst int b = 1;\n" + base("Actions { Start { } Update { } }\n"));
     ASSERT_FALSE(r.ok);

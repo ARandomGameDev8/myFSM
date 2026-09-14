@@ -716,10 +716,14 @@ signature; >1 match → ambiguous error, same list.
    is the source-level rule that a Tier 3 call's driven first argument must be
    a variable (§2.6, §3.7).
 5. **`//` (floor division) vs `//` (line comment)** are disambiguated by
-   lexer context, as in C-like languages needing both: `//` is floor
-   division only when it directly follows a value token (digit, letter, `)`,
-   `]`, `"` — no intervening whitespace or newline); otherwise it starts a
-   line comment. `x; // c` is a comment; `7 // 2` is floor division.
+   lexer context, as in C-like languages needing both: `//` is floor division
+   when the **last significant character** is a value character (digit, letter,
+   `)`, `]`, closing `"`) — intervening whitespace does *not* break the value
+   run, only a newline or a non-value token does; otherwise it starts a line
+   comment. So `x; // c` is a comment and `7 // 2` is floor division, while
+   `@ENTRY Idle // the start` is *not* a comment (`Idle` is a value character
+   run and `@ENTRY` takes no `;`): the parser reports the unexpected `'//'` and
+   appends the rule as a hint (`Parser::slashSlashHint`).
 6. **`string` is a first-class but deliberately narrow type** (module v0.4).
    The draft reserved it and rejected every literal; it is now registered as
    tag `0x05` and usable in constants, runtime variables, temps, conditions

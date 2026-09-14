@@ -96,6 +96,12 @@ Otherwise (own line, or after `;`, `=`, `(`, `{`, `}`, `,`, a keyword, an
 operator, …) it starts a **comment**. Whitespace alone does **not** break the
 ambiguity — only a newline or a non-value token does.
 
+When it bites, the diagnostic names the rule: `unexpected token '//' at top
+level (expected const, var, State, or @ENTRY) — note: '//' after a value on the
+same line is floor division, not a comment; put this comment on its own line`.
+The construct most likely to trip it is `@ENTRY Idle // the start state`, since
+`@ENTRY` is the one item with no terminating `;`.
+
 ```fsm
 temp int a = 7 // 2;        // floor division: a == 3  (the // sticks to the 7)
 temp int b = 7; // note     // comment: ';' breaks the value run
@@ -962,7 +968,9 @@ State Flee {
     }
 }
 
-@ENTRY Chase                                // exactly one, names a declared state
+// exactly one @ENTRY, and it names a declared state (the comment goes on its
+// own line: after a value, `//` is floor division — §2)
+@ENTRY Chase
 ```
 
 Compile it:
