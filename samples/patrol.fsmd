@@ -1,27 +1,27 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/patrol.fsmb  (1125 bytes)
- format   fsmb v0.2 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/patrol.fsmb  (959 bytes)
+ format   fsmb v0.3 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
  SECTION MAP — 7 sections tile the file after the 36-byte header
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x00000039   21 B   1
-   [2]  Runtime    0x00000039 .. 0x00000077   62 B   3
-   [3]  Temporary  0x00000077 .. 0x0000008F   24 B   2
-   [4]  State      0x0000008F .. 0x000000C5   54 B   4
-   [5]  Token      0x000000C5 .. 0x000001ED   296 B  32
-   [6]  AST        0x000001ED .. 0x00000429   572 B  60
-   [7]  FSM        0x00000429 .. 0x00000465   60 B   4
+   [2]  Runtime    0x00000039 .. 0x00000071   56 B   3
+   [3]  Temporary  0x00000071 .. 0x00000089   24 B   2
+   [4]  State      0x00000089 .. 0x000000BF   54 B   4
+   [5]  Token      0x000000BF .. 0x00000147   136 B  16
+   [6]  AST        0x00000147 .. 0x00000383   572 B  60
+   [7]  FSM        0x00000383 .. 0x000003BF   60 B   4
 
  SECTION [1] GLOBAL VARIABLES (1)
    #0  pauseTicks      int           = 3
 
  SECTION [2] RUNTIME VARIABLES (3)
-   #0  agent           NavMeshAgent          owner=dsl (Controller-owned)  slot 0
-   #1  waypointA       Object3D              owner=external  slot 1
-   #2  waypointB       Object3D              owner=external  slot 2
+   #0  agent           NavMeshAgent          slot 0
+   #1  waypointA       Object3D              slot 1
+   #2  waypointB       Object3D              slot 2
 
  SECTION [3] TEMPORARY VARIABLES (2)
    #0  ticks           int           scope state body    state: PauseAtA
@@ -34,45 +34,29 @@
    #3  PauseAtB        ast root #42
 
  SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
---- state #0 'GoToA' — 7 instruction(s) ---
-   0   CLAIM   agent.position
-   1   CLAIM   agent.velocity
-   2   CALL    goTo(agent, waypointA)   [fn 0x060B]
-   3   RELEASE agent.position
-   4   RELEASE agent.velocity
-   5   GOTO    PauseAtA
-   6   GOTO    GoToA
+--- state #0 'GoToA' — 3 instruction(s) ---
+   0   CALL    goTo(agent, waypointA)   [fn 0x060B]
+   1   GOTO    PauseAtA
+   2   GOTO    GoToA
 
---- state #1 'PauseAtA' — 9 instruction(s) ---
+--- state #1 'PauseAtA' — 5 instruction(s) ---
    0   ASSIGN  ticks = 0
-   1   CLAIM   agent.position
-   2   CLAIM   agent.velocity
-   3   CALL    stopMovement(agent)   [fn 0x062A]
-   4   RELEASE agent.position
-   5   RELEASE agent.velocity
-   6   ASSIGN  ticks = (ticks + 1)
-   7   GOTO    GoToB
-   8   GOTO    PauseAtA
+   1   CALL    stopMovement(agent)   [fn 0x062A]
+   2   ASSIGN  ticks = (ticks + 1)
+   3   GOTO    GoToB
+   4   GOTO    PauseAtA
 
---- state #2 'GoToB' — 7 instruction(s) ---
-   0   CLAIM   agent.position
-   1   CLAIM   agent.velocity
-   2   CALL    goTo(agent, waypointB)   [fn 0x060B]
-   3   RELEASE agent.position
-   4   RELEASE agent.velocity
-   5   GOTO    PauseAtB
-   6   GOTO    GoToB
+--- state #2 'GoToB' — 3 instruction(s) ---
+   0   CALL    goTo(agent, waypointB)   [fn 0x060B]
+   1   GOTO    PauseAtB
+   2   GOTO    GoToB
 
---- state #3 'PauseAtB' — 9 instruction(s) ---
+--- state #3 'PauseAtB' — 5 instruction(s) ---
    0   ASSIGN  ticks = 0
-   1   CLAIM   agent.position
-   2   CLAIM   agent.velocity
-   3   CALL    stopMovement(agent)   [fn 0x062A]
-   4   RELEASE agent.position
-   5   RELEASE agent.velocity
-   6   ASSIGN  ticks = (ticks + 1)
-   7   GOTO    GoToA
-   8   GOTO    PauseAtB
+   1   CALL    stopMovement(agent)   [fn 0x062A]
+   2   ASSIGN  ticks = (ticks + 1)
+   3   GOTO    GoToA
+   4   GOTO    PauseAtB
 
  SECTION [6] AST (60 tokens) — per-state tree, pre-order (#[n] = token index)
 --- state #0 'GoToA' ---

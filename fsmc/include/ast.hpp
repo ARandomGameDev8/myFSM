@@ -44,12 +44,6 @@ struct ConstValue {
 
 struct Expr;
 
-struct ClaimBinding {
-    VarInfo var;           // variable bound to the call's first argument
-    uint8_t fieldIndex = 0; // position = 0, velocity = 1, rotation = 2
-    std::string claim;     // original claim string, for diagnostics
-};
-
 // Expression tree. Ownership: the owning ParsedSource keeps every Expr alive
 // in an expr pool; Expr* fields are non-owning.
 struct Expr {
@@ -104,7 +98,6 @@ struct Stmt {
     uint16_t functionId = 0;
     uint8_t tier = 0;
     std::vector<Expr*> args;
-    std::vector<ClaimBinding> claims; // Tier 3 only, bound to the first argument
 
     // Goto
     std::string targetName;
@@ -139,7 +132,6 @@ struct GlobalVar {
     std::vector<uint8_t> constBytes; // const only: folded value, sizeBytes wide
     int index = -1;                  // index into ParsedSource::globals
     int bindingSlot = -1;            // runtime only: slot id (declaration order)
-    uint8_t owner = fmt::OwnerExternal; // runtime only; Pass 2 may promote to DSL
 };
 
 // One temporary variable. Lifetime is C block scoping: it is created at its

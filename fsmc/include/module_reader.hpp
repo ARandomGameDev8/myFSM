@@ -20,11 +20,11 @@ struct ReadGlobal {
     std::string name;
 };
 
+// Entry: [4] self-addr [1] type tag [4] binding slot [2] name length [·] name.
+// No owner and no dirty byte: ownership is not encoded in the module (v0.3).
 struct ReadRuntime {
     uint32_t addr = 0;
     uint8_t tag = 0;
-    uint8_t owner = 0;
-    uint8_t dirty = 0;
     uint32_t bindingSlot = 0;
     std::string name;
 };

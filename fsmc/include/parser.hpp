@@ -14,7 +14,8 @@
 //   * full-tuple overload resolution via BuiltinFunctions
 //   * all type references resolved via BuiltinTypes
 //   * operator type rules (type_rules.hpp)
-//   * static-constant / Tier-2 / Tier-3 claim rules
+//   * Tier-2 / Tier-3 argument rules (no static const as the mutated or
+//     driven first argument)
 
 #include "ast.hpp"
 #include "builtin_functions.hpp"

@@ -1,5 +1,6 @@
 #include "module_reader.hpp"
 
+#include <cstdio>
 #include <unordered_set>
 #include <utility>
 
@@ -125,7 +126,8 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     if (magic != fmt::kMagic) { err = "bad magic number"; return false; }
     if (!c.u16(out.major) || !c.u16(out.minor)) { err = "truncated header"; return false; }
     // The entry layouts are version-specific (v0.2 dropped the scope-depth
-    // bytes), so refuse anything else instead of misparsing it.
+    // bytes, v0.3 the owner/dirty bytes and the CLAIM/RELEASE opcodes), so
+    // refuse anything else instead of misparsing it.
     if (out.major != fmt::kVersionMajor || out.minor != fmt::kVersionMinor) {
         err = "unsupported module version " + std::to_string(out.major) + "." +
               std::to_string(out.minor) + " (this fsmc reads v" +
@@ -168,8 +170,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[2]) {
         uint32_t start = c.p;
         ReadRuntime r;
-        if (!c.u32(r.addr) || !c.u8(r.tag) || !c.u8(r.owner) || !c.u8(r.dirty) ||
-            !c.u32(r.bindingSlot)) {
+        if (!c.u32(r.addr) || !c.u8(r.tag) || !c.u32(r.bindingSlot)) {
             err = "truncated runtime entry";
             return false;
         }
@@ -596,23 +597,6 @@ bool validateModule(const ReadModule& m, std::string& err) {
                     }
                     break;
                 }
-                case fmt::OpClaim:
-                case fmt::OpRelease: {
-                    if (in.operands.size() != 2) {
-                        err = "CLAIM/RELEASE must have two operands";
-                        return false;
-                    }
-                    if (!varRefOk(in.operands[0])) {
-                        err = std::string(in.opcode == fmt::OpClaim ? "CLAIM" : "RELEASE") +
-                              " variable operand does not resolve";
-                        return false;
-                    }
-                    if (in.operands[1] > 2) {
-                        err = "CLAIM/RELEASE field index out of range";
-                        return false;
-                    }
-                    break;
-                }
                 case fmt::OpEval: {
                     if (in.operands.size() != 1) { err = "EVAL must have one operand"; return false; }
                     uint32_t off = 0;
@@ -628,9 +612,15 @@ bool validateModule(const ReadModule& m, std::string& err) {
                 case fmt::OpGreater: case fmt::OpLte: case fmt::OpGte:
                     if (in.operands.size() > 3) { err = "too many arithmetic operands"; return false; }
                     break;
-                default:
-                    err = "unknown opcode 0x" + std::to_string(in.opcode);
+                default: {
+                    // Includes the retired opcodes (0x14 CLAIM / 0x15 RELEASE,
+                    // removed in v0.3): they are never reused, so a module that
+                    // still contains one is invalid.
+                    char hex[3] = {};
+                    std::snprintf(hex, sizeof(hex), "%02X", unsigned(in.opcode));
+                    err = std::string("unknown or retired opcode 0x") + hex;
                     return false;
+                }
             }
         }
     }

@@ -30,15 +30,18 @@ SymbolTable pass1_symbolTable(ParsedSource& src, Diagnostics& diag);
 // ---------------------------------------------------------------------------
 // Pass 2 — AST construction.
 // Builds the ordered AST forest view: one root per State, declaration order
-// verified, temp ids validated in canonical serialization order, and runtime
-// ownership derived (a runtime variable claimed by any Tier 3 call becomes
-// owner = DSL).
+// verified, temp ids validated in canonical serialization order, and every
+// variable reference checked against the tables.
+//
+// This pass used to derive runtime-variable ownership (a variable claimed by
+// any Tier 3 call became owner = DSL). Claims and ownership are gone from the
+// binary format, so there is nothing to derive: a runtime variable is just its
+// type, binding slot and name.
 // ---------------------------------------------------------------------------
 struct AstForest {
     const ParsedSource* src = nullptr;
     std::vector<int> stateRoots;      // one per state, in order
     std::vector<int> tempOrder;       // canonical temp id order (0..N-1)
-    std::vector<uint8_t> runtimeOwner; // per runtime var: OwnerExternal / OwnerDsl
     int entryState = -1;
 };
 

@@ -1,29 +1,29 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/guard.fsmb  (1140 bytes)
- format   fsmb v0.2 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/guard.fsmb  (1090 bytes)
+ format   fsmb v0.3 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
  SECTION MAP — 7 sections tile the file after the 36-byte header
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x00000038   20 B   1
-   [2]  Runtime    0x00000038 .. 0x000000A4   108 B  5
-   [3]  Temporary  0x000000A4 .. 0x000000CD   41 B   3
-   [4]  State      0x000000CD .. 0x000000EE   33 B   2
-   [5]  Token      0x000000EE .. 0x000001A6   184 B  22
-   [6]  AST        0x000001A6 .. 0x00000454   686 B  70
-   [7]  FSM        0x00000454 .. 0x00000474   32 B   2
+   [2]  Runtime    0x00000038 .. 0x0000009A   98 B   5
+   [3]  Temporary  0x0000009A .. 0x000000C3   41 B   3
+   [4]  State      0x000000C3 .. 0x000000E4   33 B   2
+   [5]  Token      0x000000E4 .. 0x00000174   144 B  18
+   [6]  AST        0x00000174 .. 0x00000422   686 B  70
+   [7]  FSM        0x00000422 .. 0x00000442   32 B   2
 
  SECTION [1] GLOBAL VARIABLES (1)
    #0  fireRange       float         = 10f
 
  SECTION [2] RUNTIME VARIABLES (5)
-   #0  intruder        Object3D              owner=external  slot 0
-   #1  guard           Object3D              owner=dsl (Controller-owned)  slot 1
-   #2  guardAnim       AnimationController3D owner=external  slot 2
-   #3  guardLight      Sprite3D              owner=external  slot 3
-   #4  shotEventId     int                   owner=external  slot 4
+   #0  intruder        Object3D              slot 0
+   #1  guard           Object3D              slot 1
+   #2  guardAnim       AnimationController3D slot 2
+   #3  guardLight      Sprite3D              slot 3
+   #4  shotEventId     int                   slot 4
 
  SECTION [3] TEMPORARY VARIABLES (3)
    #0  wasFiring       bool          scope state body    state: Guard
@@ -35,25 +35,21 @@
    #1  Deregistered    ast root #57
 
  SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
---- state #0 'Guard' — 18 instruction(s) ---
+--- state #0 'Guard' — 14 instruction(s) ---
    0   ASSIGN  wasFiring = false
    1   ASSIGN  dist = getDistanceTo(guard, intruder)
    2   ASSIGN  canFire = (isInLineOfSight(guard, intruder) && (dist <= fireRange))
-   3   CLAIM   guard.rotation
-   4   CALL    lookAt(guard, intruder)   [fn 0x0700]
-   5   RELEASE guard.rotation
-   6   CALL    emit(shotEventId)   [fn 0x0A02]
-   7   CALL    setVisible(guardLight, true)   [fn 0x0206]
-   8   CALL    setAnimation(guardAnim, 1)   [fn 0x0310]
-   9   ASSIGN  wasFiring = true
-   10  CLAIM   guard.rotation
-   11  CALL    lookAt(guard, intruder)   [fn 0x0700]
-   12  RELEASE guard.rotation
-   13  CALL    play(guardAnim)   [fn 0x0300]
-   14  ASSIGN  wasFiring = false
-   15  ASSIGN  wasFiring = false
-   16  GOTO    Deregistered
-   17  GOTO    Guard
+   3   CALL    lookAt(guard, intruder)   [fn 0x0700]
+   4   CALL    emit(shotEventId)   [fn 0x0A02]
+   5   CALL    setVisible(guardLight, true)   [fn 0x0206]
+   6   CALL    setAnimation(guardAnim, 1)   [fn 0x0310]
+   7   ASSIGN  wasFiring = true
+   8   CALL    lookAt(guard, intruder)   [fn 0x0700]
+   9   CALL    play(guardAnim)   [fn 0x0300]
+   10  ASSIGN  wasFiring = false
+   11  ASSIGN  wasFiring = false
+   12  GOTO    Deregistered
+   13  GOTO    Guard
 
 --- state #1 'Deregistered' — 4 instruction(s) ---
    0   CALL    stop(guardAnim)   [fn 0x0302]

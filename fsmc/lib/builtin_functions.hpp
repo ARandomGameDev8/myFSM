@@ -25,7 +25,12 @@ struct FunctionDefinition {
     std::string returnType; // resolved against BuiltinTypes; "void" for none
     uint8_t      tier;      // 1, 2, or 3
     uint16_t     functionId;
-    std::vector<std::string> claims; // Tier 3 only; runtime variables this fn drives
+    // Tier 3 only: the call drives the object handed to it as its FIRST
+    // argument, so that argument must be a runtime or temporary variable (not a
+    // static constant, literal or call result). This is a source-level rule
+    // only — nothing about it is encoded in the module: there are no claims,
+    // no ownership flags and no CLAIM/RELEASE instructions in the binary.
+    bool requiresVariableTarget = false;
 };
 
 class BuiltinFunctions {

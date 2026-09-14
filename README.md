@@ -51,7 +51,7 @@ make clean                              # remove fsmc/build/
 
 ```sh
 ./bin/fsmc fsmc/tests/fixtures/minimal.fsm   # → minimal.fsmb (378 bytes, golden-pinned)
-./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (1178 bytes)
+./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (990 bytes)
 ./bin/fsmc fsmc/tests/fixtures/errors/bad_overload.fsm   # exits 2 with a diagnostic
 ```
 
@@ -62,7 +62,7 @@ fsmc/                  the compiler (CMake project)
   CMakeLists.txt       fsmc_lib + fsmc CLI + fsmc_tests, CTest wiring
   LANGUAGE.md          the full language reference (syntax of every feature)
   DESIGN.md            normative binary layout, full 179-entry function ID
-                       table, CLAIM/RELEASE encoding, scope + overload rules,
+                       table, retired-encoding notes, scope + overload rules,
                        and the 8 documented deviations from spec v0.3
   lib/                 BuiltinTypes (21) / BuiltinFunctions (179) — pure data,
                        the single source of truth for all types & functions

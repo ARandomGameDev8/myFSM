@@ -16,7 +16,11 @@ constexpr uint16_t kVersionMajor = 0;
 // Temporary lifetime is C block scoping driven by the compiler's scope stack,
 // so no fixed depth level exists to record: the block that owns a temp is
 // structural (its TEMP_VAR_DECL token is a child of that block's AST token).
-constexpr uint16_t kVersionMinor = 2;
+// v0.3 — claim/ownership removed: no CLAIM/RELEASE instructions, no `owner`
+// byte and no `dirty` byte in Runtime Variable entries. The module no longer
+// says anything about who owns a runtime variable or which of its fields a
+// function drives.
+constexpr uint16_t kVersionMinor = 3;
 constexpr std::size_t kHeaderSize = 36;
 
 // ---------------------------------------------------------------------------
@@ -85,8 +89,9 @@ enum Opcode : uint8_t {
     OpGreater = 0x11,
     OpLte = 0x12,
     OpGte = 0x13,
-    OpClaim = 0x14,
-    OpRelease = 0x15,
+    // 0x14 (OpClaim) and 0x15 (OpRelease) are RETIRED as of module v0.3 —
+    // claim/ownership encoding was removed from the format. Per the ID policy
+    // they are never reused, and a module that contains one is invalid.
 };
 
 // ---------------------------------------------------------------------------
@@ -135,23 +140,15 @@ enum OpId : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
-// Runtime-variable ownership (owner byte of the Runtime Variable Section)
+// Runtime-variable ownership: REMOVED (module v0.3).
+//
+// Runtime Variable entries used to carry an `owner` byte (external / DSL) and
+// a `dirty` byte, and Tier 3 calls used to be bracketed by CLAIM / RELEASE
+// instructions naming the driven fields. None of that exists any more: a
+// runtime variable is described by its type, its binding slot and its name,
+// and a call is just a CALL. `enum Owner`, `enum ClaimField` and
+// `claimFieldIndex()` were deleted with them.
 // ---------------------------------------------------------------------------
-enum Owner : uint8_t {
-    OwnerExternal = 0x00,
-    OwnerDsl = 0x01,
-};
-
-// Claim field indices (second operand of CLAIM / RELEASE).
-enum ClaimField : uint8_t {
-    ClaimFieldPosition = 0,
-    ClaimFieldVelocity = 1,
-    ClaimFieldRotation = 2,
-};
-
-// Maps the field suffix of a claim string ("agent.position") to its index.
-// Returns false for unknown fields (would be a registry bug).
-bool claimFieldIndex(const std::string& claim, uint8_t& fieldIndex);
 
 // ---------------------------------------------------------------------------
 // Explicit little-endian byte writers. No struct memcpy anywhere.

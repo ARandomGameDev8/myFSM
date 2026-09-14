@@ -85,7 +85,8 @@ TEST(lib_functions, every_param_and_return_type_resolves) {
 TEST(lib_functions, tiers_are_valid) {
     for (const FunctionDefinition& fn : BuiltinFunctions::instance().all()) {
         ASSERT_TRUE(fn.tier >= 1 && fn.tier <= 3);
-        if (fn.tier != 3) EXPECT_TRUE(fn.claims.empty());
+        // only a Tier 3 call can drive its first argument
+        if (fn.tier != 3) EXPECT_TRUE(!fn.requiresVariableTarget);
     }
 }
 
@@ -103,41 +104,46 @@ TEST(lib_functions, overload_counts_match_spec) {
     }
 }
 
-TEST(lib_functions, tier3_claims_match_spec) {
-    auto claimsOf = [](const char* name, uint16_t id) {
-        const FunctionDefinition* fn = BuiltinFunctions::instance().findById(id);
-        (void)name;
-        return fn ? fn->claims : std::vector<std::string>();
+// The claim tables are gone (module v0.3): what remains of them is the
+// source-level rule "a Tier 3 call that drives an object needs a variable as
+// its first argument", flagged per overload by `requiresVariableTarget`.
+TEST(lib_functions, tier3_target_driving_flags_match_spec) {
+    const auto& reg = BuiltinFunctions::instance();
+    auto drives = [&](uint16_t id) {
+        const FunctionDefinition* fn = reg.findById(id);
+        return fn ? fn->requiresVariableTarget : false;
     };
-    // goTo (NavMeshAgent, Vector3) = 0x060A
-    {
-        std::vector<std::string> c = claimsOf("goTo", 0x060A);
-        ASSERT_EQ(c.size(), std::size_t(2));
-        ASSERT_EQ(c[0], std::string("agent.position"));
-        ASSERT_EQ(c[1], std::string("agent.velocity"));
+
+    // every overload of the object-driving Tier 3 functions requires a variable
+    static const char* kDriving[] = {
+        "goTo", "followTarget", "findShortestPathAndMove", "follow",
+        "sprintTowards", "moveTowards", "stopMovement", "lookAt",
+    };
+    std::size_t drivingOverloads = 0;
+    for (const char* name : kDriving) {
+        const auto overloads = reg.find(name);
+        ASSERT_TRUE(!overloads.empty());
+        for (const FunctionDefinition* fn : overloads) {
+            ASSERT_TRUE(fn->requiresVariableTarget);
+            ASSERT_EQ(fn->tier, uint8_t(3));
+            ++drivingOverloads;
+        }
     }
-    // follow (NavMeshAgent, Object3D) = 0x061A: also rotation
-    {
-        std::vector<std::string> c = claimsOf("follow", 0x061A);
-        ASSERT_EQ(c.size(), std::size_t(3));
-        ASSERT_EQ(c[2], std::string("agent.rotation"));
-    }
-    // lookAt (Object3D, Object3D) = 0x0700: src.rotation
-    {
-        std::vector<std::string> c = claimsOf("lookAt", 0x0700);
-        ASSERT_EQ(c.size(), std::size_t(1));
-        ASSERT_EQ(c[0], std::string("src.rotation"));
-    }
-    // wait / waitUntil are tier 3 with no claims
-    {
-        ASSERT_TRUE(claimsOf("wait", 0x0A00).empty());
-        ASSERT_TRUE(claimsOf("waitUntil", 0x0A01).empty());
-    }
-    // every goTo overload has exactly the two position/velocity claims
-    for (const FunctionDefinition* fn : BuiltinFunctions::instance().find("goTo")) {
-        ASSERT_EQ(fn->claims.size(), std::size_t(2));
-    }
-    for (const FunctionDefinition* fn : BuiltinFunctions::instance().find("followTarget")) {
-        ASSERT_EQ(fn->claims.size(), std::size_t(3));
-    }
+    ASSERT_EQ(drivingOverloads, std::size_t(37)); // 6+4+6+4+6+6+3+2
+
+    // wait / waitUntil are Tier 3 but drive no object: a literal is fine there
+    ASSERT_TRUE(!drives(0x0A00)); // wait(float seconds)
+    ASSERT_TRUE(!drives(0x0A01)); // waitUntil(bool condition)
+    ASSERT_EQ(reg.findById(0x0A00)->tier, uint8_t(3));
+
+    // spot-check ids that used to carry claim lists
+    ASSERT_TRUE(drives(0x060A)); // goTo(NavMeshAgent, Vector3)     was position+velocity
+    ASSERT_TRUE(drives(0x061A)); // follow(NavMeshAgent, Object3D)  was position+velocity+rotation
+    ASSERT_TRUE(drives(0x0700)); // lookAt(Object3D, Object3D)      was src.rotation
+    ASSERT_TRUE(drives(0x062A)); // stopMovement(NavMeshAgent)
+
+    // Tier 1 / Tier 2 never carry the flag (Tier 2 has its own const rule)
+    ASSERT_TRUE(!drives(0x0105)); // setPosition  (Tier 2)
+    ASSERT_TRUE(!drives(0x0A02)); // emit         (Tier 2)
+    ASSERT_TRUE(!drives(0x0100)); // getPosition  (Tier 1)
 }

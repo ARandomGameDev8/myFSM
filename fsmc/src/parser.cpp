@@ -204,7 +204,6 @@ void Parser::parseGlobalVar() {
     int runtimeCount = 0;
     for (const auto& g : src_.globals) if (!g.isConst) ++runtimeCount;
     gv.bindingSlot = runtimeCount;
-    gv.owner = fmt::OwnerExternal;
     src_.globals.push_back(std::move(gv));
 }
 
@@ -1125,30 +1124,17 @@ void Parser::applyStatementCallSemantics(Stmt& st, const FunctionDefinition* fn,
                               "function '" + fn->name + "'");
         }
     }
-    // Tier 3: every declared claim binds to the call's first argument, which
-    // must be a variable (runtime or temp) so the ownership handoff can be
-    // encoded at compile time.
-    if (fn->tier == 3 && !fn->claims.empty()) {
-        if (st.args.empty()) return;
+    // Tier 3: a call that drives an object drives the one passed as its first
+    // argument, which therefore has to be a live variable (runtime or temp) —
+    // not a static constant, a literal or a call result. This is a source-level
+    // rule only: nothing is recorded about it in the module (claims and
+    // ownership were removed from the binary format).
+    if (fn->tier == 3 && fn->requiresVariableTarget && !st.args.empty()) {
         const Expr* a0 = st.args[0];
         if (!a0 || a0->kind != Expr::Kind::VarRef ||
             a0->var.kind == VarKind::GlobalConst) {
-            errorAt(nameTok, "Tier 3 function '" + fn->name + "' claims '" +
-                            fn->claims.front() + "'; its first argument must be a runtime or "
-                            "temporary variable so the claim can be bound");
-            return;
-        }
-        for (const std::string& claim : fn->claims) {
-            uint8_t field = 0;
-            if (!fmt::claimFieldIndex(claim, field)) {
-                errorAt(nameTok, "internal: unknown claim field in '" + claim + "'");
-                continue;
-            }
-            ClaimBinding cb;
-            cb.var = a0->var;
-            cb.fieldIndex = field;
-            cb.claim = claim;
-            st.claims.push_back(std::move(cb));
+            errorAt(nameTok, "Tier 3 function '" + fn->name + "' drives its first argument; "
+                             "that argument must be a runtime or temporary variable");
         }
     }
 }

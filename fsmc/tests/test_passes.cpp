@@ -253,30 +253,40 @@ TEST(passes, sibling_if_chains_are_ok) {
     ASSERT_TRUE(r.ok);
 }
 
-TEST(passes, tier3_claim_promotes_runtime_owner_to_dsl) {
+// Ownership is gone from the module (v0.3): a Tier 3 driving call emits a
+// single CALL — no CLAIM/RELEASE bracketing — and runtime variables carry no
+// owner or dirty byte, so Pass 2 has nothing to derive and promote.
+TEST(passes, tier3_calls_emit_no_claim_or_release) {
     auto r = fh::compile(kTwoState);
     ASSERT_TRUE(r.ok);
-    // 'agent' is a runtime var claimed by moveTowards/followTarget/stopMovement
-    int runtimeIdx = -1, slot = 0;
-    for (std::size_t i = 0; i < r.src.globals.size(); ++i) {
-        if (!r.src.globals[i].isConst) {
-            if (r.src.globals[i].name == "agent") runtimeIdx = slot;
-            ++slot;
-        }
+    ASSERT_EQ(r.errors, 0);
+
+    ReadModule rm;
+    std::string err;
+    ASSERT_TRUE(readModule(r.module, rm, err));
+    ASSERT_TRUE(validateModule(rm, err));
+
+    // Chase drives 'agent' with moveTowards + followTarget + stopMovement:
+    // 4 assigns + 3 calls + 3 gotos = 10 instructions, no claim traffic.
+    ASSERT_EQ(rm.stateInstrs.size(), std::size_t(2));
+    const auto& chase = rm.stateInstrs[0].instrs;
+    long calls = 0;
+    for (const ReadInstr& in : chase) {
+        ASSERT_TRUE(in.opcode != 0x14 && in.opcode != 0x15); // retired CLAIM/RELEASE
+        if (in.opcode == fmt::OpCall) ++calls;
     }
-    ASSERT_TRUE(runtimeIdx >= 0);
-    ASSERT_EQ(r.forest.runtimeOwner[static_cast<std::size_t>(runtimeIdx)],
-              uint8_t(fmt::OwnerDsl));
-    // 'player' is never claimed -> stays EXTERNAL
-    runtimeIdx = -1; slot = 0;
-    for (std::size_t i = 0; i < r.src.globals.size(); ++i) {
-        if (!r.src.globals[i].isConst) {
-            if (r.src.globals[i].name == "player") runtimeIdx = slot;
-            ++slot;
-        }
+    ASSERT_EQ(calls, 3);
+    ASSERT_EQ(chase.size(), std::size_t(10));
+
+    // runtime entries: type + binding slot only, in declaration order
+    ASSERT_EQ(rm.runtime.size(), std::size_t(4));
+    for (std::size_t i = 0; i < rm.runtime.size(); ++i) {
+        ASSERT_EQ(rm.runtime[i].bindingSlot, uint32_t(i));
+        // self-address = (SecRuntime << 29) | offset of the entry in the section
+        ASSERT_EQ(fmt::addressSection(rm.runtime[i].addr), uint8_t(fmt::SecRuntime));
+        ASSERT_EQ(rm.runtime[i].addr,
+                  fmt::makeAddress(fmt::SecRuntime, rm.runtimeEntryOffsets[i]));
     }
-    ASSERT_EQ(r.forest.runtimeOwner[static_cast<std::size_t>(runtimeIdx)],
-              uint8_t(fmt::OwnerExternal));
 }
 
 TEST(passes, round_trip_read_back_and_compare) {
@@ -314,7 +324,7 @@ TEST(passes, round_trip_read_back_and_compare) {
     ASSERT_EQ(m.fsm[0].targets.size(), std::size_t(3));
     // instruction frames exist for both states
     ASSERT_EQ(m.stateInstrs.size(), std::size_t(2));
-    ASSERT_TRUE(m.stateInstrs[0].instrs.size() >= 6); // claims+call+release x3 + assign
+    ASSERT_EQ(m.stateInstrs[0].instrs.size(), std::size_t(10)); // 4 assigns + 3 calls + 3 gotos
     // every AST root is a STATE token and the entry flag matches
     for (std::size_t i = 0; i < m.states.size(); ++i) {
         uint32_t off = 0;

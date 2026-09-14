@@ -44,7 +44,7 @@ so the passes operate on a well-formed forest.
 | Pass | Name | Boundary |
 |---|---|---|
 | 1 | `pass1_symbolTable` | names + entry state → global/state tables, resolved `isEntry` |
-| 2 | `pass2_buildAstForest` | forest + tables → temp canonical order, runtime ownership, reference integrity |
+| 2 | `pass2_buildAstForest` | forest + tables → temp canonical order, reference integrity |
 | 3 | `pass3_collectGotos` | forest → per-state ordered goto lists |
 | 4 | `pass4_buildFsmAdjacency` | goto lists + state table → adjacency matrix |
 | 5 | `pass5_serialize` | everything → bytes (two sub-passes: layout, then emit) |
@@ -76,7 +76,7 @@ memcpy, no undefined behavior). `std::vector<uint8_t>` buffers throughout.
 |---|---|---|
 | 0 | 4 | magic `0x46534D44` ("FSMD") |
 | 4 | 2 | version major `0` |
-| 6 | 2 | version minor `2` |
+| 6 | 2 | version minor `3` |
 | 8..35 | 8×4 | section start offsets: Global, Runtime, Temporary, State, Token, AST, FSM |
 
 Section offsets are absolute file offsets and always tile the file exactly:
@@ -84,10 +84,15 @@ Section offsets are absolute file offsets and always tile the file exactly:
 FSM section ending at EOF.
 
 **v0.1 → v0.2**: the scope-depth bytes were removed — one from every Temporary
-Variable entry and one from every AST token (deviation 8). The entry layouts
-are version-specific, so `readModule` rejects any other major/minor pair
-(`unsupported module version X.Y (this fsmc reads v0.2)`) instead of
-misparsing an older module.
+Variable entry and one from every AST token (deviation 8).
+
+**v0.2 → v0.3**: claim/ownership encoding was removed — the `owner` and
+`dirty` bytes of every Runtime Variable entry (2 bytes × entry count) and the
+`CLAIM`/`RELEASE` instructions bracketing Tier 3 calls (deviation 4).
+
+The entry layouts are version-specific, so `readModule` rejects any other
+major/minor pair (`unsupported module version X.Y (this fsmc reads v0.3)`)
+instead of misparsing an older module.
 
 ### 2.2 Section IDs and entry formats
 
@@ -95,7 +100,7 @@ misparsing an older module.
 |---|---|---|---|
 | 0 | null | (unused) | — |
 | 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` |
-| 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [1] owner [1] dirty [4] binding slot [2] len [·] name` |
+| 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [4] binding slot [2] len [·] name` |
 | 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [2] len [·] name` |
 | 4 | State | state directory | `[4] count` then `[4] AST-root addr [2] len [·] name` |
 | 5 | Token / Instruction | per-state instruction frames | `[4] state-addr [2] instr-count`, then `[1] opcode [1] operand-count [4]×operand` |
@@ -161,30 +166,37 @@ Runtime (2) or Temporary (3) sections — the section bits identify the kind.
 | 0x03 | OpGoto | `[state entry address]` | |
 | 0x04 | OpEval | `[AST address]` | **reserved** (evaluate, discard); never emitted |
 | 0x05–0x13 | arithmetic/comparison | 0–3 operands | reserved runtime opcodes; never emitted by the current compiler (all arithmetic lives in the AST) |
-| 0x14 | OpClaim | `[var address, field index]` | Tier 3 ownership handoff, before the call |
-| 0x15 | OpRelease | `[var address, field index]` | restores, after the call |
+| 0x14 | *(retired — was OpClaim)* | — | removed in v0.3; never reused, invalid in a module |
+| 0x15 | *(retired — was OpRelease)* | — | removed in v0.3; never reused, invalid in a module |
 
-A Tier 3 call with claims compiles to `CLAIM…; CALL; RELEASE…` — one
-CLAIM/RELEASE pair per claimed field, in claim order.
+**Every call compiles to exactly one `OpCall` at every tier.** Tier 3 used to
+be bracketed by `CLAIM…; CALL; RELEASE…`; that is gone (§2.6).
 
-### 2.6 CLAIM / RELEASE operand encoding
+### 2.6 Retired encodings (never reused)
 
-* **Operand 0** — 32-bit address of the variable bound to the call's **first
-  parameter** (the "agent"). It must be a runtime or temporary variable; the
-  parser rejects static constants, literals and call results here.
-* **Operand 1** — field index, packed as a u32:
-  `position = 0`, `velocity = 1`, `rotation = 2`.
+Removed in module v0.3 — the format no longer says anything about who owns a
+runtime variable or which of its fields a function drives:
 
-The binding is structural: every claim declared for an overload binds to the
-same first parameter, so one operand pair per field is complete.
+* `OpClaim` (0x14) / `OpRelease` (0x15), with operands
+  `[var address, field index]` where `position = 0`, `velocity = 1`,
+  `rotation = 2`.
+* The Runtime Variable entry's `owner` byte (`0x00` external / `0x01` DSL,
+  compiler-derived in Pass 2) and its `dirty` byte (always `0x00` at compile
+  time).
+
+Per the ID policy these opcode values stay retired: `readModule`/
+`validateModule` reject them as unknown opcodes, so a v0.2 module fails
+cleanly instead of being misread.
+
+What survives of the claim system is a **source-level rule only**: a Tier 3
+call that drives an object takes it as its first argument, and that argument
+must be a runtime or temporary variable — the parser rejects static constants,
+literals and call results there (§3.7). Nothing about the choice is recorded in
+the module.
 
 ### 2.7 Runtime-variable fields
 
-* `owner` — `0x00` external / `0x01` DSL. **Derived at compile time (Pass 2)**:
-  a runtime variable that is the bound argument of any Tier 3 call becomes
-  `owner = DSL` (the Controller hands the field over); everything else stays
-  `0x00`.
-* `dirty` — always `0x00` at compile time (clean).
+* `type tag` — the variable's type (§4).
 * `binding slot` — declaration order among runtime variables (0-based). This is
   the slot the Controller uses to push external values in.
 
@@ -290,7 +302,7 @@ Type rules (no implicit conversions anywhere):
    error, same candidate list.
 
 Tier 2: the mutating argument (first parameter) cannot be a static constant.
-Tier 3: see claims above.
+Tier 3: the driven object (first parameter) must be a variable — see §3.7.
 
 ### 3.7 Tiers
 
@@ -298,8 +310,12 @@ Tier 3: see claims above.
 * **Tier 2** — mutation of engine state; statement level; first argument is
   the mutated handle (must be a runtime variable or temp).
 * **Tier 3** — Controller-driven (navigation/steering/control). Statement
-  level only; first argument must be a variable; claims emit
-  CLAIM/CALL/RELEASE. `wait` / `waitUntil` are Tier 3 with no claims.
+  level only; compiles to one `OpCall` like every other call. The overloads
+  that drive an object (`goTo`, `followTarget`, `findShortestPathAndMove`,
+  `follow`, `sprintTowards`, `moveTowards`, `stopMovement`, `lookAt`) take it
+  as their first argument, which must therefore be a runtime variable or a
+  temp (`requiresVariableTarget` in the registry). `wait` / `waitUntil` are
+  Tier 3 but drive no object, so any expression is accepted.
 
 ---
 
@@ -470,43 +486,43 @@ Full ID table (name, id, tier, signature → return):
 | 0x0607 | hasReachedDestination | 1 | (Object3D agent, Object3D tgt) → bool |
 | 0x0608 | hasReachedDestination | 1 | (Object2D agent, Vector2 tgt) → bool |
 | 0x0609 | hasReachedDestination | 1 | (Object2D agent, Object2D tgt) → bool |
-| 0x060A | goTo | 3 | (NavMeshAgent agent, Vector3 dest) → void — claims agent.position, agent.velocity |
-| 0x060B | goTo | 3 | (NavMeshAgent agent, Object3D dest) → void — claims agent.position, agent.velocity |
-| 0x060C | goTo | 3 | (Object3D agent, Vector3 dest) → void — claims agent.position, agent.velocity |
-| 0x060D | goTo | 3 | (Object3D agent, Object3D dest) → void — claims agent.position, agent.velocity |
-| 0x060E | goTo | 3 | (Object2D agent, Vector2 dest) → void — claims agent.position, agent.velocity |
-| 0x060F | goTo | 3 | (Object2D agent, Object2D dest) → void — claims agent.position, agent.velocity |
-| 0x0610 | followTarget | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0611 | followTarget | 3 | (NavMeshAgent agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0612 | followTarget | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0613 | followTarget | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0614 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Vector3 tgt) → void — claims agent.position, agent.velocity |
-| 0x0615 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity |
-| 0x0616 | findShortestPathAndMove | 3 | (Object3D agent, Vector3 tgt) → void — claims agent.position, agent.velocity |
-| 0x0617 | findShortestPathAndMove | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity |
-| 0x0618 | findShortestPathAndMove | 3 | (Object2D agent, Vector2 tgt) → void — claims agent.position, agent.velocity |
-| 0x0619 | findShortestPathAndMove | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity |
-| 0x061A | follow | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061B | follow | 3 | (NavMeshAgent agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061C | follow | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061D | follow | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061E | sprintTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x061F | sprintTowards | 3 | (NavMeshAgent agent, Object3D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0620 | sprintTowards | 3 | (Object3D agent, Vector3 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0621 | sprintTowards | 3 | (Object3D agent, Object3D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0622 | sprintTowards | 3 | (Object2D agent, Vector2 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0623 | sprintTowards | 3 | (Object2D agent, Object2D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0624 | moveTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0625 | moveTowards | 3 | (NavMeshAgent agent, Object3D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0626 | moveTowards | 3 | (Object3D agent, Vector3 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0627 | moveTowards | 3 | (Object3D agent, Object3D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0628 | moveTowards | 3 | (Object2D agent, Vector2 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0629 | moveTowards | 3 | (Object2D agent, Object2D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x062A | stopMovement | 3 | (NavMeshAgent agent) → void — claims agent.position, agent.velocity |
-| 0x062B | stopMovement | 3 | (Object3D agent) → void — claims agent.position, agent.velocity |
-| 0x062C | stopMovement | 3 | (Object2D agent) → void — claims agent.position, agent.velocity |
-| 0x0700 | lookAt | 3 | (Object3D src, Object3D tgt) → void — claims src.rotation |
-| 0x0701 | lookAt | 3 | (Object2D src, Object2D tgt) → void — claims src.rotation |
+| 0x060A | goTo | 3 | (NavMeshAgent agent, Vector3 dest) → void — drives `agent` |
+| 0x060B | goTo | 3 | (NavMeshAgent agent, Object3D dest) → void — drives `agent` |
+| 0x060C | goTo | 3 | (Object3D agent, Vector3 dest) → void — drives `agent` |
+| 0x060D | goTo | 3 | (Object3D agent, Object3D dest) → void — drives `agent` |
+| 0x060E | goTo | 3 | (Object2D agent, Vector2 dest) → void — drives `agent` |
+| 0x060F | goTo | 3 | (Object2D agent, Object2D dest) → void — drives `agent` |
+| 0x0610 | followTarget | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x0611 | followTarget | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
+| 0x0612 | followTarget | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x0613 | followTarget | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x0614 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Vector3 tgt) → void — drives `agent` |
+| 0x0615 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x0616 | findShortestPathAndMove | 3 | (Object3D agent, Vector3 tgt) → void — drives `agent` |
+| 0x0617 | findShortestPathAndMove | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x0618 | findShortestPathAndMove | 3 | (Object2D agent, Vector2 tgt) → void — drives `agent` |
+| 0x0619 | findShortestPathAndMove | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x061A | follow | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x061B | follow | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
+| 0x061C | follow | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x061D | follow | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x061E | sprintTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speedMult) → void — drives `agent` |
+| 0x061F | sprintTowards | 3 | (NavMeshAgent agent, Object3D dest, float speedMult) → void — drives `agent` |
+| 0x0620 | sprintTowards | 3 | (Object3D agent, Vector3 dest, float speedMult) → void — drives `agent` |
+| 0x0621 | sprintTowards | 3 | (Object3D agent, Object3D dest, float speedMult) → void — drives `agent` |
+| 0x0622 | sprintTowards | 3 | (Object2D agent, Vector2 dest, float speedMult) → void — drives `agent` |
+| 0x0623 | sprintTowards | 3 | (Object2D agent, Object2D dest, float speedMult) → void — drives `agent` |
+| 0x0624 | moveTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speed) → void — drives `agent` |
+| 0x0625 | moveTowards | 3 | (NavMeshAgent agent, Object3D dest, float speed) → void — drives `agent` |
+| 0x0626 | moveTowards | 3 | (Object3D agent, Vector3 dest, float speed) → void — drives `agent` |
+| 0x0627 | moveTowards | 3 | (Object3D agent, Object3D dest, float speed) → void — drives `agent` |
+| 0x0628 | moveTowards | 3 | (Object2D agent, Vector2 dest, float speed) → void — drives `agent` |
+| 0x0629 | moveTowards | 3 | (Object2D agent, Object2D dest, float speed) → void — drives `agent` |
+| 0x062A | stopMovement | 3 | (NavMeshAgent agent) → void — drives `agent` |
+| 0x062B | stopMovement | 3 | (Object3D agent) → void — drives `agent` |
+| 0x062C | stopMovement | 3 | (Object2D agent) → void — drives `agent` |
+| 0x0700 | lookAt | 3 | (Object3D src, Object3D tgt) → void — drives `src` |
+| 0x0701 | lookAt | 3 | (Object2D src, Object2D tgt) → void — drives `src` |
 | 0x0702 | isInLineOfSight | 1 | (Object3D src, Object3D tgt) → bool |
 | 0x0703 | isInLineOfSight | 1 | (Object2D src, Object2D tgt) → bool |
 | 0x0704 | isInRange | 1 | (Object3D src, Object3D tgt, float radius) → bool |
@@ -531,8 +547,8 @@ Full ID table (name, id, tier, signature → return):
 | 0x0809 | getWanderVector | 1 | (Vector2 pos, float radius) → Vector2 |
 | 0x0900 | getRaycastHit | 1 | (Vector3 origin, Vector3 dir, float dist) → Object3D |
 | 0x0901 | getRaycastHit | 1 | (Vector2 origin, Vector2 dir, float dist) → Object2D |
-| 0x0A00 | wait | 3 | (float seconds) → void — no claims |
-| 0x0A01 | waitUntil | 3 | (bool condition) → void — no claims |
+| 0x0A00 | wait | 3 | (float seconds) → void |
+| 0x0A01 | waitUntil | 3 | (bool condition) → void |
 | 0x0A02 | emit | 2 | (int eventId) → void |
 
 ### ID stability policy
@@ -543,7 +559,13 @@ Full ID table (name, id, tier, signature → return):
 * The category base + range bounds above are part of the module ABI: readers
   may reject out-of-range IDs.
 * `lib_functions` tests enforce: 179 overloads, unique IDs, reachability by
-  name, per-category sequential layout, and claim tables.
+  name, per-category sequential layout, and the per-overload
+  `requiresVariableTarget` flags (37 Tier 3 overloads set, `wait`/`waitUntil`
+  and every Tier 1/2 clear).
+
+In the table above, "drives `X`" marks a Tier 3 overload whose first parameter
+is the object it drives: the source must pass a runtime variable or a temp
+there. It is a parse-time rule; no byte of the module records it.
 
 ---
 
@@ -607,9 +629,13 @@ signature; >1 match → ambiguous error, same list.
    i.e. `NavMeshAgent` (a 3D-only type) is not paired with `Object2D`. This
    keeps Navigation at 45 overloads (0x0600–0x062C) and mirrors the
    `hasReachedDestination`/`followTarget`/`follow` overload shapes.
-4. **Runtime `owner` byte is compiler-derived** (Pass 2) instead of
-   hand-set: any runtime variable that is the bound argument of a Tier 3
-   call is emitted with `owner = 0x01` (DSL); all others `0x00`.
+4. **Runtime-variable ownership is not encoded at all** (module v0.3). The
+   spec's handoff — an `owner` byte per runtime variable plus `CLAIM`/
+   `RELEASE` instructions around Tier 3 calls — was dropped: the DSL makes no
+   statement about who owns a variable or which fields a function touches, so
+   Pass 2 has nothing to derive and a call is a single `OpCall`. What remains
+   is the source-level rule that a Tier 3 call's driven first argument must be
+   a variable (§2.6, §3.7).
 5. **`//` (floor division) vs `//` (line comment)** are disambiguated by
    lexer context, as in C-like languages needing both: `//` is floor
    division only when it directly follows a value token (digit, letter, `)`,
@@ -642,17 +668,17 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | Suite | Covers |
 |---|---|
 | `lib_types` | 21 types, name reachability, tag uniqueness, spec table |
-| `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, claim tables |
+| `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, Tier-3 `requiresVariableTarget` flags |
 | `lexer` | keywords (case-sensitive), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
 | `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
-| `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 first-argument-must-be-variable, nested-call type propagation |
+| `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
-| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, Tier-3 owner promotion, structural temp ownership in the AST (each temp's declaration is a child of its owning block token), round-trip read-back & compare, corruption rejection, determinism |
-| `golden_bytes` | **pinned 378-byte module** for `tests/fixtures/minimal.fsm` (hand-verified), module version pinned to v0.2 + rejection of other versions, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
-| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), claim field names, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), corrupted/truncated/wrong-version module rejection, deterministic dump output |
+| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token), round-trip read-back & compare, corruption rejection, determinism |
+| `golden_bytes` | **pinned 378-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.3 differs from v0.2 only in the version field), module version pinned to v0.3 + rejection of v0.1/v0.2, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), absence of the claim/ownership vocabulary, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), corrupted/truncated/wrong-version module rejection, deterministic dump output |
 
 Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`
 (if/else-if/else, temps in the state body / Actions body / if body, Traversals
-with two ifs + bare default goto, Tier 3 claims), and
+with two ifs + bare default goto, Tier 3 driving calls), and
 `tests/fixtures/errors/*.fsm` (one file per major error class).

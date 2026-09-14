@@ -219,25 +219,9 @@ private:
                     em_.tokens[cIdx].argToks.push_back(child);
                 }
                 added.push_back(cIdx);
-                if (ss) {
-                    auto& instrs = ss->instrs;
-                    const bool emitClaims = st.tier == 3 && !st.claims.empty();
-                    if (emitClaims) {
-                        for (const ClaimBinding& cb : st.claims) {
-                            instrs.push_back({fmt::OpClaim,
-                                              {{1 + varKindOf(cb.var), cb.var.index},
-                                               {9, 0, cb.fieldIndex}}});
-                        }
-                    }
-                    instrs.push_back({fmt::OpCall, {{0, cIdx}}});
-                    if (emitClaims) {
-                        for (const ClaimBinding& cb : st.claims) {
-                            instrs.push_back({fmt::OpRelease,
-                                              {{1 + varKindOf(cb.var), cb.var.index},
-                                               {9, 0, cb.fieldIndex}}});
-                        }
-                    }
-                }
+                // A call is a single CALL instruction at every tier: there is
+                // no claim/release bracketing any more.
+                if (ss) ss->instrs.push_back({fmt::OpCall, {{0, cIdx}}});
                 break;
             }
             case Stmt::Kind::Goto: {
@@ -390,13 +374,14 @@ Layout computeLayout(const ParsedSource& src, const Emission& em, const FsmGraph
     off = L.secStart[fmt::SecGlobal] + e;
 
     // Runtime Variable Section (runtime vars, in declaration order)
+    // Entry: [4] self-addr [1] type tag [4] binding slot [2] name length [·] name
     L.secStart[fmt::SecRuntime] = uint32_t(off);
     e = 0;
     for (std::size_t i = 0; i < src.globals.size(); ++i) {
         const GlobalVar& g = src.globals[i];
         if (g.isConst) continue;
         L.runtimeAddr[i] = fmt::makeAddress(fmt::SecRuntime, uint32_t(e));
-        e += 4 + 1 + 1 + 1 + 4 + 2 + g.name.size();
+        e += 4 + 1 + 4 + 2 + g.name.size();
     }
     off = L.secStart[fmt::SecRuntime] + e;
 
@@ -529,6 +514,10 @@ std::vector<uint8_t> serializeModule(const ParsedSource& src, const AstForest& f
                                      const FsmGraph& fsm, const SymbolTable& sym,
                                      Diagnostics& diag) {
     if (diag.hasErrors()) return {};
+    // `forest` is part of the Pass 5 boundary but currently unused: the only
+    // thing it contributed was the derived runtime ownership, which no longer
+    // exists in the module. The AST itself is walked from `src`.
+    (void)forest;
 
     // --- sub-pass A: emission (flat token pool + per-state instruction
     // streams), pre-order DFS, deterministic order ---
@@ -538,18 +527,6 @@ std::vector<uint8_t> serializeModule(const ParsedSource& src, const AstForest& f
 
     // --- sub-pass B: layout (sizes + addresses) ---
     Layout L = computeLayout(src, em, fsm);
-
-    // Runtime ownership per runtime entry (forest.runtimeOwner is indexed by
-    // runtime position, i.e. declaration order among runtime vars).
-    std::vector<uint8_t> runtimeOwnerByGlobal(src.globals.size(), fmt::OwnerExternal);
-    int runtimePos = 0;
-    for (std::size_t i = 0; i < src.globals.size(); ++i) {
-        if (src.globals[i].isConst) continue;
-        if (runtimePos < static_cast<int>(forest.runtimeOwner.size())) {
-            runtimeOwnerByGlobal[i] = forest.runtimeOwner[static_cast<std::size_t>(runtimePos)];
-        }
-        ++runtimePos;
-    }
 
     // --- sub-pass C: byte emission ---
     std::vector<uint8_t> out;
@@ -571,14 +548,13 @@ std::vector<uint8_t> serializeModule(const ParsedSource& src, const AstForest& f
         fmt::writeString(out, g.name);
     }
 
-    // Runtime Variable Section
+    // Runtime Variable Section — type, binding slot and name; no owner, no
+    // dirty flag (ownership is not a property of the module any more).
     for (std::size_t i = 0; i < src.globals.size(); ++i) {
         const GlobalVar& g = src.globals[i];
         if (g.isConst) continue;
         fmt::writeU32(out, L.runtimeAddr[i]);
         fmt::writeU8(out, g.type->typeTag);
-        fmt::writeU8(out, runtimeOwnerByGlobal[i]);
-        fmt::writeU8(out, 0x00); // dirty flag: clean at compile time
         fmt::writeU32(out, uint32_t(g.bindingSlot));
         fmt::writeString(out, g.name);
     }

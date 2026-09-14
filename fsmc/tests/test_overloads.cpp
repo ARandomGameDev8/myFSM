@@ -1,5 +1,7 @@
 #include "test_helpers.hpp"
 
+#include "module_reader.hpp"
+
 using namespace fsmc;
 
 namespace {
@@ -31,11 +33,12 @@ TEST(overloads, goTo_nav_agent_vector3_resolves) {
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
     ASSERT_EQ(findCallId(r, "goTo"), int(0x060A)); // (NavMeshAgent, Vector3)
-    // Tier 3 with claims: two claims bound to the runtime agent.
+    // A Tier 3 driving call carries nothing but the resolved id, tier and
+    // arguments: claim bindings are gone from the language and the module.
     const auto& item = r.src.states[0].items[0];
-    ASSERT_EQ(item.stmts[0].claims.size(), std::size_t(2));
-    ASSERT_EQ(item.stmts[0].claims[0].fieldIndex, uint8_t(0));
-    ASSERT_EQ(item.stmts[0].claims[1].fieldIndex, uint8_t(1));
+    ASSERT_EQ(item.stmts[0].tier, uint8_t(3));
+    ASSERT_EQ(item.stmts[0].args.size(), std::size_t(2));
+    ASSERT_EQ(item.stmts[0].args[0]->var.kind, VarKind::Runtime);
 }
 
 TEST(overloads, goTo_obj2d_obj2d_resolves) {
@@ -204,7 +207,58 @@ TEST(overloads, tier3_first_argument_must_be_a_variable) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
-    ASSERT_TRUE(fh::hasErrorContaining(r, "its first argument must be a runtime or temporary variable"));
+    ASSERT_TRUE(fh::hasErrorContaining(
+        r, "Tier 3 function 'goTo' drives its first argument; that argument must be a "
+           "runtime or temporary variable"));
+}
+
+TEST(overloads, tier3_wait_takes_a_literal_because_it_drives_no_object) {
+    auto r = fh::compile(
+        "State A {\n"
+        "    Actions {\n"
+        "        wait(0.5f);\n"
+        "        waitUntil(true);\n"
+        "    }\n"
+        "    Traversals {\n"
+        "        goto A;\n"
+        "    }\n"
+        "}\n"
+        "@ENTRY A\n");
+    ASSERT_TRUE(r.ok);
+}
+
+TEST(overloads, tier3_temp_target_is_accepted) {
+    // A temporary works just as well as a runtime var: the rule is "a
+    // variable", not "a runtime variable" — and nothing is recorded about the
+    // choice either way.
+    auto r = fh::compile(
+        "var Object3D target;\n"
+        "var Object3D other;\n"
+        "State A {\n"
+        "    Actions {\n"
+        "        temp Object3D mover = other;\n"
+        "        goTo(mover, target);\n"
+        "    }\n"
+        "    Traversals {\n"
+        "        if (true) { goto A; }\n"
+        "    }\n"
+        "}\n"
+        "@ENTRY A\n");
+    ASSERT_TRUE(r.ok);
+    // one CALL, resolved to the (Object3D, Object3D) overload
+    ASSERT_EQ(findCallId(r, "goTo"), int(0x060D));
+    ReadModule rm;
+    std::string err;
+    ASSERT_TRUE(readModule(r.module, rm, err));
+    long calls = 0;
+    for (const ReadStateInstrs& ss : rm.stateInstrs) {
+        for (const ReadInstr& in : ss.instrs) {
+            if (in.opcode == fmt::OpCall) ++calls;
+            // the retired opcodes may never appear again
+            ASSERT_TRUE(in.opcode != 0x14 && in.opcode != 0x15);
+        }
+    }
+    ASSERT_EQ(calls, 1);
 }
 
 TEST(overloads, nested_call_argument_types_propagate) {

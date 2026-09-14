@@ -2,8 +2,8 @@
 //
 // Shows: if / else-if / else, block-scoped temps (each one lives in the {}
 // body that declares it), vector math (component-wise +, scalar *), the &&
-// operator, and multiple Tier 3 navigation calls with different claims
-// (moveTowards claims position+velocity, lookAt claims rotation).
+// operator, and multiple Tier 3 calls that drive an object passed as their
+// first argument (moveTowards drives the hunter's movement, lookAt its facing).
 
 const float attackRange = 2.5f;
 const float fleeBelow   = 25.0f;

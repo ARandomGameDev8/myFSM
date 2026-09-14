@@ -61,8 +61,10 @@ TEST(golden_bytes, header_is_36_bytes_with_magic_version_and_offsets) {
         ASSERT_EQ(walk, rm.sectionOffsets[fmt::SecRuntime]);
     }
     {
+        // Runtime entry: [4] self-addr [1] type tag [4] binding slot
+        // [2] name len [·] name — no owner byte, no dirty byte (v0.3)
         uint32_t walk = rm.sectionOffsets[fmt::SecRuntime];
-        for (const auto& g : rm.runtime) walk += 4 + 1 + 1 + 1 + 4 + 2 + g.name.size();
+        for (const auto& g : rm.runtime) walk += 4 + 1 + 4 + 2 + g.name.size();
         ASSERT_EQ(walk, rm.sectionOffsets[fmt::SecTemp]);
     }
     {
@@ -107,19 +109,26 @@ TEST(golden_bytes, header_is_36_bytes_with_magic_version_and_offsets) {
     ASSERT_EQ(offsets[fmt::SecFsm], rm.sectionOffsets[fmt::SecFsm]);
 }
 
-// The module format is v0.2: the scope-depth bytes are gone (one per temp
-// entry, one per AST token), so a v0.1 module must not be parsed with the v0.2
-// entry layouts.
-TEST(golden_bytes, module_version_is_0_2_and_other_versions_are_rejected) {
+// The module format is v0.3: the owner and dirty bytes are gone from Runtime
+// Variable entries (and CLAIM/RELEASE with them), so a v0.1 or v0.2 module must
+// not be parsed with the v0.3 entry layout.
+TEST(golden_bytes, module_version_is_0_3_and_other_versions_are_rejected) {
     auto r = fh::compile(fh::readFixture("minimal.fsm"), "minimal.fsm");
     ASSERT_TRUE(r.ok);
     ASSERT_EQ(fh::le16(r.module, 4), uint16_t(fmt::kVersionMajor));
-    ASSERT_EQ(fh::le16(r.module, 6), uint16_t(2));
+    ASSERT_EQ(fh::le16(r.module, 6), uint16_t(3));
 
-    std::vector<uint8_t> v01 = r.module;
-    v01[6] = 0x01; // claim it is a v0.1 module (which still had depth bytes)
     ReadModule rm;
     std::string err;
+    // v0.2 still had the owner + dirty bytes in every runtime entry ...
+    std::vector<uint8_t> v02 = r.module;
+    v02[6] = 0x02;
+    ASSERT_FALSE(readModule(v02, rm, err));
+    ASSERT_TRUE(err.find("unsupported module version 0.2") != std::string::npos);
+    // ... and v0.1 additionally had the scope-depth bytes.
+    std::vector<uint8_t> v01 = r.module;
+    v01[6] = 0x01;
+    err.clear();
     ASSERT_FALSE(readModule(v01, rm, err));
     ASSERT_TRUE(err.find("unsupported module version 0.1") != std::string::npos);
 }
@@ -166,19 +175,22 @@ TEST(golden_bytes, two_state_module_contents) {
     ASSERT_EQ(rm.states.size(), std::size_t(2));
     ASSERT_EQ(rm.states[0].name, std::string("Chase"));
     ASSERT_EQ(rm.states[1].name, std::string("Flee"));
-    // owner flags: agent (claimed by tier 3) = DSL, others EXTERNAL
+    // 'agent' is driven by three Tier 3 calls, but nothing in the module says
+    // so: ownership is not encoded any more. Only type + slot remain.
     int agentSlot = -1;
     for (std::size_t i = 0; i < rm.runtime.size(); ++i) {
         if (rm.runtime[i].name == "agent") agentSlot = int(i);
     }
     ASSERT_TRUE(agentSlot >= 0);
-    ASSERT_EQ(rm.runtime[static_cast<std::size_t>(agentSlot)].owner, uint8_t(fmt::OwnerDsl));
-    ASSERT_EQ(rm.runtime[0].owner, uint8_t(fmt::OwnerExternal));
+    ASSERT_EQ(rm.runtime[static_cast<std::size_t>(agentSlot)].bindingSlot, uint32_t(2));
+    ASSERT_EQ(rm.runtime[static_cast<std::size_t>(agentSlot)].tag, uint8_t(0x70)); // NavMeshAgent
 }
 
-// Pinned golden bytes for tests/fixtures/minimal.fsm — module format v0.2,
-// 378 bytes (was 401 in v0.1, before the scope-depth bytes were removed:
-// 2 temp entries x 1 byte + 21 AST tokens x 1 byte).
+// Pinned golden bytes for tests/fixtures/minimal.fsm — module format v0.3,
+// 378 bytes: identical to v0.2 except for the version field, because this
+// fixture has no runtime variables and no claim-bearing call (it only calls
+// `wait`). Was 401 bytes in v0.1, before the scope-depth bytes were removed
+// (2 temp entries x 1 byte + 21 AST tokens x 1 byte).
 //
 // Independently verified by hand (separate walk of the file): the seven
 // section offsets tile it exactly (0x24, 0x38, 0x38, 0x52, 0x60, 0x96, 0x168
@@ -195,7 +207,7 @@ TEST(golden_bytes, minimal_module_exact_bytes) {
     auto r = fh::compile(fh::readFixture("minimal.fsm"), "minimal.fsm");
     ASSERT_TRUE(r.ok);
     static const uint8_t kBytes[] = {
-        0x44, 0x4d, 0x53, 0x46, 0x00, 0x00, 0x02, 0x00, 0x24, 0x00, 0x00, 0x00,
+        0x44, 0x4d, 0x53, 0x46, 0x00, 0x00, 0x03, 0x00, 0x24, 0x00, 0x00, 0x00,
         0x38, 0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00,
         0x60, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00, 0x00, 0x68, 0x01, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x20, 0x01, 0x0a, 0x00, 0x00, 0x00, 0x09, 0x00, 0x74,

@@ -26,7 +26,7 @@ document is [`DESIGN.md`](DESIGN.md).
 13. [Vector literals](#13-vector-literals)
 14. [Variable resolution and name rules](#14-variable-resolution-and-name-rules)
 15. [Function calls and overload resolution](#15-function-calls-and-overload-resolution)
-16. [Function tiers and claims](#16-function-tiers-and-claims)
+16. [Function tiers](#16-function-tiers)
 17. [Built-in types (complete list)](#17-built-in-types)
 18. [Built-in functions (complete list)](#18-built-in-functions)
 19. [Diagnostics and exit codes](#19-diagnostics-and-exit-codes)
@@ -518,7 +518,7 @@ Practical consequences:
   `getPosition(Object2D)` returns `Vector2`. Mixed (e.g. a `Camera3D` and an
   `Object2D`) fails.
 
-## 16. Function tiers and claims
+## 16. Function tiers
 
 Functions come in three tiers; the tier determines where and how you may call
 them.
@@ -527,22 +527,20 @@ them.
 |---|---|---|---|
 | 1 — query | Read-only engine state | expressions, conditions, initializers, call arguments | none |
 | 2 — mutate | Writes engine state | statement only (`emit`, `setPosition`, …) | first argument (the mutated object) must **not** be a static `const` — pass a runtime `var` or `temp` |
-| 3 — Controller-driven | Navigation / steering / control that the Controller owns | statement only | first argument must be a **variable** (runtime `var` or `temp`) so the ownership handoff can be encoded at compile time |
+| 3 — Controller-driven | Navigation / steering / control that the Controller carries out over time | statement only | the driven object must be a **variable** (runtime `var` or `temp`) |
 
-Tier 3 functions that take an agent/object **claim** fields of that variable
-for the duration of the call. The compiler emits `CLAIM` before the call and
-`RELEASE` after it. Which fields are claimed, per function:
+The Tier 3 functions that drive an object — `goTo`, `followTarget`,
+`findShortestPathAndMove`, `follow`, `sprintTowards`, `moveTowards`,
+`stopMovement`, `lookAt` — take that object as their **first** argument, so
+that argument has to be a variable: a literal, a static `const`, or the result
+of another call will not do. `wait` and `waitUntil` are Tier 3 as well but
+drive no object, so any expression is fine there (`wait(0.5f)`).
 
-| Function | Claimed fields |
-|---|---|
-| `goTo`, `findShortestPathAndMove`, `sprintTowards`, `moveTowards`, `stopMovement` | `agent.position`, `agent.velocity` |
-| `followTarget`, `follow` | `agent.position`, `agent.velocity`, `agent.rotation` |
-| `lookAt` | `src.rotation` |
-| `wait`, `waitUntil` | (none) |
-
-Claimed variables are treated as **Controller-owned** for the module: a
-runtime `var` that is claimed by any Tier 3 call anywhere in the file is
-marked owner = DSL in the binary.
+Nothing about this is recorded in the module. A Tier 3 call compiles to a
+single `CALL` instruction like any other call: the binary format has no claim
+list, no ownership flag and no `CLAIM`/`RELEASE` instructions (they were
+removed in v0.3). Which fields of the object a function touches is an
+implementation detail of the Controller, not of the DSL.
 
 ```fsm
 var NavMeshAgent agent;
@@ -550,7 +548,7 @@ var NavMeshAgent agent;
 State Chase {
     Actions {
         temp Vector3 dir = Vector3(0.0f, 0.0f, 1.0f);
-        moveTowards(agent, dir, 5.0f);   // CLAIM position+velocity → call → RELEASE
+        moveTowards(agent, dir, 5.0f);   // one CALL; 'agent' must be a variable
     }
     Traversals { goto Chase; }
 }
@@ -755,12 +753,12 @@ fsm.fsm:8:9:  warning: bare goto before any if: subsequent statements are dead c
 **Debugging binaries:** `fsmc -d module.fsmb [-o module.fsmd]` (or `-o -`
 for stdout) walks the binary back through the module reader, validates every
 address/reference/function-id/token-type, and prints a human-readable dump:
-header + section map, decoded constant values, runtime vars with owner and
-binding slot, temps with their owning block and state, per-state instruction
-streams (`CLAIM var.field` / `CALL fn(resolved, args)` / `GOTO State`), the
-full AST tree per state, and the goto transition table. Corrupt, truncated or
-wrong-version modules (the reader only accepts the format version it writes,
-v0.2) are rejected with exit 2 and no dump written.
+header + section map, decoded constant values, runtime vars with their type
+and binding slot, temps with their owning block and state, per-state
+instruction streams (`ASSIGN var = expr` / `CALL fn(resolved, args)` /
+`GOTO State`), the full AST tree per state, and the goto transition table.
+Corrupt, truncated or wrong-version modules (the reader only accepts the
+format version it writes, v0.3) are rejected with exit 2 and no dump written.
 
 ## 20. What is NOT allowed
 
@@ -796,7 +794,7 @@ Quick index of the common compile errors (exact messages):
 | Unknown function / function | `unknown function 'name'` |
 | No / multiple matching overloads | `no overload of 'name' matches arguments (...). Candidates: ...` / `call to 'name' ... is ambiguous. Candidates: ...` |
 | Tier 2 first arg is a static `const` (e.g. `emit(constId)`) | `static constants cannot be the mutating argument of Tier 2 function 'name'` |
-| Tier 3 first arg is not a variable | `Tier 3 function 'name' claims 'agent.position'; its first argument must be a runtime or temporary variable so the claim can be bound` |
+| Tier 3 driven object is not a variable | `Tier 3 function 'name' drives its first argument; that argument must be a runtime or temporary variable` |
 | Out-of-scope temp | `unknown variable 'x'` |
 | Redeclaration in same block | `redeclaration of 'x' in this scope` |
 | `goto`/`@ENTRY` to unknown state | `unknown state 'X' in goto` / `@ENTRY must name a declared state: 'X'` |
@@ -826,7 +824,7 @@ State Chase {
         lastDist = dist;                                  // exact-type assign
         if (enemyVisible) {
             temp Vector3 dir = normalize(directionTo(player, enemy)); // if-body frame
-            moveTowards(agent, dir, 5.0f);                // Tier 3: CLAIM/CALL/RELEASE
+            moveTowards(agent, dir, 5.0f);                // Tier 3: one CALL
         } else if (lastDist < 3.0f) {
             followTarget(agent, enemy);
         } else {

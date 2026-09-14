@@ -114,28 +114,15 @@ const char* opSymbol(uint8_t id) {
     }
 }
 
-const char* claimFieldName(uint32_t idx) {
-    switch (idx) {
-        case fmt::ClaimFieldPosition: return "position";
-        case fmt::ClaimFieldVelocity: return "velocity";
-        case fmt::ClaimFieldRotation: return "rotation";
-        default: return "?";
-    }
-}
-
 const char* opcodeName(uint8_t op) {
     switch (op) {
         case fmt::OpCall: return "CALL";
         case fmt::OpAssign: return "ASSIGN";
         case fmt::OpGoto: return "GOTO";
         case fmt::OpEval: return "EVAL";
-        case fmt::OpClaim: return "CLAIM";
-        case fmt::OpRelease: return "RELEASE";
         default: return "OP";
     }
 }
-
-const char* ownerName(uint8_t o) { return o == fmt::OwnerDsl ? "dsl (Controller-owned)" : "external"; }
 
 // A token that corresponds to a '{' body — i.e. a scope for temporaries.
 bool isBlockTok(uint8_t type) {
@@ -414,14 +401,6 @@ struct Dis {
                     if (!in.operands.empty()) { os << stateName(in.operands[0]); described = true; }
                     break;
                 }
-                case fmt::OpClaim:
-                case fmt::OpRelease: {
-                    if (in.operands.size() == 2) {
-                        os << varName(in.operands[0]) << "." << claimFieldName(in.operands[1]);
-                        described = true;
-                    }
-                    break;
-                }
                 case fmt::OpEval: {
                     if (!in.operands.empty()) {
                         uint32_t ai = 0;
@@ -489,13 +468,12 @@ struct Dis {
         }
         os << "\n";
 
-        // RUNTIME
+        // RUNTIME — type + binding slot only; no owner, no dirty flag (v0.3)
         os << " SECTION [2] RUNTIME VARIABLES (" << m.runtime.size() << ")\n";
         for (std::size_t i = 0; i < m.runtime.size(); ++i) {
             const ReadRuntime& r = m.runtime[i];
             os << "   #" << i << "  " << pad(r.name, 16) << pad(typeNameByTag(r.tag), 22)
-               << "owner=" << ownerName(r.owner) << "  slot " << r.bindingSlot
-               << (r.dirty ? "  DIRTY" : "") << "\n";
+               << "slot " << r.bindingSlot << "\n";
         }
         os << "\n";
 
