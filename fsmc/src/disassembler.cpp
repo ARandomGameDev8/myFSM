@@ -77,6 +77,25 @@ std::string decodeValue(uint8_t tag, const std::vector<uint8_t>& b, std::size_t 
         case 0x04:
             if (n < 1) return "<malformed>";
             return b[off] != 0 ? "true" : "false";
+        case 0x05: {
+            // string — [4] byte length + UTF-8 bytes; re-escaped for display
+            if (n < 4) return "<malformed>";
+            const uint32_t len = rd32(b, off);
+            if (n < std::size_t(4) + len) return "<malformed string length>";
+            std::string out = "\"";
+            for (uint32_t k = 0; k < len; ++k) {
+                const char ch = char(b[off + std::size_t(4) + k]);
+                switch (ch) {
+                    case '\n': out += "\\n"; break;
+                    case '\t': out += "\\t"; break;
+                    case '\r': out += "\\r"; break;
+                    case '"':  out += "\\\""; break;
+                    case '\\': out += "\\\\"; break;
+                    default:   out += ch; break;
+                }
+            }
+            return out + "\"";
+        }
         case 0x10:
         case 0x11:
         case 0x12: {

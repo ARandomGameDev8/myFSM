@@ -15,6 +15,7 @@ bool isScalarNumeric(const TypeDefinition* t) {
 bool isVector(const TypeDefinition* t) {
     return t && t->isNumeric && t->category == "vector";
 }
+bool isString(const TypeDefinition* t) { return t && t->name == "string"; }
 
 } // namespace
 
@@ -61,11 +62,24 @@ const TypeDefinition* binaryOpType(uint8_t opId, const TypeDefinition* a, const 
                      "' (use a dedicated equals function)";
             return nullptr;
         }
+        if (isString(a)) return byName("bool"); // string equality, exact bytes
         if (!a->isNumeric && a->name != "bool") {
-            errMsg = "comparison operands must be numeric or bool, got " + name(a);
+            errMsg = "comparison operands must be numeric, bool or string, got " + name(a);
             return nullptr;
         }
         return byName("bool");
+    }
+
+    // --- strings: `+` concatenates; nothing else is defined on them ---
+    if (isString(a) || isString(b)) {
+        if (opId == fmt::OpPlus) {
+            if (isString(a) && isString(b)) return byName("string");
+            errMsg = "'+' concatenates two strings, got " + name(a) + " and " + name(b) +
+                     " (there is no string/number conversion)";
+            return nullptr;
+        }
+        errMsg = std::string("'") + opSymbol + "' is not defined for strings";
+        return nullptr;
     }
 
     // --- relational: numeric, same type for vectors, scalar promotion ---

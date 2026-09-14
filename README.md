@@ -5,7 +5,7 @@ Reads one `.fsm` source file, emits one little-endian `.fsmb` binary (36-byte
 header + 7 sections), byte-for-byte deterministic.
 
 - **Writing `.fsm` files?** → [`fsmc/LANGUAGE.md`](fsmc/LANGUAGE.md) — the full
-  language reference: syntax of every feature, all 21 types, all 179 function
+  language reference: syntax of every feature, all 22 types, all 179 function
   overloads, type rules, scoping, and every compile error.
 - **Binary format / design** → [`fsmc/DESIGN.md`](fsmc/DESIGN.md)
 
@@ -35,7 +35,7 @@ Or use the Makefile directly:
 make                                    # build the compiler
 make compile INPUT=my_state.fsm         # compile (OUT=my_state.fsmb by default)
 make compile INPUT=my_state.fsm OUT=/tmp/out.fsmb
-make test                               # run all 10 CTest suites
+make test                               # run all 12 CTest suites
 make clean                              # remove fsmc/build/
 ```
 
@@ -71,7 +71,7 @@ fsmc/                  the compiler (CMake project)
                        collection → FSM adjacency → serialization → linking),
                        byte-exact two-phase serializer, module reader,
                        disassembler (-d → .fsmd)
-  tests/               11 CTest suites + fixtures (golden bytes pinned)
+  tests/               12 CTest suites + fixtures (golden bytes pinned)
 bin/fsmc               terminal driver: auto-builds the compiler once, then
                        runs it (this is what makes the g++-like workflow)
 Makefile               repo-root convenience targets (see above)

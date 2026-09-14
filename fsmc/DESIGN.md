@@ -52,7 +52,7 @@ so the passes operate on a well-formed forest.
 
 ### Determinism
 
-* Single source of truth for names/IDs: `BuiltinTypes` (21 types) and
+* Single source of truth for names/IDs: `BuiltinTypes` (22 types) and
   `BuiltinFunctions` (179 overloads) — `lib/`. Every type name is resolved via
   `BuiltinTypes::find`, every function via `BuiltinFunctions::find`; no list is
   duplicated elsewhere.
@@ -76,7 +76,7 @@ memcpy, no undefined behavior). `std::vector<uint8_t>` buffers throughout.
 |---|---|---|
 | 0 | 4 | magic `0x46534D44` ("FSMD") |
 | 4 | 2 | version major `0` |
-| 6 | 2 | version minor `3` |
+| 6 | 2 | version minor `4` |
 | 8..35 | 8×4 | section start offsets: Global, Runtime, Temporary, State, Token, AST, FSM |
 
 Section offsets are absolute file offsets and always tile the file exactly:
@@ -90,8 +90,13 @@ Variable entry and one from every AST token (deviation 8).
 `dirty` bytes of every Runtime Variable entry (2 bytes × entry count) and the
 `CLAIM`/`RELEASE` instructions bracketing Tier 3 calls (deviation 4).
 
+**v0.3 → v0.4**: the `string` type (tag `0x05`) was added, and with it the
+format's first **variable-width** value. No entry layout changed shape; a
+string value simply occupies `[4] byte length` + UTF-8 bytes wherever a value
+of that type is stored (§2.2).
+
 The entry layouts are version-specific, so `readModule` rejects any other
-major/minor pair (`unsupported module version X.Y (this fsmc reads v0.3)`)
+major/minor pair (`unsupported module version X.Y (this fsmc reads v0.4)`)
 instead of misparsing an older module.
 
 ### 2.2 Section IDs and entry formats
@@ -99,7 +104,7 @@ instead of misparsing an older module.
 | ID | Name | Contents | Entry |
 |---|---|---|---|
 | 0 | null | (unused) | — |
-| 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` |
+| 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` (`N` = the type's `sizeBytes`, or `4 + byte length` for `string`) |
 | 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [4] binding slot [2] len [·] name` |
 | 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [2] len [·] name` |
 | 4 | State | state directory | `[4] count` then `[4] AST-root addr [2] len [·] name` |
@@ -114,6 +119,21 @@ of the AST token of the `{ … }` body that declared it (see §6).
 Self-addresses are packed addresses that point back at the entry itself; the
 State entry's address field points at the state's AST root token instead (the
 state is *defined by* its AST root).
+
+**Value width.** Every type stores its value in exactly `sizeBytes` bytes —
+except `string` (tag `0x05`, added in v0.4), whose width is per value:
+
+```
+[4] byte length (little-endian, UTF-8 bytes, no terminator)  then  [length] payload
+```
+
+That encoding is used in both places a value is stored: a Global Variable
+entry's `[N] value bytes` and a `LITERAL` AST token's data after the tag byte.
+`TypeDefinition::isVariableSize` marks the type, and a reader must branch on it
+before trusting `sizeBytes` (which is `0` for `string`); `validateModule`
+additionally requires the stored length to agree with the payload it is
+followed by, in both places. Runtime and Temporary entries store no value at
+all, so a `string` variable or temp is unaffected — only its tag byte differs.
 
 ### 2.3 32-bit address packing
 
@@ -143,7 +163,7 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 | 0x14 | RETURN | `[4] value expr address` — **reserved**: no source construct emits it |
 | 0x20 | BINARY_OP | `[1] op id [4] left [4] right` |
 | 0x21 | UNARY_OP | `[1] op id [4] operand` |
-| 0x22 | LITERAL | `[1] type tag [N] value bytes` (N = type size) |
+| 0x22 | LITERAL | `[1] type tag [N] value bytes` (N = type size; for `string`, `[4] byte length` + UTF-8 bytes) |
 | 0x23 | VAR_REF | `[4] variable entry address` |
 
 AST emission order is pre-order DFS: a container/statement entry comes first,
@@ -268,7 +288,7 @@ Type rules (no implicit conversions anywhere):
 | Op | Rule |
 |---|---|
 | `&&` `||` | bool + bool → bool |
-| `==` `!=` | exact same type (numeric or bool) → bool; handles rejected |
+| `==` `!=` | exact same type (numeric, bool or string) → bool; handles rejected |
 | `<` `>` `<=` `>=` | numeric scalars, either promoted (int→float→double); vectors **rejected** (even same-type); bool rejected |
 | `+` `-` | same-type vectors component-wise; same-type scalars promoted; scalar `*` vector is the only mixed case |
 | `*` | same-type vectors rejected (`vector * vector` — use `dot()`); scalar × vector both orders OK; scalars promoted |
@@ -277,6 +297,8 @@ Type rules (no implicit conversions anywhere):
 | `**` | scalar numeric only; same-type stays, mixed promotes |
 | unary `!` | bool → bool |
 | unary `-` | numeric (scalars and vectors, component-wise) |
+| `+` on strings | `string` + `string` → `string` (concatenation) — the **only** arithmetic-shaped operator defined for strings; mixing a string with a number is an error, there is no conversion |
+| other ops on strings | `<` `>` `<=` `>=` `-` `*` `/` `//` `**` `&&` `||` `!` unary `-` all rejected: `'<' is not defined for strings` |
 
 * **Literals**: decimal/exponent literals default to **double**; the `f`
   suffix makes them **float**. Integers are 32-bit (out-of-range is an error).
@@ -284,8 +306,11 @@ Type rules (no implicit conversions anywhere):
   `Vector3(1.0f, 2.0f, 3.0f)` — components must be constant float expressions
   (earlier `const` values allowed). Wrong arity or non-constant components are
   errors. Vectors have no runtime constructor.
-* **String literals** are lexed (so they can be diagnosed precisely) but are a
-  compile error: `string literals are not supported`.
+* **String literals** (`"…"`, escapes `\n \t \r \" \\`) are full
+  expressions of type `string`: they may initialize a `const` or a `temp`, be
+  assigned to a runtime `var`, appear in conditions, and be concatenated.
+  Constant concatenation is folded at compile time (`"he" + "llo"` emits one
+  literal); a runtime operand emits a `BINARY_OP` with `OpPlus`.
 
 ### 3.6 Overload resolution (spec 0.4)
 
@@ -319,7 +344,7 @@ Tier 3: the driven object (first parameter) must be a variable — see §3.7.
 
 ---
 
-## 4. Type registry (`BuiltinTypes`, 21 entries)
+## 4. Type registry (`BuiltinTypes`, 22 entries)
 
 | Name | Tag | Bytes | Kind |
 |---|---|---|---|
@@ -328,6 +353,7 @@ Tier 3: the driven object (first parameter) must be a variable — see §3.7.
 | float | 0x02 | 4 | primitive, numeric |
 | double | 0x03 | 8 | primitive, numeric |
 | bool | 0x04 | 1 | primitive |
+| string | 0x05 | variable | primitive, **variable width**: `[4] byte length` + UTF-8 bytes |
 | Vector2 | 0x10 | 8 | vector, numeric |
 | Vector3 | 0x11 | 12 | vector, numeric |
 | Quaternion | 0x12 | 16 | vector, numeric |
@@ -641,10 +667,17 @@ signature; >1 match → ambiguous error, same list.
    division only when it directly follows a value token (digit, letter, `)`,
    `]`, `"` — no intervening whitespace or newline); otherwise it starts a
    line comment. `x; // c` is a comment; `7 // 2` is floor division.
-6. **String literals** are lexed and diagnosed precisely ("string literals
-   are not supported") rather than failing as generic unexpected tokens, so
-   `setAnimation(ctrl, "run")` produces an actionable message. The `String`
-   type is reserved (no registry entry).
+6. **`string` is a first-class but deliberately narrow type** (module v0.4).
+   The draft reserved it and rejected every literal; it is now registered as
+   tag `0x05` and usable in constants, runtime variables, temps, conditions
+   and assignments, with `+` (concatenation) and `==` / `!=` as its only
+   operators. Two things the draft did not settle are decided here: (a) the
+   spelling is lowercase `string`, matching the other primitives — `String`
+   remains an unknown type name; (b) **no built-in function takes a string**,
+   so the 179-entry registry is untouched and a string can only reach the
+   engine through a runtime variable's binding slot. Because a string's width
+   is per value, `TypeDefinition` gained an `isVariableSize` flag and every
+   reader branches on it before trusting `sizeBytes` (§2.2).
 7. **State-level temps are legal** (declared in the State body's own scope
    frame) — initialized once on state entry, destroyed on state exit — per the
    user-confirmed correction to the draft's "no temp vars at State level"
@@ -667,7 +700,7 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 
 | Suite | Covers |
 |---|---|
-| `lib_types` | 21 types, name reachability, tag uniqueness, spec table |
+| `lib_types` | 22 types, name reachability, tag uniqueness, spec table (incl. `string` at 0x05 and `String` still unknown) |
 | `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, Tier-3 `requiresVariableTarget` flags |
 | `lexer` | keywords (case-sensitive), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
@@ -676,9 +709,12 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
 | `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token), round-trip read-back & compare, corruption rejection, determinism |
 | `golden_bytes` | **pinned 378-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.3 differs from v0.2 only in the version field), module version pinned to v0.3 + rejection of v0.1/v0.2, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `strings` | the `string` type end to end: registry entry, literals as expressions, lexer escape decoding, folded constant concatenation, runtime `BINARY_OP` concatenation, `==`/`!=` yielding bool, every rejected operator, type mismatches, `String` still unknown, length-prefixed bytes in the Global section and in LITERAL tokens, fixture round-trip + validation, quoted/re-escaped disassembly, corrupt-length rejection |
 | `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), absence of the claim/ownership vocabulary, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), corrupted/truncated/wrong-version module rejection, deterministic dump output |
 
-Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`
+Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`,
+`tests/fixtures/strings.fsm` (string constants + folding, a runtime string,
+string temps, escapes, comparisons driving transitions)
 (if/else-if/else, temps in the state body / Actions body / if body, Traversals
 with two ifs + bare default goto, Tier 3 driving calls), and
 `tests/fixtures/errors/*.fsm` (one file per major error class).

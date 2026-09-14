@@ -63,6 +63,16 @@ uint32_t typeSizeByTag(uint8_t tag, bool& known) {
     return 0;
 }
 
+// True for tags whose values are `[4] byte length` + payload instead of a fixed
+// width (only `string`, tag 0x05, as of module v0.4). Unknown tags are not
+// variable-size — they are rejected by the caller.
+bool isVariableSizeTag(uint8_t tag) {
+    for (const TypeDefinition& t : BuiltinTypes::instance().all()) {
+        if (t.typeTag == tag) return t.isVariableSize;
+    }
+    return false;
+}
+
 bool isExprTok(uint8_t t) {
     return t == uint8_t(fmt::AstTok::FunctionCall) || t == uint8_t(fmt::AstTok::BinaryOp) ||
            t == uint8_t(fmt::AstTok::UnaryOp) || t == uint8_t(fmt::AstTok::Literal) ||
@@ -159,7 +169,18 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
         bool known = false;
         uint32_t sz = typeSizeByTag(g.tag, known);
         if (!known) { err = "global entry has unknown type tag"; return false; }
-        if (!c.bytes(g.value, sz)) { err = "truncated global value"; return false; }
+        if (isVariableSizeTag(g.tag)) {
+            // `string`: keep the on-disk form ([4] length + bytes) in g.value so
+            // the decoder can read it exactly like a literal token's payload.
+            uint32_t len = 0;
+            if (!c.u32(len)) { err = "truncated global value"; return false; }
+            if (len > c.b.size()) { err = "global string length out of range"; return false; }
+            for (int k = 0; k < 4; ++k) g.value.push_back(uint8_t((len >> (8 * k)) & 0xFF));
+            if (!c.bytes(g.value, len)) { err = "truncated global value"; return false; }
+        } else if (!c.bytes(g.value, sz)) {
+            err = "truncated global value";
+            return false;
+        }
         if (!c.str(g.name)) { err = "truncated global name"; return false; }
         out.globalEntryOffsets.push_back(start - off[0]);
         out.globals.push_back(std::move(g));
@@ -275,7 +296,18 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
                 {
                     uint32_t sz = typeSizeByTag(first, knownTag);
                     if (!knownTag) { err = "ast literal has unknown type tag"; return false; }
-                    if (!c.bytes(t.data, sz)) { err = "truncated ast literal"; return false; }
+                    if (isVariableSizeTag(first)) {
+                        // `string` literal: [4] byte length + UTF-8 bytes.
+                        uint32_t len = 0;
+                        if (!c.u32(len)) { err = "truncated ast literal"; return false; }
+                        if (len > c.b.size()) { err = "ast string literal length out of range"; return false; }
+                        for (int k = 0; k < 4; ++k)
+                            t.data.push_back(uint8_t((len >> (8 * k)) & 0xFF));
+                        if (!c.bytes(t.data, len)) { err = "truncated ast literal"; return false; }
+                    } else if (!c.bytes(t.data, sz)) {
+                        err = "truncated ast literal";
+                        return false;
+                    }
                     t.data.insert(t.data.begin(), first);
                 }
                 break;
@@ -322,6 +354,30 @@ bool validateModule(const ReadModule& m, std::string& err) {
         if (fmt::addressSection(m.globals[i].addr) != fmt::SecGlobal ||
             !inSet(m.globalEntryOffsets, fmt::addressOffset(m.globals[i].addr))) {
             err = "global entry " + std::to_string(i) + " has a malformed self-address";
+            return false;
+        }
+        // the stored value must be exactly as wide as its type says
+        bool known = false;
+        const uint32_t sz = typeSizeByTag(m.globals[i].tag, known);
+        if (!known) {
+            err = "global entry " + std::to_string(i) + " has an unknown type tag";
+            return false;
+        }
+        if (isVariableSizeTag(m.globals[i].tag)) {
+            const auto& v = m.globals[i].value;
+            if (v.size() < 4) {
+                err = "global entry " + std::to_string(i) + " has a truncated string value";
+                return false;
+            }
+            const uint32_t len = uint32_t(v[0]) | (uint32_t(v[1]) << 8) |
+                                 (uint32_t(v[2]) << 16) | (uint32_t(v[3]) << 24);
+            if (v.size() != std::size_t(4) + len) {
+                err = "global entry " + std::to_string(i) +
+                      " has a string length that does not match its payload";
+                return false;
+            }
+        } else if (m.globals[i].value.size() != sz) {
+            err = "global entry " + std::to_string(i) + " has a value of the wrong width";
             return false;
         }
     }
@@ -532,7 +588,17 @@ bool validateModule(const ReadModule& m, std::string& err) {
                 if (t.data.size() < 1) { err = "LITERAL token has malformed data"; return false; }
                 bool known = false;
                 uint32_t sz = typeSizeByTag(t.data[0], known);
-                if (!known || t.data.size() != 1 + sz) {
+                if (!known) { err = "LITERAL has an unknown type tag"; return false; }
+                if (isVariableSizeTag(t.data[0])) {
+                    // [4] byte length + payload must agree with the token's size
+                    if (t.data.size() < 5) { err = "LITERAL string is truncated"; return false; }
+                    const uint32_t len = uint32_t(t.data[1]) | (uint32_t(t.data[2]) << 8) |
+                                         (uint32_t(t.data[3]) << 16) | (uint32_t(t.data[4]) << 24);
+                    if (t.data.size() != std::size_t(5) + len) {
+                        err = "LITERAL string length does not match its payload";
+                        return false;
+                    }
+                } else if (t.data.size() != 1 + sz) {
                     err = "LITERAL size does not match its type";
                     return false;
                 }

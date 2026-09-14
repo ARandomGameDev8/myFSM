@@ -1006,9 +1006,15 @@ Expr* Parser::parsePrimary() {
             return raw;
         }
         case lex::Tok::StringLit: {
-            errorAt(t, "string literals are not supported (string type is reserved for future use)");
             next();
-            return makePoison({t.line, t.col});
+            auto e = std::make_unique<Expr>();
+            e->kind = Expr::Kind::Literal;
+            e->loc = {t.line, t.col};
+            e->type = BuiltinTypes::instance().find("string");
+            e->litStr = t.strValue; // escapes already decoded by the lexer
+            Expr* raw = e.get();
+            src_.exprPool.push_back(std::move(e));
+            return raw;
         }
         case lex::Tok::Ident: {
             next();

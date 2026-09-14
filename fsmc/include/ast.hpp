@@ -37,8 +37,10 @@ struct ConstValue {
     bool b = false;
     std::array<float, 4> v{};
     int vcount = 0; // 2 / 3 / 4 for Vector2 / Vector3 / Quaternion
+    std::string str; // string only
 
-    // Little-endian raw bytes, exactly sizeBytes wide (from BuiltinTypes).
+    // Little-endian raw bytes: exactly sizeBytes wide for fixed-size types,
+    // `[4] byte length` + UTF-8 bytes for `string`.
     std::vector<uint8_t> toBytes() const;
 };
 
@@ -57,6 +59,7 @@ struct Expr {
     bool litBool = false;
     std::array<float, 4> litVec{};
     int litVecCount = 0;
+    std::string litStr; // string literal (escapes already decoded by the lexer)
 
     // VarRef payload
     VarInfo var;

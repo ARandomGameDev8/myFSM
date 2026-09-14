@@ -1,7 +1,7 @@
 ======================================================================
  FSMC DISASSEMBLY
  file     samples/patrol.fsmb  (959 bytes)
- format   fsmb v0.3 — magic 0x46534D44 ("FSMD"), little-endian
+ format   fsmb v0.4 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 

@@ -141,11 +141,15 @@ TEST(parser, vector_literal_from_earlier_const_ok) {
     ASSERT_TRUE(decl.init->litVec[1] == -2.5f);
 }
 
-TEST(parser, string_literal_in_expression_fails) {
-    auto r = fh::compile("var AnimationController3D ctrl;\n" +
-                         base("Actions {\n        setAnimation(ctrl, \"run\");\n    }\n"));
-    ASSERT_FALSE(r.ok);
-    ASSERT_TRUE(fh::hasErrorContaining(r, "string literals are not supported"));
+TEST(parser, string_literal_is_an_expression) {
+    // Strings are fully supported (module v0.4); see the `strings` suite for
+    // the type rules, folding and binary encoding.
+    auto r = fh::compile(base("Actions {\n        temp string s = \"run\";\n    }\n"));
+    ASSERT_TRUE(r.ok);
+    const Stmt& decl = r.src.states[0].items[0].stmts[0];
+    ASSERT_EQ(decl.init->kind, Expr::Kind::Literal);
+    ASSERT_EQ(decl.init->litStr, std::string("run"));
+    ASSERT_EQ(decl.init->type->typeTag, uint8_t(0x05));
 }
 
 TEST(parser, operator_type_rejections) {

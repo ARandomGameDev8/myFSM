@@ -7,7 +7,8 @@ namespace fsmc {
 namespace {
 
 TypeDefinition mk(const char* name, uint8_t tag, uint32_t size, bool handle,
-                  bool numeric, bool value, const char* category) {
+                  bool numeric, bool value, const char* category,
+                  bool variableSize = false) {
     TypeDefinition t;
     t.name = name;
     t.typeTag = tag;
@@ -16,6 +17,7 @@ TypeDefinition mk(const char* name, uint8_t tag, uint32_t size, bool handle,
     t.isNumeric = numeric;
     t.isValueType = value;
     t.category = category;
+    t.isVariableSize = variableSize;
     return t;
 }
 
@@ -28,6 +30,11 @@ BuiltinTypes::BuiltinTypes() {
     types_.push_back(mk("float",                0x02,  4, false, true,  true,  "primitive"));
     types_.push_back(mk("double",               0x03,  8, false, true,  true,  "primitive"));
     types_.push_back(mk("bool",                 0x04,  1, false, false, true,  "primitive"));
+    // `string` is the one variable-width type: sizeBytes is meaningless for it
+    // (0), and every stored value is `[4] byte length` + UTF-8 bytes. It is a
+    // value type, not a handle, and not numeric: the only operators defined on
+    // it are `+` (concatenation) and `==` / `!=`.
+    types_.push_back(mk("string",               0x05,  0, false, false, true,  "primitive", true));
     types_.push_back(mk("Vector2",              0x10,  8, false, true,  true,  "vector"));
     types_.push_back(mk("Vector3",              0x11, 12, false, true,  true,  "vector"));
     types_.push_back(mk("Quaternion",           0x12, 16, false, true,  true,  "vector"));

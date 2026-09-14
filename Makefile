@@ -4,7 +4,7 @@
 #   make                        # build the compiler into fsmc/build/
 #   make compile INPUT=x.fsm    # compile a .fsm file (OUT=x.fsmb by default)
 #   make compile INPUT=x.fsm OUT=/tmp/out.fsmb
-#   make test                   # run all 10 CTest suites
+#   make test                   # run all 12 CTest suites
 #   make install                # copy fsmc to ~/.local/bin (plain `fsmc` on PATH)
 #   make clean                  # remove fsmc/build/
 

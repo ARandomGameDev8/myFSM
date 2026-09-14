@@ -20,7 +20,11 @@ constexpr uint16_t kVersionMajor = 0;
 // byte and no `dirty` byte in Runtime Variable entries. The module no longer
 // says anything about who owns a runtime variable or which of its fields a
 // function drives.
-constexpr uint16_t kVersionMinor = 3;
+// v0.4 — the `string` type (tag 0x05) and with it the format's first
+// variable-width value: a string is stored as `[4] byte length` + UTF-8 bytes,
+// both in Global Variable entries (constant initializers) and in LITERAL AST
+// tokens. Every other type still occupies exactly its `sizeBytes`.
+constexpr uint16_t kVersionMinor = 4;
 constexpr std::size_t kHeaderSize = 36;
 
 // ---------------------------------------------------------------------------

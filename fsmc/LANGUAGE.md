@@ -139,6 +139,8 @@ const float  chaseRange  = 10.0f;
 const float  chaseR2     = chaseRange * chaseRange;     // earlier const OK
 const Vector3 homePos    = Vector3(1.0f, 2.0f, 3.0f);   // vector constants OK
 const bool   startPaused = true && false;               // folds to false
+const string greeting    = "hello";                     // string constants OK
+const string banner      = greeting + ", world";        // folds to one string
 ```
 
 ### Runtime variables
@@ -394,9 +396,10 @@ Use parentheses whenever in doubt — they never hurt.
 | Operator | Operands | Result |
 |---|---|---|
 | `&&` `\|\|` | `bool` + `bool` | `bool` |
-| `==` `!=` | exact same type (numeric or `bool`); **handles rejected** | `bool` |
+| `==` `!=` | exact same type (numeric, `bool` or `string`); **handles rejected** | `bool` |
 | `<` `>` `<=` `>=` | numeric **scalars** (int/float/double, promoted); **vectors rejected** (even same-type); `bool` rejected; handles rejected | `bool` |
-| `+` `-` | same-type vectors (component-wise); scalar+scalar with promotion (int→float→double); `bool` rejected; handles rejected | promoted scalar / same vector type |
+| `+` | `string` + `string` (**concatenation**); same-type vectors (component-wise); scalar+scalar with promotion (int→float→double); `bool` rejected; handles rejected | `string` / promoted scalar / same vector type |
+| `-` | same-type vectors (component-wise); scalar+scalar with promotion; `bool`/`string`/handles rejected | promoted scalar / same vector type |
 | `*` | scalars (promoted); scalar × vector **in either order**; vector × vector **rejected** (use `dot()`); `bool`/handles rejected | promoted scalar / same vector type |
 | `/` | numeric scalars, **`int / int` → `float`** (true division); no vectors, no `bool` | `float` or promoted scalar |
 | `//` | **`int // int` only** | `int`, **floor** (toward −∞: `-7 // 2 == -4`) |
@@ -416,6 +419,12 @@ Notes:
 - Scalar promotion only happens **between scalars** (`int` + `float` →
   `float`). A `float` and a `double` mix → `double`. Vectors never promote
   across types (`Vector2` + `Vector3` is an error).
+- **`string` is deliberately narrow**: `+` (concatenation) and `==` / `!=`
+  (exact byte comparison) are the only operators defined on it. There is **no
+  string↔number conversion** in either direction, no ordering (`<`), no
+  indexing, no length, no slicing, and no `string` parameter anywhere in the
+  built-in function registry — a string can only be stored, compared,
+  concatenated and handed to the Controller through a binding slot.
 
 ## 12. Literals
 
@@ -425,14 +434,19 @@ Notes:
 | decimal / exponent | `3.14`, `1e3`, `2.5E-4` | **`double`** (the default!) |
 | decimal with `f` suffix | `3.14f`, `1.0F` | `float` |
 | boolean | `true`, `false` | `bool` |
-| string | `"hello"` | **not supported — compile error** |
+| string | `"hello"`, `""` | `string` |
 
 - **Gotcha:** `5.0` is a `double`, not a `float`. So
   `temp float x = 5.0;` is a **type-mismatch error** — write `5.0f`.
-- String literals are recognized (so you get a precise diagnostic) but the
-  language has no string type: `string literals are not supported (string
-  type is reserved for future use)`. Supported escapes if you ever need them:
-  `\n \t \r \" \\`.
+- **String literals** are ordinary expressions: they may initialize a `const`,
+  a `temp` or be assigned to a runtime `var`, appear in conditions, and be
+  concatenated. They are `string` (never `char*`-like or numeric).
+- Supported escapes: `\n \t \r \" \\` — anything else is
+  `unknown escape sequence '\q' in string literal`. A literal must close on
+  its own line (`unterminated string literal` otherwise).
+- The stored value is the **decoded** UTF-8 bytes; the module keeps them as
+  `[4] byte length` + bytes (see DESIGN.md §2.2), so escapes cost nothing at
+  runtime and `""` is a legal empty string.
 
 ## 13. Vector literals
 
@@ -556,7 +570,7 @@ State Chase {
 
 ## 17. Built-in types
 
-All 21 built-in types (the single source of truth is
+All 22 built-in types (the single source of truth is
 `lib/builtin_types.cpp`; every type name in the compiler resolves through
 `BuiltinTypes::find`):
 
@@ -567,6 +581,7 @@ All 21 built-in types (the single source of truth is
 | `float` | 0x02 | 4 | primitive, numeric |
 | `double` | 0x03 | 8 | primitive, numeric |
 | `bool` | 0x04 | 1 | primitive |
+| `string` | 0x05 | *variable* | primitive, variable width (`[4] length` + UTF-8 bytes) |
 | `Vector2` | 0x10 | 8 | vector, numeric (2 floats) |
 | `Vector3` | 0x11 | 12 | vector, numeric (3 floats) |
 | `Quaternion` | 0x12 | 16 | vector, numeric (4 floats) |
@@ -586,6 +601,9 @@ All 21 built-in types (the single source of truth is
 
 Handles are opaque 4-byte references: no arithmetic, no comparisons, no
 literals — only the functions below operate on them.
+
+`string` is the only variable-width type: it has no fixed `Bytes`, and no
+built-in function takes one (see §11 for the operators that do exist).
 
 ## 18. Built-in functions
 
@@ -758,7 +776,7 @@ and binding slot, temps with their owning block and state, per-state
 instruction streams (`ASSIGN var = expr` / `CALL fn(resolved, args)` /
 `GOTO State`), the full AST tree per state, and the goto transition table.
 Corrupt, truncated or wrong-version modules (the reader only accepts the
-format version it writes, v0.3) are rejected with exit 2 and no dump written.
+format version it writes, v0.4) are rejected with exit 2 and no dump written.
 
 ## 20. What is NOT allowed
 
@@ -783,7 +801,10 @@ Quick index of the common compile errors (exact messages):
 | No `@ENTRY` / two `@ENTRY` / entry names unknown state | `missing @ENTRY: exactly one @ENTRY is required per file` / `duplicate @ENTRY (exactly one is required per file)` / `@ENTRY must name a declared state: 'X'` |
 | Duplicate state / global name | `duplicate state 'X'` / `duplicate global variable 'x'` |
 | `void` as a variable type | `void cannot be used as a variable type` |
-| String literal anywhere | `string literals are not supported (string type is reserved for future use)` |
+| `string` with an operator other than `+` `==` `!=` | `'<' is not defined for strings` / `'*' is not defined for strings` / `unary '-' requires a numeric operand, got string` |
+| `string` mixed with a number | `'+' concatenates two strings, got string and int (there is no string/number conversion)` |
+| `String` (capital S) as a type name | `unknown type 'String' in declaration` |
+| Bad escape / unclosed literal | `unknown escape sequence '\q' in string literal` / `unterminated string literal` |
 | `vector * vector` | `vector * vector is not supported (use dot() for a dot product)` |
 | Relational op on vectors / bool | `relational operators are not defined for vectors` |
 | Mixed vector types in `+` `-` | `mixed vector types: Vector2 and Vector3` |

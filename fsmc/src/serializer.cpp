@@ -83,6 +83,11 @@ std::vector<uint8_t> exprLiteralBytes(const Expr* e) {
         case 0x02: fmt::writeFloat(out, static_cast<float>(e->litReal)); break;
         case 0x03: fmt::writeDouble(out, e->litReal); break;
         case 0x04: fmt::writeU8(out, e->litBool ? 1 : 0); break;
+        case 0x05: // string — [4] byte length + UTF-8 bytes (variable width)
+            fmt::writeU32(out, uint32_t(e->litStr.size()));
+            fmt::writeBytes(out, reinterpret_cast<const uint8_t*>(e->litStr.data()),
+                            e->litStr.size());
+            break;
         case 0x10: case 0x11: case 0x12:
             for (int k = 0; k < e->litVecCount; ++k) fmt::writeFloat(out, e->litVec[k]);
             break;
@@ -369,7 +374,11 @@ Layout computeLayout(const ParsedSource& src, const Emission& em, const FsmGraph
         const GlobalVar& g = src.globals[i];
         if (!g.isConst) continue;
         L.globalAddr[i] = fmt::makeAddress(fmt::SecGlobal, uint32_t(e));
-        e += 4 + 1 + g.type->sizeBytes + 2 + g.name.size();
+        // Value width: exactly sizeBytes for fixed-size types; for `string` the
+        // folded bytes are `[4] length` + payload, so measure what was folded.
+        const std::size_t valueBytes =
+            g.type->isVariableSize ? g.constBytes.size() : g.type->sizeBytes;
+        e += 4 + 1 + valueBytes + 2 + g.name.size();
     }
     off = L.secStart[fmt::SecGlobal] + e;
 
