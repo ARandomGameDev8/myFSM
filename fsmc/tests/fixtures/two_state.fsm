@@ -1,5 +1,6 @@
 // two_state.fsm — if / else if / else, block-scoped temps (state body,
-// Actions body, if body), Traversals with two ifs + a bare default goto.
+// Actions body, Start body, if body), the mandatory Start{}/Update{} phase
+// blocks, and Traversals with two ifs + a bare default goto.
 const float chaseRange = 10.0f;
 
 var Object3D player;
@@ -10,15 +11,20 @@ var bool enemyVisible;
 State Chase {
     temp float lastDist = 99.0f; // State body: state entry / exit lifetime
     Actions {
-        temp float dist = getDistanceTo(player, enemy); // Actions body
-        lastDist = dist;
-        if (enemyVisible) {
-            temp Vector3 dir = normalize(directionTo(player, enemy)); // if body
-            moveTowards(agent, dir, 5.0f);
-        } else if (lastDist < 3.0f) {
-            followTarget(agent, enemy);
-        } else {
-            stopMovement(agent);
+        temp float dist = getDistanceTo(player, enemy); // Actions body: both phases see it
+        Start {
+            lastDist = dist;                            // seed once, on entry
+        }
+        Update {
+            if (enemyVisible) {
+                temp Vector3 dir = normalize(directionTo(player, enemy)); // if body
+                moveTowards(agent, dir, 5.0f);
+            } else if (lastDist < 3.0f) {
+                followTarget(agent, enemy);
+            } else {
+                stopMovement(agent);
+            }
+            lastDist = dist;
         }
     }
     Traversals {
@@ -31,7 +37,10 @@ State Chase {
 State Flee {
     Actions {
         temp Vector3 away = getFleeDirection(getPosition(player), getPosition(enemy));
-        moveTowards(agent, away, 8.0f);
+        Start { }
+        Update {
+            moveTowards(agent, away, 8.0f);
+        }
     }
     Traversals {
         if (!enemyVisible) { goto Chase; }

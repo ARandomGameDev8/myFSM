@@ -45,7 +45,7 @@ TEST(disassemble, two_state_shows_calls_without_claims_or_ownership) {
     ASSERT_TRUE(parseAndValidate(r, mod, err));
 
     const std::string t = disassemble(mod, "two_state.fsmb", true);
-    ASSERT_TRUE(t.find("fsmb v0.4") != std::string::npos); // banner shows the format version
+    ASSERT_TRUE(t.find("fsmb v0.5") != std::string::npos); // banner shows the format version
     // calls survive, with their resolved function ids
     ASSERT_TRUE(t.find("CALL") != std::string::npos);
     ASSERT_TRUE(t.find("moveTowards") != std::string::npos);
@@ -84,7 +84,7 @@ TEST(disassemble, vector_literals_are_decoded_to_values) {
         "const Vector3 origin = Vector3(1.5f, -2.5f, 0.0f);\n"
         "var Vector3 pos;\n"
         "State A {\n"
-        "    Actions { pos = origin; }\n"
+        "    Actions { Start { } Update { pos = origin; } }\n"
         "    Traversals { goto A; }\n"
         "}\n"
         "@ENTRY A\n",

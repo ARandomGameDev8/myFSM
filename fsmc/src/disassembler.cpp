@@ -149,6 +149,8 @@ bool isBlockTok(uint8_t type) {
         case uint8_t(fmt::AstTok::State):
         case uint8_t(fmt::AstTok::Actions):
         case uint8_t(fmt::AstTok::Traversals):
+        case uint8_t(fmt::AstTok::Start):
+        case uint8_t(fmt::AstTok::Update):
         case uint8_t(fmt::AstTok::If):
         case uint8_t(fmt::AstTok::ElseIf):
         case uint8_t(fmt::AstTok::Else):
@@ -164,6 +166,8 @@ const char* blockName(uint8_t type) {
         case uint8_t(fmt::AstTok::State): return "state body";
         case uint8_t(fmt::AstTok::Actions): return "Actions";
         case uint8_t(fmt::AstTok::Traversals): return "Traversals";
+        case uint8_t(fmt::AstTok::Start): return "Start";
+        case uint8_t(fmt::AstTok::Update): return "Update";
         case uint8_t(fmt::AstTok::If): return "if body";
         case uint8_t(fmt::AstTok::ElseIf): return "else if body";
         case uint8_t(fmt::AstTok::Else): return "else body";
@@ -336,6 +340,8 @@ struct Dis {
                 return std::string("STATE") +
                        (t.data.size() == 1 && t.data[0] == 1 ? "   [ENTRY]" : "");
             case uint8_t(fmt::AstTok::Actions): return "ACTIONS";
+            case uint8_t(fmt::AstTok::Start): return "START   (runs once, on state entry)";
+            case uint8_t(fmt::AstTok::Update): return "UPDATE  (runs every tick)";
             case uint8_t(fmt::AstTok::Traversals): return "TRAVERSALS";
             case uint8_t(fmt::AstTok::If):
             case uint8_t(fmt::AstTok::ElseIf): {

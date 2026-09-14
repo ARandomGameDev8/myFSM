@@ -37,9 +37,10 @@ link   = pass6_link(bytes)               -- reads bytes back, validates (src/mod
 
 The six passes are six distinct named functions with a visible boundary; none
 are merged. Parser-level validations (C block scoping through the scope stack,
-no nested conditionals, no bare blocks, Traversals structure, overload
-resolution, operator type rules, Tier-2/Tier-3 semantics) run during parsing,
-so the passes operate on a well-formed forest.
+the mandatory `Start{}` / `Update{}` phase blocks inside every `Actions`, no
+nested conditionals, no bare blocks, Traversals structure, overload resolution,
+operator type rules, Tier-2/Tier-3 semantics) run during parsing, so the passes
+operate on a well-formed forest.
 
 | Pass | Name | Boundary |
 |---|---|---|
@@ -48,7 +49,7 @@ so the passes operate on a well-formed forest.
 | 3 | `pass3_collectGotos` | forest → per-state ordered goto lists |
 | 4 | `pass4_buildFsmAdjacency` | goto lists + state table → adjacency matrix |
 | 5 | `pass5_serialize` | everything → bytes (two sub-passes: layout, then emit) |
-| 6 | `pass6_link` | bytes → read-back module; every address, child pointer, function id and operand must resolve |
+| 6 | `pass6_link` | bytes → read-back module; every address, child pointer, function id and operand must resolve, and every `ACTIONS` token must carry its `START`/`UPDATE` phase containers (§2.4) |
 
 ### Determinism
 
@@ -76,7 +77,7 @@ memcpy, no undefined behavior). `std::vector<uint8_t>` buffers throughout.
 |---|---|---|
 | 0 | 4 | magic `0x46534D44` ("FSMD") |
 | 4 | 2 | version major `0` |
-| 6 | 2 | version minor `4` |
+| 6 | 2 | version minor `5` |
 | 8..35 | 8×4 | section start offsets: Global, Runtime, Temporary, State, Token, AST, FSM |
 
 Section offsets are absolute file offsets and always tile the file exactly:
@@ -95,8 +96,17 @@ format's first **variable-width** value. No entry layout changed shape; a
 string value simply occupies `[4] byte length` + UTF-8 bytes wherever a value
 of that type is stored (§2.2).
 
+**v0.4 → v0.5**: `Actions` gained the two mandatory phase blocks, encoded as
+two new AST **container** tokens — `START` (`0x07`) and `UPDATE` (`0x08`) —
+that hang off the state's `ACTIONS` token alongside its `TEMP_VAR_DECL`
+children (§2.4). No existing entry changed shape: the tokens carry no data, so
+each costs `[1] type [2] child-count` plus `[4]` per child, and `ACTIONS`
+simply grew by two child addresses. The Temporary, Token and instruction
+layouts are untouched, and the instruction stream stays flat and in source
+order (§2.8).
+
 The entry layouts are version-specific, so `readModule` rejects any other
-major/minor pair (`unsupported module version X.Y (this fsmc reads v0.4)`)
+major/minor pair (`unsupported module version X.Y (this fsmc reads v0.5)`)
 instead of misparsing an older module.
 
 ### 2.2 Section IDs and entry formats
@@ -156,6 +166,8 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 | 0x04 | IF | `[4] condition expr address` |
 | 0x05 | ELSE_IF | `[4] condition expr address` |
 | 0x06 | ELSE | (none) |
+| 0x07 | START | (none) — container for the `Start{}` phase block (v0.5) |
+| 0x08 | UPDATE | (none) — container for the `Update{}` phase block (v0.5) |
 | 0x10 | FUNCTION_CALL | `[2] function id [1] arg-count [4]×arg-expr-addr` |
 | 0x11 | GOTO | `[4] state entry address` |
 | 0x12 | TEMP_VAR_DECL | `[1] type tag [4] temp entry address` |
@@ -169,8 +181,21 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 AST emission order is pre-order DFS: a container/statement entry comes first,
 then its condition, then its children in source order. The child edges are the
 only nesting information in the module: a container token (`STATE`, `ACTIONS`,
-`TRAVERSALS`, `IF`, `ELSE_IF`, `ELSE`) *is* a `{ … }` body, so it is exactly
-one scope for temporaries. The Token section is framed per state:
+`START`, `UPDATE`, `TRAVERSALS`, `IF`, `ELSE_IF`, `ELSE`) *is* a `{ … }` body,
+so it is exactly one scope for temporaries.
+
+`START` and `UPDATE` are always both present, in that order, among the
+children of `ACTIONS` — the parser rejects a source that omits, reorders or
+duplicates either one (§3.2, deviation 9). An `ACTIONS` child list therefore
+reads: the body's own `TEMP_VAR_DECL` (and its initialising `ASSIGN`) tokens in
+source order, then `START`, then `UPDATE`. A phase block with no statements is
+a container with `child-count 0`; it still occupies its token, so a reader can
+tell "empty phase" from "older module" without looking at the version.
+`validateModule` (Pass 6) enforces the invariant: an `ACTIONS` token with no
+`START` child, no `UPDATE` child, two of either, or `UPDATE` before `START` is
+rejected (`ACTIONS token is missing its START/UPDATE phase blocks`, `ACTIONS has
+more than one START child`, `START phase block does not precede UPDATE under
+ACTIONS`), so a runtime can rely on the structure without re-deriving it. The Token section is framed per state:
 `[4] state-addr [2] instr-count` — **documented deviation** from the
 flat-instruction-list sketch, chosen so each state's stream is self-locating.
 
@@ -223,10 +248,22 @@ the module.
 ### 2.8 Execution-order conventions (encoded in the streams)
 
 1. **Entry phase** — state-level temp initializers (declaration order).
-2. **Actions** — in source order.
+2. **Actions**, in source order:
+   a. the `Actions`-body temp initializers (declaration order);
+   b. the `Start{}` statements — **once, when the state is entered**;
+   c. the `Update{}` statements — **every tick**.
 3. **Traversals** — in source order; the runtime evaluates ifs in order and
    takes the first goto that fires (a trailing bare goto is the default
    transition).
+
+The per-state instruction frame is one flat list in exactly that order and
+carries no phase marker of its own: which phase an instruction belongs to is
+**structural**, recovered the same way a temp's owning block is. `OpCall`
+points at its `FUNCTION_CALL` token and `OpAssign` at its value-expression
+token; walking that token's parent edges leads to `START` or `UPDATE` (or to
+`ACTIONS` / `STATE` for a temp initializer, `TRAVERSALS` for a goto). A runtime therefore
+executes the `START` subtree on entry only, the `UPDATE` subtree every tick,
+and the temp initializers per the frame they belong to.
 
 State-level temps are legal and **user-confirmed**: initialized once on state
 entry (before Actions), destroyed on state exit, visible across the whole
@@ -248,7 +285,17 @@ State body (Actions and Traversals), *not* visible in other states.
 ### 3.2 Temp variables and scope (C block scoping)
 
 * `temp <T> name [= <expr>];` may appear in any `{ … }` body that accepts
-  statements: the State body, the Actions body, or an if / else-if / else body.
+  statements: the State body, the Actions body, a `Start{}` / `Update{}` phase
+  body, or an if / else-if / else body.
+* **`Actions` is split into two mandatory phase blocks** (module v0.5):
+  `Start{}` — runs once when the state is entered — and `Update{}` — runs every
+  tick. Both must be present, exactly once each, `Start{}` first, and they hold
+  *all* action statements; the only thing allowed directly in the `Actions` body
+  is a `temp` declaration, which both phases then share. The parser enforces
+  each half of that rule with its own diagnostic (`Actions must contain a
+  Start{} block …`, `Start{} must come before Update{} in the Actions body`,
+  `duplicate Update{} block in the Actions body`, `action logic must be inside
+  Start{} or Update{} …`); see LANGUAGE.md §8.
 * **Scope stack, no fixed depth levels**: push a frame on every `{`, pop it on
   the matching `}`; declarations write to the top frame (the declaration's
   *direct parent block*), lookup walks the open frames top-to-bottom
@@ -257,6 +304,10 @@ State body (Actions and Traversals), *not* visible in other states.
 * Nothing is serialized about the scope: no depth byte in the Temporary
   Variable Section, none on AST tokens. Ownership is the parent edge of the
   temp's `TEMP_VAR_DECL` token (§6).
+* The two phase bodies are **sibling frames**, not nested ones: a temp declared
+  in `Start{}` is invisible in `Update{}` and vice versa, and — since `Start{}`
+  is compiled first — an `Update{}` temp cannot be referenced from `Start{}`
+  either.
 * Traversals cannot declare temps (only `if`/`goto` statements are allowed
   there).
 
@@ -611,7 +662,9 @@ Block lifetimes at runtime:
 | Block (AST token) | Lifetime of the temps declared in it |
 |---|---|
 | State body (`STATE`) | created once on state entry, destroyed on state exit; visible in Actions **and** Traversals, and in every block nested inside the state body |
-| Actions body (`ACTIONS`) | created when the block runs each tick, destroyed at block end |
+| Actions body (`ACTIONS`) | created when the block runs each tick, destroyed at block end; visible in **both** phase blocks |
+| `Start{}` body (`START`) | created when the entry phase runs, destroyed when it finishes; not visible in `Update{}` or in Traversals |
+| `Update{}` body (`UPDATE`) | created when that tick's phase runs, destroyed when it finishes; not visible in `Start{}` (which already ran) or in Traversals |
 | Traversals body (`TRAVERSALS`) | (no temps are allowed here) |
 | if / else-if / else body (`IF` / `ELSE_IF` / `ELSE`) | created while that branch is active, destroyed at branch end; each branch of a chain is its own frame |
 
@@ -624,8 +677,8 @@ the declaration — is `unknown variable 'x'`.
 **Ownership is structural.** Because a temp's scope is exactly the block whose
 child its declaration is, a reader recovers the scope of any temporary from the
 AST alone: walk a state's tree and remember the nearest enclosing container
-token (`STATE` / `ACTIONS` / `TRAVERSALS` / `IF` / `ELSE_IF` / `ELSE`) of each
-`TEMP_VAR_DECL`. `fsmc -d` does exactly that and prints it as the temp's
+token (`STATE` / `ACTIONS` / `START` / `UPDATE` / `TRAVERSALS` / `IF` /
+`ELSE_IF` / `ELSE`) of each `TEMP_VAR_DECL`. `fsmc -d` does exactly that and prints it as the temp's
 `scope` (the disassembler's `tempScope` map).
 
 ---
@@ -691,6 +744,16 @@ signature; >1 match → ambiguous error, same list.
    encoded by the AST child edges. Both bytes were dropped (the format minor
    version was bumped 1 → 2); the owning block of a temp is recovered from the
    AST parent edge (§6).
+9. **`Actions` requires a `Start{}` and an `Update{}` block** (module v0.5).
+   The draft put all action statements directly in the `Actions` body and left
+   the entry-once / every-tick split to the runtime's discretion. Per the
+   user-confirmed change, the split is now part of the language: both blocks are
+   mandatory, `Start{}` comes first, each appears exactly once, and only `temp`
+   declarations may sit directly in the `Actions` body (shared by both phases).
+   Encoded as two new AST container tokens, `START` (`0x07`) and `UPDATE`
+   (`0x08`), under `ACTIONS` — the instruction frame layout and every other
+   entry are unchanged, so the format minor version was bumped 4 → 5 (§2.1,
+   §2.4, §2.8).
 
 ---
 
@@ -702,19 +765,23 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 |---|---|
 | `lib_types` | 22 types, name reachability, tag uniqueness, spec table (incl. `string` at 0x05 and `String` still unknown) |
 | `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, Tier-3 `requiresVariableTarget` flags |
-| `lexer` | keywords (case-sensitive), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
+| `lexer` | keywords (case-sensitive, `Start`/`Update` included — and `Startx`/`xUpdate` staying identifiers), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
 | `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
+| `phases` | the `Start{}`/`Update{}` rule set end to end: both blocks mandatory (and the two diagnostics when neither is present), each exactly once, `Start{}` first, empty phases allowed, every non-`temp` statement rejected directly in the `Actions` body (call / assignment / `if` / `goto`), `temp` declarations allowed there and visible in both phases, phase bodies as sibling frames (a `Start{}` temp unknown in `Update{}` and vice versa, one name reusable in both), `Start`/`Update` reserved as identifiers, `START`/`UPDATE` as `ACTIONS` children in the AST with no data and per-phase child lists, instruction order `Start` before `Update`, disassembly phase labels, the two `errors/` phase fixtures, validation rejecting a module that lost a phase container, and every fixture declaring both blocks |
 | `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
-| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token), round-trip read-back & compare, corruption rejection, determinism |
-| `golden_bytes` | **pinned 378-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.3 differs from v0.2 only in the version field), module version pinned to v0.3 + rejection of v0.1/v0.2, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token — `STATE`, `ACTIONS` or `IF`), round-trip read-back & compare, corruption rejection, determinism |
+| `golden_bytes` | **pinned 392-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.5 adds the `START`/`UPDATE` container tokens to v0.4's 378 bytes), module version pinned to v0.5 + rejection of v0.1–v0.4 by name, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
 | `strings` | the `string` type end to end: registry entry, literals as expressions, lexer escape decoding, folded constant concatenation, runtime `BINARY_OP` concatenation, `==`/`!=` yielding bool, every rejected operator, type mismatches, `String` still unknown, length-prefixed bytes in the Global section and in LITERAL tokens, fixture round-trip + validation, quoted/re-escaped disassembly, corrupt-length rejection |
-| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), absence of the claim/ownership vocabulary, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), corrupted/truncated/wrong-version module rejection, deterministic dump output |
+| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), absence of the claim/ownership vocabulary, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), the `START (runs once, on state entry)` / `UPDATE (runs every tick)` phase labels, corrupted/truncated/wrong-version module rejection, deterministic dump output |
 
-Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`,
+Every fixture and every `samples/*.fsm` file declares both phase blocks.
+
+Fixtures: `tests/fixtures/minimal.fsm` (one state, a self-loop, an `Actions`-body
+temp and an empty `Start{}`), `tests/fixtures/two_state.fsm` (if/else-if/else,
+temps in the state body / Actions body / if body, a seeding `Start{}`, Traversals
+with two ifs + bare default goto, Tier 3 driving calls),
 `tests/fixtures/strings.fsm` (string constants + folding, a runtime string,
-string temps, escapes, comparisons driving transitions)
-(if/else-if/else, temps in the state body / Actions body / if body, Traversals
-with two ifs + bare default goto, Tier 3 driving calls), and
+string temps, escapes, comparisons driving transitions), and
 `tests/fixtures/errors/*.fsm` (one file per major error class).

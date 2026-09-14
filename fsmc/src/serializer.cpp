@@ -295,10 +295,31 @@ private:
                 a.type = uint8_t(fmt::AstTok::Actions);
                 int aIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(a));
-                for (const Stmt& stmt : item.stmts) {
-                    for (int c : walkStmt(stmt, &ss)) {
-                        em_.tokens[aIdx].children.push_back(c);
+                // Direct children in source order: `temp` declarations (owned by
+                // the Actions block itself) interleaved with the two mandatory
+                // phase blocks, START and UPDATE. Each phase block is a
+                // container, so it is a temporary scope of its own, and its
+                // instructions land in the state's stream at its source
+                // position — Start's run once on entry, Update's every tick.
+                for (const StateBodyItem::Child& child : item.actionsChildren) {
+                    if (child.kind == StateBodyItem::Child::Kind::Temp) {
+                        const Stmt& stmt = item.stmts[std::size_t(child.tempIndex)];
+                        for (int c : walkStmt(stmt, &ss)) {
+                            em_.tokens[aIdx].children.push_back(c);
+                        }
+                        continue;
                     }
+                    const bool isStart = child.kind == StateBodyItem::Child::Kind::Start;
+                    EmitToken ph;
+                    ph.type = uint8_t(isStart ? fmt::AstTok::Start : fmt::AstTok::Update);
+                    int pIdx = int(em_.tokens.size());
+                    em_.tokens.push_back(std::move(ph));
+                    for (const Stmt& stmt : isStart ? item.startStmts : item.updateStmts) {
+                        for (int c : walkStmt(stmt, &ss)) {
+                            em_.tokens[pIdx].children.push_back(c);
+                        }
+                    }
+                    em_.tokens[aIdx].children.push_back(pIdx);
                 }
                 em_.tokens[sIdx].children.push_back(aIdx);
             } else if (item.kind == StateBodyItem::Kind::Traversals) {
@@ -331,6 +352,8 @@ std::size_t astDataSize(const EmitToken& t) {
         case uint8_t(fmt::AstTok::State): return 1;
         case uint8_t(fmt::AstTok::Actions):
         case uint8_t(fmt::AstTok::Traversals):
+        case uint8_t(fmt::AstTok::Start):
+        case uint8_t(fmt::AstTok::Update):
         case uint8_t(fmt::AstTok::Else): return 0;
         case uint8_t(fmt::AstTok::If):
         case uint8_t(fmt::AstTok::ElseIf): return 4;

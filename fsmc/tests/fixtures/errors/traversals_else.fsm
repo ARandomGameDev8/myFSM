@@ -2,6 +2,8 @@
 var bool ready;
 State A {
     Actions {
+        Start { }
+        Update { }
     }
     Traversals {
         if (ready) { goto A; } else { goto A; } // ERROR: else not allowed

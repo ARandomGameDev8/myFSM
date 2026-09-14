@@ -54,6 +54,7 @@ add_executable(fsmc_tests
   tests/test_overloads.cpp
   tests/test_traversals.cpp
   tests/test_passes.cpp
+  tests/test_phases.cpp
   tests/test_golden_bytes.cpp
   tests/test_disassemble.cpp
   tests/test_strings.cpp
@@ -64,8 +65,8 @@ target_compile_definitions(fsmc_tests PRIVATE
 )
 
 set(FSMC_TEST_SUITES
-  lib_types lib_functions lexer parser scope overloads traversals passes golden_bytes
-  disassemble strings
+  lib_types lib_functions lexer parser scope overloads traversals passes phases
+  golden_bytes disassemble strings
 )
 foreach(suite IN LISTS FSMC_TEST_SUITES)
   add_test(NAME ${suite} COMMAND fsmc_tests ${suite})

@@ -1,6 +1,8 @@
 // Traversals needs at least one goto.
 State A {
     Actions {
+        Start { }
+        Update { }
     }
     Traversals {
     } // ERROR: no goto

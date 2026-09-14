@@ -7,6 +7,9 @@ std::string stateWithTrav(const std::string& body, const std::string& extra = ""
     return "var bool enemyVisible;\n" + extra +
            "State A {\n"
            "    Actions {\n"
+           "        Start { }\n"
+           "        Update {\n"
+           "        }\n"
            "    }\n"
            "    Traversals {\n" +
            body +
@@ -14,6 +17,9 @@ std::string stateWithTrav(const std::string& body, const std::string& extra = ""
            "}\n"
            "State B {\n"
            "    Actions {\n"
+           "        Start { }\n"
+           "        Update {\n"
+           "        }\n"
            "    }\n"
            "    Traversals {\n        goto A;\n    }\n"
            "}\n"
@@ -96,13 +102,16 @@ TEST(traversals, goto_in_actions_fails) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goto B;\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto B;\n"
         "    }\n"
         "}\n"
-        "State B {\n    Actions { }\n    Traversals { goto A; }\n}\n"
+        "State B {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
     ASSERT_TRUE(fh::hasErrorContaining(r, "goto is only allowed inside Traversals"));

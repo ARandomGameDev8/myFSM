@@ -7,24 +7,33 @@ using namespace fsmc;
 
 namespace {
 const char* kTwoState =
+    "// two_state.fsm — if / else if / else, block-scoped temps (state body,\n"
+    "// Actions body, Start body, if body), the mandatory Start{}/Update{} phase\n"
+    "// blocks, and Traversals with two ifs + a bare default goto.\n"
     "const float chaseRange = 10.0f;\n"
+    "\n"
     "var Object3D player;\n"
     "var Object3D enemy;\n"
     "var NavMeshAgent agent;\n"
     "var bool enemyVisible;\n"
     "\n"
     "State Chase {\n"
-    "    temp float lastDist = 99.0f;\n"
+    "    temp float lastDist = 99.0f; // State body: state entry / exit lifetime\n"
     "    Actions {\n"
-    "        temp float dist = getDistanceTo(player, enemy);\n"
-    "        lastDist = dist;\n"
-    "        if (enemyVisible) {\n"
-    "            temp Vector3 dir = normalize(directionTo(player, enemy));\n"
-    "            moveTowards(agent, dir, 5.0f);\n"
-    "        } else if (lastDist < 3.0f) {\n"
-    "            followTarget(agent, enemy);\n"
-    "        } else {\n"
-    "            stopMovement(agent);\n"
+    "        temp float dist = getDistanceTo(player, enemy); // Actions body: both phases see it\n"
+    "        Start {\n"
+    "            lastDist = dist;                            // seed once, on entry\n"
+    "        }\n"
+    "        Update {\n"
+    "            if (enemyVisible) {\n"
+    "                temp Vector3 dir = normalize(directionTo(player, enemy)); // if body\n"
+    "                moveTowards(agent, dir, 5.0f);\n"
+    "            } else if (lastDist < 3.0f) {\n"
+    "                followTarget(agent, enemy);\n"
+    "            } else {\n"
+    "                stopMovement(agent);\n"
+    "            }\n"
+    "            lastDist = dist;\n"
     "        }\n"
     "    }\n"
     "    Traversals {\n"
@@ -37,13 +46,17 @@ const char* kTwoState =
     "State Flee {\n"
     "    Actions {\n"
     "        temp Vector3 away = getFleeDirection(getPosition(player), getPosition(enemy));\n"
-    "        moveTowards(agent, away, 8.0f);\n"
+    "        Start { }\n"
+    "        Update {\n"
+    "            moveTowards(agent, away, 8.0f);\n"
+    "        }\n"
     "    }\n"
     "    Traversals {\n"
     "        if (!enemyVisible) { goto Chase; }\n"
     "        goto Flee;\n"
     "    }\n"
     "}\n"
+    "\n"
     "@ENTRY Chase\n";
 
 // Index of the AST token whose children contain token #i (-1 for a root).
@@ -112,6 +125,9 @@ TEST(passes, unknown_goto_target_fails) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto Nope;\n"
@@ -124,20 +140,20 @@ TEST(passes, unknown_goto_target_fails) {
 
 TEST(passes, exactly_one_entry_enforced) {
     auto two = fh::compile(
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n"
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
         "@ENTRY A\n@ENTRY A\n");
     ASSERT_FALSE(two.ok);
     ASSERT_TRUE(fh::hasErrorContaining(two, "duplicate @ENTRY"));
 
     auto zero = fh::compile(
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n");
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n");
     ASSERT_FALSE(zero.ok);
     ASSERT_TRUE(fh::hasErrorContaining(zero, "missing @ENTRY"));
 }
 
 TEST(passes, entry_must_name_declared_state) {
     auto r = fh::compile(
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n"
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
         "@ENTRY B\n");
     ASSERT_FALSE(r.ok);
     ASSERT_TRUE(fh::hasErrorContaining(r, "@ENTRY must name a declared state: 'B'"));
@@ -146,15 +162,15 @@ TEST(passes, entry_must_name_declared_state) {
 TEST(passes, entry_may_appear_before_states) {
     auto r = fh::compile(
         "@ENTRY A\n"
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n");
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n");
     ASSERT_TRUE(r.ok);
     ASSERT_TRUE(r.src.states[0].isEntry);
 }
 
 TEST(passes, duplicate_state_fails) {
     auto r = fh::compile(
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n"
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n"
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
     ASSERT_TRUE(fh::hasErrorContaining(r, "duplicate state 'A'"));
@@ -163,7 +179,7 @@ TEST(passes, duplicate_state_fails) {
 TEST(passes, duplicate_global_fails) {
     auto r = fh::compile(
         "var int health;\nvar int health;\n"
-        "State A {\n    Actions { }\n    Traversals { goto A; }\n}\n"
+        "State A {\n    Actions { Start { } Update { } }\n    Traversals { goto A; }\n}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
     ASSERT_TRUE(fh::hasErrorContaining(r, "duplicate global variable 'health'"));
@@ -181,8 +197,11 @@ TEST(passes, bare_block_fails) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        temp int x = 1;\n"
         "        {\n"
+        "        }\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -199,9 +218,12 @@ TEST(passes, nested_conditional_fails_else_if_chain_ok) {
         "var bool a;\nvar bool b;\n"
         "State S {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        if (a) {\n"
         "            if (b) {\n"
         "            }\n"
+        "        }\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -216,10 +238,13 @@ TEST(passes, nested_conditional_fails_else_if_chain_ok) {
         "var bool a;\nvar bool b;\nvar bool c;\n"
         "State S {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        if (a) {\n"
         "        } else if (b) {\n"
         "        } else if (c) {\n"
         "        } else {\n"
+        "        }\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -228,11 +253,12 @@ TEST(passes, nested_conditional_fails_else_if_chain_ok) {
         "}\n"
         "@ENTRY S\n");
     ASSERT_TRUE(chain.ok);
-    ASSERT_EQ(chain.src.states[0].items[0].stmts.size(), std::size_t(4));
-    ASSERT_EQ(chain.src.states[0].items[0].stmts[0].kind, Stmt::Kind::If);
-    ASSERT_EQ(chain.src.states[0].items[0].stmts[1].kind, Stmt::Kind::ElseIf);
-    ASSERT_EQ(chain.src.states[0].items[0].stmts[2].kind, Stmt::Kind::ElseIf);
-    ASSERT_EQ(chain.src.states[0].items[0].stmts[3].kind, Stmt::Kind::Else);
+    const auto chainStmts = fh::actionStmts(chain.src);
+    ASSERT_EQ(chainStmts.size(), std::size_t(4));
+    ASSERT_EQ(chainStmts[0].kind, Stmt::Kind::If);
+    ASSERT_EQ(chainStmts[1].kind, Stmt::Kind::ElseIf);
+    ASSERT_EQ(chainStmts[2].kind, Stmt::Kind::ElseIf);
+    ASSERT_EQ(chainStmts[3].kind, Stmt::Kind::Else);
 }
 
 TEST(passes, sibling_if_chains_are_ok) {
@@ -240,9 +266,12 @@ TEST(passes, sibling_if_chains_are_ok) {
         "var bool a;\nvar bool b;\n"
         "State S {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        if (a) {\n"
         "        }\n"
         "        if (b) {\n"
+        "        }\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -267,7 +296,9 @@ TEST(passes, tier3_calls_emit_no_claim_or_release) {
     ASSERT_TRUE(validateModule(rm, err));
 
     // Chase drives 'agent' with moveTowards + followTarget + stopMovement:
-    // 4 assigns + 3 calls + 3 gotos = 10 instructions, no claim traffic.
+    // 5 assigns (two temp inits, the Start{} seed, the if-body temp init and
+    // the Update{} refresh) + 3 calls + 3 gotos = 11 instructions, no claim
+    // traffic.
     ASSERT_EQ(rm.stateInstrs.size(), std::size_t(2));
     const auto& chase = rm.stateInstrs[0].instrs;
     long calls = 0;
@@ -276,7 +307,7 @@ TEST(passes, tier3_calls_emit_no_claim_or_release) {
         if (in.opcode == fmt::OpCall) ++calls;
     }
     ASSERT_EQ(calls, 3);
-    ASSERT_EQ(chase.size(), std::size_t(10));
+    ASSERT_EQ(chase.size(), std::size_t(11));
 
     // runtime entries: type + binding slot only, in declaration order
     ASSERT_EQ(rm.runtime.size(), std::size_t(4));
@@ -324,7 +355,7 @@ TEST(passes, round_trip_read_back_and_compare) {
     ASSERT_EQ(m.fsm[0].targets.size(), std::size_t(3));
     // instruction frames exist for both states
     ASSERT_EQ(m.stateInstrs.size(), std::size_t(2));
-    ASSERT_EQ(m.stateInstrs[0].instrs.size(), std::size_t(10)); // 4 assigns + 3 calls + 3 gotos
+    ASSERT_EQ(m.stateInstrs[0].instrs.size(), std::size_t(11)); // 5 assigns + 3 calls + 3 gotos
     // every AST root is a STATE token and the entry flag matches
     for (std::size_t i = 0; i < m.states.size(); ++i) {
         uint32_t off = 0;

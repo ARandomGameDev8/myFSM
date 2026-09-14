@@ -19,10 +19,14 @@ streams, AST trees, transition table). Regenerate or create your own:
 ./bin/fsmc -d samples/guard.fsmb -o -        # print to stdout
 ```
 
+All three split every `Actions` block into the two mandatory phases: `Start{}`
+runs once when the state is entered, `Update{}` runs every tick
+([`../fsmc/LANGUAGE.md`](../fsmc/LANGUAGE.md) §8).
+
 | File | What it demonstrates |
 |---|---|
-| `patrol.fsm` | 4-state cycle, state-level temps, Tier 3 `goTo` / `stopMovement` |
-| `hunter.fsm` | if/else-if/else, block-scoped temps (state body / Actions / else body), vector math, `&&` |
-| `guard.fsm` | bool temps, else-if chain, Tier 2 mutation (`emit`, `setAnimation`, `setVisible`) |
+| `patrol.fsm` | 4-state cycle, `Start{}` issuing the move order once + an empty `Update{}`, state-level temps, Tier 3 `goTo` / `stopMovement` |
+| `hunter.fsm` | if/else-if/else, block-scoped temps (state body / `Actions` body / else body), an `Actions`-body temp consumed by `Start{}`, vector math, `&&` |
+| `guard.fsm` | bool temps, else-if chain, `Actions`-body temps queried by `Update{}`, a `Start{}` that resets the guard's visuals on entry, a teardown state whose whole job is one `Start{}` block, Tier 2 mutation (`emit`, `setAnimation`, `setVisible`) |
 
 Full syntax reference: [`../fsmc/LANGUAGE.md`](../fsmc/LANGUAGE.md).

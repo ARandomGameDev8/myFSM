@@ -11,6 +11,8 @@ const char* tokenName(Tok t) {
         case Tok::End: return "end of file";
         case Tok::KwState: return "State";
         case Tok::KwActions: return "Actions";
+        case Tok::KwStart: return "Start";
+        case Tok::KwUpdate: return "Update";
         case Tok::KwTraversals: return "Traversals";
         case Tok::KwIf: return "if";
         case Tok::KwElse: return "else";
@@ -165,6 +167,8 @@ struct Lexer {
         t.text = s;
         if (s == "State") t.kind = Tok::KwState;
         else if (s == "Actions") t.kind = Tok::KwActions;
+        else if (s == "Start") t.kind = Tok::KwStart;
+        else if (s == "Update") t.kind = Tok::KwUpdate;
         else if (s == "Traversals") t.kind = Tok::KwTraversals;
         else if (s == "if") t.kind = Tok::KwIf;
         else if (s == "else") t.kind = Tok::KwElse;

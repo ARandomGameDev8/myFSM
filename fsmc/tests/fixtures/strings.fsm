@@ -11,10 +11,14 @@ State Idle {
     Actions {
         temp string tag    = "idle";
         temp string banner = joined + "!";      // concatenation evaluated at runtime
-        label = tag;
-        if (banner == "hello, world!") {
-            temp string esc = "a\tb\nc\\d\"e";  // escapes survive the round trip
-            label = esc;
+        Start {
+            label = tag;                        // runs once, on entry
+        }
+        Update {
+            if (banner == "hello, world!") {
+                temp string esc = "a\tb\nc\\d\"e";  // escapes survive the round trip
+                label = esc;
+            }
         }
     }
     Traversals {
@@ -25,7 +29,10 @@ State Idle {
 
 State Run {
     Actions {
-        label = "run";
+        Start {
+            label = "run";
+        }
+        Update { }
     }
     Traversals {
         if (label != "run") { goto Idle; }

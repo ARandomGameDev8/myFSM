@@ -18,17 +18,34 @@ std::vector<Token> toks(const std::string& s, Diagnostics& d) {
 
 TEST(lexer, tokenizes_keywords_and_punctuation) {
     Diagnostics d;
-    auto t = toks("State A { Actions { } Traversals { if (x) { goto B; } else goto C; } }", d);
+    auto t = toks("State A { Actions { Start { } Update { } } Traversals { if (x) { goto B; } else goto C; } }", d);
     ASSERT_FALSE(d.hasErrors());
     std::vector<Tok> got;
     for (const Token& x : t) got.push_back(x.kind);
-    std::vector<Tok> want = {Tok::KwState, Tok::Ident, Tok::LBrace, Tok::KwActions, Tok::LBrace,
-                             Tok::RBrace, Tok::KwTraversals, Tok::LBrace, Tok::KwIf, Tok::LParen,
-                             Tok::Ident, Tok::RParen, Tok::LBrace, Tok::KwGoto, Tok::Ident,
-                             Tok::Semicolon, Tok::RBrace, Tok::KwElse, Tok::KwGoto, Tok::Ident,
-                             Tok::Semicolon, Tok::RBrace, Tok::RBrace, Tok::End};
+    std::vector<Tok> want = {Tok::KwState,   Tok::Ident,  Tok::LBrace,    Tok::KwActions,
+                             Tok::LBrace,     Tok::KwStart, Tok::LBrace,   Tok::RBrace,
+                             Tok::KwUpdate,   Tok::LBrace,  Tok::RBrace,   Tok::RBrace,
+                             Tok::KwTraversals, Tok::LBrace, Tok::KwIf,    Tok::LParen,
+                             Tok::Ident,      Tok::RParen,  Tok::LBrace,   Tok::KwGoto,
+                             Tok::Ident,      Tok::Semicolon, Tok::RBrace, Tok::KwElse,
+                             Tok::KwGoto,     Tok::Ident,   Tok::Semicolon, Tok::RBrace,
+                             Tok::RBrace,     Tok::End};
     ASSERT_EQ(got.size(), want.size());
     for (std::size_t i = 0; i < want.size(); ++i) ASSERT_EQ(static_cast<int>(got[i]), static_cast<int>(want[i]));
+}
+
+TEST(lexer, start_and_update_are_keywords) {
+    Diagnostics d;
+    auto t = toks("Start Update start update Startx xUpdate", d);
+    ASSERT_FALSE(d.hasErrors());
+    ASSERT_EQ(t[0].kind, Tok::KwStart);
+    ASSERT_EQ(t[1].kind, Tok::KwUpdate);
+    ASSERT_EQ(t[2].kind, Tok::Ident); // lowercase is an identifier
+    ASSERT_EQ(t[3].kind, Tok::Ident);
+    ASSERT_EQ(t[4].kind, Tok::Ident); // a longer identifier is not a keyword
+    ASSERT_EQ(t[5].kind, Tok::Ident);
+    ASSERT_EQ(t[0].text, std::string("Start"));
+    ASSERT_EQ(t[1].text, std::string("Update"));
 }
 
 TEST(lexer, keywords_are_case_sensitive) {

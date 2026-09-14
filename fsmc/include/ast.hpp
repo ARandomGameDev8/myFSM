@@ -117,7 +117,30 @@ struct StateBodyItem {
     enum class Kind : uint8_t { TempDecl, Actions, Traversals } kind = Kind::TempDecl;
     SrcLoc loc{1, 1};
     Stmt decl;            // when kind == TempDecl (carries tempName/type/tempId/init)
-    std::vector<Stmt> stmts; // when kind == Actions / Traversals
+    // Actions: the `temp` declarations written directly in the Actions body —
+    // they live in the Actions frame, so both phase blocks can see them.
+    // Traversals: the transition statements.
+    std::vector<Stmt> stmts;
+
+    // Actions only: the two mandatory phase blocks. Start{} runs once, when the
+    // state is entered; Update{} runs every tick. Each is its own scope, nested
+    // inside the Actions frame, so a temp declared in one is invisible in the
+    // other.
+    std::vector<Stmt> startStmts;
+    std::vector<Stmt> updateStmts;
+    SrcLoc startLoc{1, 1};
+    SrcLoc updateLoc{1, 1};
+    bool hasStart = false;
+    bool hasUpdate = false;
+
+    // Actions only: the source order of the body's direct children, so the AST
+    // mirrors it exactly (a temp may be declared before, between or after the
+    // two phase blocks).
+    struct Child {
+        enum class Kind : uint8_t { Temp, Start, Update } kind = Kind::Temp;
+        int tempIndex = -1; // index into stmts, when kind == Temp
+    };
+    std::vector<Child> actionsChildren;
 };
 
 struct StateDef {

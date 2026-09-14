@@ -2,7 +2,10 @@
 State A {
     temp int x = 1;
     Actions {
-        x = x + 1;
+        Start { }
+        Update {
+            x = x + 1;
+        }
     }
     Traversals {
         goto B;
@@ -10,7 +13,10 @@ State A {
 }
 State B {
     Actions {
-        temp int y = x; // ERROR: x not visible in state B
+        Start { }
+        Update {
+            temp int y = x; // ERROR: x not visible in state B
+        }
     }
     Traversals {
         goto A;

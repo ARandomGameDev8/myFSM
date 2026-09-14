@@ -17,18 +17,25 @@ namespace {
 //   state items in source order -> statements in order -> if bodies in order.
 void walkStateStmts(const StateDef& st,
                     const std::function<void(const Stmt&)>& visit) {
+    std::function<void(const Stmt&)> rec;
+    rec = [&](const Stmt& s2) {
+        visit(s2);
+        for (const Stmt& b : s2.body) rec(b);
+    };
+    auto walkList = [&](const std::vector<Stmt>& list) {
+        for (const Stmt& s : list) rec(s);
+    };
     for (const StateBodyItem& item : st.items) {
         if (item.kind == StateBodyItem::Kind::TempDecl) {
             visit(item.decl);
-        } else {
-            for (const Stmt& s : item.stmts) {
-                std::function<void(const Stmt&)> rec;
-                rec = [&](const Stmt& s2) {
-                    visit(s2);
-                    for (const Stmt& b : s2.body) rec(b);
-                };
-                rec(s);
-            }
+            continue;
+        }
+        // Actions body temps (shared by both phase blocks) and, for Traversals,
+        // the transition statements.
+        walkList(item.stmts);
+        if (item.kind == StateBodyItem::Kind::Actions) {
+            walkList(item.startStmts);  // Start{}
+            walkList(item.updateStmts); // Update{}
         }
     }
 }

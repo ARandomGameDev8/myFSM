@@ -3,8 +3,11 @@ var bool a;
 var bool b;
 State A {
     Actions {
-        if (a) {
-            if (b) { } // ERROR: nested conditionals
+        Start { }
+        Update {
+            if (a) {
+                if (b) { } // ERROR: nested conditionals
+            }
         }
     }
     Traversals {

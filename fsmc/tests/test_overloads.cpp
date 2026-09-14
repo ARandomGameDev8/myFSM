@@ -10,8 +10,12 @@ namespace {
 int findCallId(const fh::CompileResult& r, const std::string& fn) {
     for (const StateBodyItem& item : r.src.states[0].items) {
         if (item.kind != StateBodyItem::Kind::Actions) continue;
-        for (const Stmt& s : item.stmts) {
-            if (s.kind == Stmt::Kind::Call && s.funcName == fn) return int(s.functionId);
+        // calls live inside the Start{} / Update{} phase blocks; temps (and
+        // nothing else) may sit directly in the Actions body
+        for (const std::vector<Stmt>* list : {&item.stmts, &item.startStmts, &item.updateStmts}) {
+            for (const Stmt& s : *list) {
+                if (s.kind == Stmt::Kind::Call && s.funcName == fn) return int(s.functionId);
+            }
         }
     }
     return -1;
@@ -24,7 +28,10 @@ TEST(overloads, goTo_nav_agent_vector3_resolves) {
         "var Vector3 pos;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(navAgent, pos);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -35,10 +42,10 @@ TEST(overloads, goTo_nav_agent_vector3_resolves) {
     ASSERT_EQ(findCallId(r, "goTo"), int(0x060A)); // (NavMeshAgent, Vector3)
     // A Tier 3 driving call carries nothing but the resolved id, tier and
     // arguments: claim bindings are gone from the language and the module.
-    const auto& item = r.src.states[0].items[0];
-    ASSERT_EQ(item.stmts[0].tier, uint8_t(3));
-    ASSERT_EQ(item.stmts[0].args.size(), std::size_t(2));
-    ASSERT_EQ(item.stmts[0].args[0]->var.kind, VarKind::Runtime);
+    const auto item = fh::actionStmts(r.src);
+    ASSERT_EQ(item[0].tier, uint8_t(3));
+    ASSERT_EQ(item[0].args.size(), std::size_t(2));
+    ASSERT_EQ(item[0].args[0]->var.kind, VarKind::Runtime);
 }
 
 TEST(overloads, goTo_obj2d_obj2d_resolves) {
@@ -47,7 +54,10 @@ TEST(overloads, goTo_obj2d_obj2d_resolves) {
         "var Object2D target;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(obj2d, target);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -63,7 +73,10 @@ TEST(overloads, goTo_nav_agent_int_fails_with_candidates) {
         "var NavMeshAgent navAgent;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(navAgent, 5);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -81,7 +94,10 @@ TEST(overloads, goTo_obj3d_int_fails) {
         "var Object3D obj3d;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(obj3d, 5);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -98,7 +114,10 @@ TEST(overloads, goTo_object3d_vector3_resolves) {
         "var Vector3 pos;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(obj, pos);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -114,7 +133,10 @@ TEST(overloads, setPosition_picks_2d_overload) {
         "var Object2D obj;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        setPosition(obj, Vector2(1.0f, 2.0f));\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -131,8 +153,11 @@ TEST(overloads, getPosition_camera_vs_object) {
         "var Object3D obj;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        temp Vector3 a = getPosition(cam);\n"
         "        temp Vector3 b = getPosition(obj);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -140,7 +165,7 @@ TEST(overloads, getPosition_camera_vs_object) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    const auto& stmts = r.src.states[0].items[0].stmts;
+    const auto stmts = fh::actionStmts(r.src);
     ASSERT_EQ(stmts[0].init->functionId, uint16_t(0x0500)); // Camera3D
     ASSERT_EQ(stmts[1].init->functionId, uint16_t(0x0100)); // Object3D
 }
@@ -149,7 +174,10 @@ TEST(overloads, wrong_arity_fails_via_no_match) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        clamp(1.0f);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -165,7 +193,10 @@ TEST(overloads, unknown_function_fails) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        foo(1);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -181,7 +212,10 @@ TEST(overloads, tier2_mutation_of_static_constant_fails) {
         "const int eventId = 42;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        emit(eventId);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -199,7 +233,10 @@ TEST(overloads, tier3_first_argument_must_be_a_variable) {
         "var Vector3 pos;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        goTo(getNearestOfTag(pos, 1, 10.0f), pos);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -216,8 +253,11 @@ TEST(overloads, tier3_wait_takes_a_literal_because_it_drives_no_object) {
     auto r = fh::compile(
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        wait(0.5f);\n"
         "        waitUntil(true);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -236,8 +276,11 @@ TEST(overloads, tier3_temp_target_is_accepted) {
         "var Object3D other;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        temp Object3D mover = other;\n"
         "        goTo(mover, target);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        if (true) { goto A; }\n"
@@ -267,8 +310,11 @@ TEST(overloads, nested_call_argument_types_propagate) {
         "var PhysicsObject3D phys;\n"
         "State A {\n"
         "    Actions {\n"
+        "        Start { }\n"
+        "        Update {\n"
         "        temp Vector3 v = getVelocity(phys) * 2.0f;\n"
         "        setVelocity(phys, v);\n"
+        "        }\n"
         "    }\n"
         "    Traversals {\n"
         "        goto A;\n"
@@ -276,6 +322,6 @@ TEST(overloads, nested_call_argument_types_propagate) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    const auto& stmts = r.src.states[0].items[0].stmts;
+    const auto stmts = fh::actionStmts(r.src);
     ASSERT_EQ(stmts[1].functionId, uint16_t(0x0402)); // setVelocity(PhysicsObject3D, Vector3)
 }

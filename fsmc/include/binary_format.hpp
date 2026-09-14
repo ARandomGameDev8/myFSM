@@ -24,7 +24,12 @@ constexpr uint16_t kVersionMajor = 0;
 // variable-width value: a string is stored as `[4] byte length` + UTF-8 bytes,
 // both in Global Variable entries (constant initializers) and in LITERAL AST
 // tokens. Every other type still occupies exactly its `sizeBytes`.
-constexpr uint16_t kVersionMinor = 4;
+// v0.5 — the Actions body is split into two mandatory phase blocks: START
+// (0x07) and UPDATE (0x08) are container tokens and, with `temp` declarations,
+// the only children of ACTIONS. Both are blocks, so both are temporary scopes,
+// and which instructions run once on entry vs. every tick is structural — no
+// instruction-frame layout changed.
+constexpr uint16_t kVersionMinor = 5;
 constexpr std::size_t kHeaderSize = 36;
 
 // ---------------------------------------------------------------------------
@@ -109,6 +114,8 @@ enum class AstTok : uint8_t {
     If = 0x04,
     ElseIf = 0x05,
     Else = 0x06,
+    Start = 0x07,  // Actions phase block: runs once, when the state is entered
+    Update = 0x08, // Actions phase block: runs every tick
     // Leaves
     FunctionCall = 0x10,
     Goto = 0x11,

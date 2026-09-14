@@ -12,10 +12,14 @@ using namespace fsmc;
 
 namespace {
 
-// Wraps statement text into a minimal one-state file with a self-loop.
+// Wraps statement text into a minimal one-state file with a self-loop. The
+// statements land in Update{}: Start{} and Update{} are both mandatory.
 std::string wrap(const std::string& actions) {
     return "State A {\n"
-           "    Actions {\n" + actions + "    }\n"
+           "    Actions {\n"
+           "        Start { }\n"
+           "        Update {\n" + actions + "        }\n"
+           "    }\n"
            "    Traversals {\n"
            "        goto A;\n"
            "    }\n"
@@ -71,7 +75,8 @@ TEST(strings, literal_is_an_expression_everywhere) {
     auto r = fh::compile(wrap("        temp string s = \"run\";\n"
                               "        s = \"walk\";\n"));
     ASSERT_TRUE(r.ok);
-    const Stmt& decl = r.src.states[0].items[0].stmts[0];
+    const auto declsV = fh::actionStmts(r.src);
+    const Stmt& decl = declsV[0];
     ASSERT_EQ(decl.kind, Stmt::Kind::TempDecl);
     ASSERT_EQ(decl.init->kind, Expr::Kind::Literal);
     ASSERT_EQ(decl.init->litStr, std::string("run"));
@@ -88,7 +93,8 @@ TEST(strings, literal_is_an_expression_everywhere) {
 TEST(strings, escapes_are_decoded_once_by_the_lexer) {
     auto r = fh::compile(wrap("        temp string s = \"a\\tb\\nc\\\\d\\\"e\";\n"));
     ASSERT_TRUE(r.ok);
-    const Stmt& decl = r.src.states[0].items[0].stmts[0];
+    const auto declsV = fh::actionStmts(r.src);
+    const Stmt& decl = declsV[0];
     ASSERT_EQ(decl.init->litStr, std::string("a\tb\nc\\d\"e"));
     // ... and the module stores exactly those bytes, length-prefixed
     ReadModule rm;
@@ -181,9 +187,12 @@ TEST(strings, equality_and_inequality_yield_bool) {
                          "var string label;\n"
                          "State A {\n"
                          "    Actions {\n"
+                         "        Start { }\n"
+                         "        Update {\n"
                          "        temp string s = \"x\";\n"
                          "        temp bool same = s == greeting;\n"
                          "        temp bool diff = label != s;\n"
+                         "        }\n"
                          "    }\n"
                          "    Traversals {\n"
                          "        if (label == greeting) { goto A; }\n"
@@ -333,7 +342,7 @@ TEST(strings, disassembly_prints_quoted_and_re_escaped_strings) {
     ReadModule rm;
     ASSERT_TRUE(read(r, rm));
     const std::string t = disassemble(rm, "strings.fsmb", true);
-    ASSERT_TRUE(t.find("fsmb v0.4") != std::string::npos);
+    ASSERT_TRUE(t.find("fsmb v0.5") != std::string::npos);
     ASSERT_TRUE(t.find("greeting        string        = \"hello\"") != std::string::npos);
     ASSERT_TRUE(t.find("= \"hello, world\"") != std::string::npos); // folded constant
     // literals render inline in the instruction / AST dumps

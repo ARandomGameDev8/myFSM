@@ -54,6 +54,9 @@ private:
 
     // statements
     void parseActionStmts(std::vector<Stmt>& out);
+    // Parses exactly one statement of an Actions-phase body; returns false when
+    // the enclosing loop should stop (at '}' or end of file).
+    bool parseOneActionStmt(std::vector<Stmt>& out);
     Stmt parseTempDecl(int stateIndex);
     Stmt parseAssignStmt(const lex::Token& nameTok);
     Stmt parseCallStmt(const lex::Token& nameTok);

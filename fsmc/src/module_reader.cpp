@@ -85,6 +85,8 @@ std::size_t astDataSize(uint8_t type, const std::vector<uint8_t>& head, bool& kn
         case uint8_t(fmt::AstTok::State): return 1;
         case uint8_t(fmt::AstTok::Actions):
         case uint8_t(fmt::AstTok::Traversals):
+        case uint8_t(fmt::AstTok::Start):
+        case uint8_t(fmt::AstTok::Update):
         case uint8_t(fmt::AstTok::Else): return 0;
         case uint8_t(fmt::AstTok::If):
         case uint8_t(fmt::AstTok::ElseIf): return 4;
@@ -107,6 +109,14 @@ std::size_t astDataSize(uint8_t type, const std::vector<uint8_t>& head, bool& kn
         }
         default: return 0;
     }
+}
+
+// Index of the AST token whose entry starts at `entryOffset`, or -1.
+int astIndexAtOffset(const ReadModule& m, uint32_t entryOffset) {
+    for (std::size_t k = 0; k < m.astEntryOffsets.size(); ++k) {
+        if (m.astEntryOffsets[k] == entryOffset) return int(k);
+    }
+    return -1;
 }
 
 } // namespace
@@ -604,8 +614,40 @@ bool validateModule(const ReadModule& m, std::string& err) {
                 }
                 break;
             }
-            case uint8_t(fmt::AstTok::Actions):
+            case uint8_t(fmt::AstTok::Actions): {
+                if (!t.data.empty()) { err = "container token has unexpected data"; return false; }
+                // v0.5: an Actions block always carries exactly one START and
+                // one UPDATE phase container among its children, START first
+                // (pre-order emission keeps them in source order).
+                int startIdx = -1;
+                int updateIdx = -1;
+                for (uint32_t c : t.children) {
+                    uint32_t off = 0;
+                    if (!m.astIndexByAddress(c, off)) continue; // reported by the child check
+                    const int idx = astIndexAtOffset(m, off);
+                    if (idx < 0) continue;
+                    const uint8_t ct = m.ast[std::size_t(idx)].type;
+                    if (ct == uint8_t(fmt::AstTok::Start)) {
+                        if (startIdx >= 0) { err = "ACTIONS has more than one START child"; return false; }
+                        startIdx = idx;
+                    } else if (ct == uint8_t(fmt::AstTok::Update)) {
+                        if (updateIdx >= 0) { err = "ACTIONS has more than one UPDATE child"; return false; }
+                        updateIdx = idx;
+                    }
+                }
+                if (startIdx < 0 || updateIdx < 0) {
+                    err = "ACTIONS token is missing its START/UPDATE phase blocks";
+                    return false;
+                }
+                if (startIdx > updateIdx) {
+                    err = "START phase block does not precede UPDATE under ACTIONS";
+                    return false;
+                }
+                break;
+            }
             case uint8_t(fmt::AstTok::Traversals):
+            case uint8_t(fmt::AstTok::Start):
+            case uint8_t(fmt::AstTok::Update):
             case uint8_t(fmt::AstTok::Else):
                 if (!t.data.empty()) { err = "container token has unexpected data"; return false; }
                 break;

@@ -2,10 +2,13 @@
 var bool ready;
 State A {
     Actions {
-        if (ready) {
-            temp int x = 1;
+        Start { }
+        Update {
+            if (ready) {
+                temp int x = 1;
+            }
+            x = x + 1; // ERROR: x out of scope
         }
-        x = x + 1; // ERROR: x out of scope
     }
     Traversals {
         goto A;

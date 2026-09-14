@@ -109,4 +109,18 @@ inline float leFloat(const std::vector<uint8_t>& b, std::size_t off) {
     return cv.f;
 }
 
+// Every statement of a state's Actions block, in execution order: temps
+// declared directly in the body, then Start{}, then Update{}. Statements used
+// to sit in one list, so older assertions still read naturally.
+template <typename Src>
+inline std::vector<fsmc::Stmt> actionStmts(const Src& src, std::size_t state = 0,
+                                           std::size_t item = 0) {
+    const fsmc::StateBodyItem& it = src.states[state].items[item];
+    std::vector<fsmc::Stmt> out;
+    out.insert(out.end(), it.stmts.begin(), it.stmts.end());
+    out.insert(out.end(), it.startStmts.begin(), it.startStmts.end());
+    out.insert(out.end(), it.updateStmts.begin(), it.updateStmts.end());
+    return out;
+}
+
 } // namespace fh
