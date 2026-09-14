@@ -2,7 +2,12 @@
 
 namespace fsmc {
 
-void ScopeStack::push() { frames_.emplace_back(); }
+int ScopeStack::push() {
+    Frame f;
+    f.id = nextFrameId_++;
+    frames_.push_back(f);
+    return f.id;
+}
 
 void ScopeStack::pop() {
     if (!frames_.empty()) frames_.pop_back();
@@ -26,6 +31,10 @@ bool ScopeStack::declare(const std::string& name, int varId) {
     }
     top.decls.emplace_back(name, varId);
     return true;
+}
+
+int ScopeStack::currentFrameId() const {
+    return frames_.empty() ? -1 : frames_.back().id;
 }
 
 } // namespace fsmc

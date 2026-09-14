@@ -9,7 +9,10 @@
 
 namespace fsmc {
 
-// RAII scope-frame guard: exactly one pop per block, even on error paths.
+// RAII scope-frame guard: one frame per '{' body, exactly one pop per '}',
+// even on error paths. The stack — not a numbered depth level — is what gives
+// a temporary its C lifetime: alive from its declaration until the closing '}'
+// of the block that declared it, visible (and shadowable) in nested blocks.
 namespace {
 struct ScopeGuard {
     ScopeStack& stack;
@@ -63,10 +66,10 @@ void Parser::skipMatchingBraces() {
         return;
     }
     next(); // '{'
-    int depth = 1;
-    while (!at(lex::Tok::End) && depth > 0) {
-        if (at(lex::Tok::LBrace)) ++depth;
-        if (at(lex::Tok::RBrace)) --depth;
+    int openBraces = 1;
+    while (!at(lex::Tok::End) && openBraces > 0) {
+        if (at(lex::Tok::LBrace)) ++openBraces;
+        if (at(lex::Tok::RBrace)) --openBraces;
         next();
     }
 }
@@ -247,13 +250,13 @@ void Parser::parseState() {
 
 void Parser::parseStateBody(StateDef& st, int stateIndex) {
     if (!expect(lex::Tok::LBrace, "'{' after the state name")) return;
-    ScopeGuard guard(scope_); // depth-1 frame: state-level temps
+    ScopeGuard guard(scope_); // frame for the State body: state-level temps
     const lex::Token* closer = nullptr;
     bool hasActions = false, hasTraversals = false;
     while (!at(lex::Tok::RBrace) && !at(lex::Tok::End)) {
         switch (cur().kind) {
             case lex::Tok::KwTemp: {
-                Stmt d = parseTempDecl(1, stateIndex);
+                Stmt d = parseTempDecl(stateIndex);
                 StateBodyItem item;
                 item.kind = StateBodyItem::Kind::TempDecl;
                 item.loc = d.loc;
@@ -327,15 +330,15 @@ void Parser::parseStateBody(StateDef& st, int stateIndex) {
 void Parser::parseActionsBlock(StateBodyItem& item) {
     next(); // 'Actions'
     if (!expect(lex::Tok::LBrace, "'{' after 'Actions'")) return;
-    ScopeGuard guard(scope_); // depth-2 frame
-    parseActionStmts(item.stmts, 2);
+    ScopeGuard guard(scope_); // frame for the Actions body
+    parseActionStmts(item.stmts);
     expect(lex::Tok::RBrace, "'}' closing the Actions body");
 }
 
 void Parser::parseTraversalsBlock(StateBodyItem& item) {
     next(); // 'Traversals'
     if (!expect(lex::Tok::LBrace, "'{' after 'Traversals'")) return;
-    ScopeGuard guard(scope_); // depth-2 frame (traversals cannot declare temps)
+    ScopeGuard guard(scope_); // frame for the Traversals body (no temps allowed in it)
     seenTravIf_ = false;
     parseTraversalsStmts(item.stmts);
     expect(lex::Tok::RBrace, "'}' closing the Traversals body");
@@ -351,14 +354,14 @@ void Parser::parseTraversalsBlock(StateBodyItem& item) {
 }
 
 // ---------------------------------------------------------------------------
-// statements (Actions context: depth 2 or 3)
+// statements (Actions context)
 // ---------------------------------------------------------------------------
 
-void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
+void Parser::parseActionStmts(std::vector<Stmt>& out) {
     while (!at(lex::Tok::RBrace) && !at(lex::Tok::End)) {
         switch (cur().kind) {
             case lex::Tok::KwTemp: {
-                out.push_back(parseTempDecl(depth, stateIndex_));
+                out.push_back(parseTempDecl(stateIndex_));
                 break;
             }
             case lex::Tok::KwIf: {
@@ -368,7 +371,7 @@ void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
                     skipMatchingBraces();
                     break;
                 }
-                parseIfChain(out, depth);
+                parseIfChain(out);
                 break;
             }
             case lex::Tok::KwGoto: {
@@ -400,10 +403,10 @@ void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
             case lex::Tok::Ident: {
                 if (peekAt(1).kind == lex::Tok::Assign) {
                     const lex::Token name = next();
-                    out.push_back(parseAssignStmt(depth, name));
+                    out.push_back(parseAssignStmt(name));
                 } else if (peekAt(1).kind == lex::Tok::LParen) {
                     const lex::Token name = next();
-                    out.push_back(parseCallStmt(depth, name));
+                    out.push_back(parseCallStmt(name));
                 } else {
                     errorAt(cur(), "unexpected token '" + cur().text +
                                        "' (expected a temp declaration, assignment, or function call)");
@@ -420,12 +423,11 @@ void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
     }
 }
 
-Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
+Stmt Parser::parseTempDecl(int stateIndex) {
     const lex::Token kw = next(); // 'temp'
     Stmt s;
     s.kind = Stmt::Kind::TempDecl;
     s.loc = {kw.line, kw.col};
-    s.depth = depth;
 
     const lex::Token* typeTok = expect(lex::Tok::Ident, "a type name after 'temp'");
     if (!typeTok) return s;
@@ -451,7 +453,7 @@ Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
     tv.name = s.tempName;
     tv.loc = {nameTok->line, nameTok->col};
     tv.type = type;
-    tv.depth = depth;
+    tv.scopeId = scope_.currentFrameId(); // the direct parent '{' body
     tv.stateIndex = stateIndex;
     tv.index = tempId;
     src_.temps.push_back(std::move(tv));
@@ -473,11 +475,10 @@ Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
     return s;
 }
 
-Stmt Parser::parseAssignStmt(uint8_t depth, const lex::Token& nameTok) {
+Stmt Parser::parseAssignStmt(const lex::Token& nameTok) {
     Stmt s;
     s.kind = Stmt::Kind::Assign;
     s.loc = {nameTok.line, nameTok.col};
-    s.depth = depth;
 
     VarInfo target;
     if (!resolveVariable(nameTok, target)) {
@@ -505,11 +506,10 @@ Stmt Parser::parseAssignStmt(uint8_t depth, const lex::Token& nameTok) {
     return s;
 }
 
-Stmt Parser::parseCallStmt(uint8_t depth, const lex::Token& nameTok) {
+Stmt Parser::parseCallStmt(const lex::Token& nameTok) {
     Stmt s;
     s.kind = Stmt::Kind::Call;
     s.loc = {nameTok.line, nameTok.col};
-    s.depth = depth;
     s.funcName = nameTok.text;
 
     if (!expect(lex::Tok::LParen, "'(' after the function name")) {
@@ -543,7 +543,7 @@ Stmt Parser::parseCallStmt(uint8_t depth, const lex::Token& nameTok) {
 // conditionals
 // ---------------------------------------------------------------------------
 
-void Parser::parseIfChain(std::vector<Stmt>& out, uint8_t depth) {
+void Parser::parseIfChain(std::vector<Stmt>& out) {
     Stmt first = parseIfHead(Stmt::Kind::If);
     out.push_back(std::move(first));
 
@@ -556,7 +556,6 @@ void Parser::parseIfChain(std::vector<Stmt>& out, uint8_t depth) {
             break; // an if/else-if/else chain ends at 'else'
         }
     }
-    (void)depth;
 }
 
 Stmt Parser::parseIfHead(Stmt::Kind kind) {
@@ -565,7 +564,6 @@ Stmt Parser::parseIfHead(Stmt::Kind kind) {
     if (kind == Stmt::Kind::If || kind == Stmt::Kind::ElseIf) {
         const lex::Token kw = next(); // 'if' or the 'if' of 'else if'
         s.loc = {kw.line, kw.col};
-        s.depth = 3; // an if/else-if/else body is always block depth 3
         if (!expect(lex::Tok::LParen, "'(' after 'if'")) {
             skipMatchingBraces();
             return s;
@@ -581,14 +579,13 @@ Stmt Parser::parseIfHead(Stmt::Kind kind) {
     } else {
         const lex::Token kw = cur(); // 'else'
         s.loc = {kw.line, kw.col};
-        s.depth = 3;
     }
     if (!expect(lex::Tok::LBrace, "'{' after the if condition")) return s;
 
-    ScopeGuard guard(scope_); // depth-3 frame
+    ScopeGuard guard(scope_); // one frame per branch body
     bool saveInCond = inConditionalBody_;
     inConditionalBody_ = true;
-    parseActionStmts(s.body, 3);
+    parseActionStmts(s.body);
     inConditionalBody_ = saveInCond;
 
     expect(lex::Tok::RBrace, "'}' closing the if body");
@@ -603,7 +600,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                 s.kind = Stmt::Kind::If;
                 const lex::Token kw = next(); // 'if'
                 s.loc = {kw.line, kw.col};
-                s.depth = 3;
                 if (!expect(lex::Tok::LParen, "'(' after 'if'")) {
                     skipMatchingBraces();
                     out.push_back(std::move(s));
@@ -633,7 +629,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                     Stmt g;
                     g.kind = Stmt::Kind::Goto;
                     g.loc = {cur().line, cur().col};
-                    g.depth = 3;
                     next(); // 'goto'
                     const lex::Token* target = expect(lex::Tok::Ident, "a state name after 'goto'");
                     if (target) g.targetName = target->text;
@@ -665,7 +660,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                 Stmt g;
                 g.kind = Stmt::Kind::Goto;
                 g.loc = {t.line, t.col};
-                g.depth = 2;
                 const lex::Token* target = expect(lex::Tok::Ident, "a state name after 'goto'");
                 if (target) g.targetName = target->text;
                 expect(lex::Tok::Semicolon, "';' after the goto target");

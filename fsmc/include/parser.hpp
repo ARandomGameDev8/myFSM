@@ -4,8 +4,10 @@
 // with all parser-level validations from spec section 1 / section 4 applied
 // before Pass 2 runs:
 //
-//   * C block scoping for temps (scope stack, push on '{', pop on '}')
-//   * state-level temps legal (depth 1), temps only inside {} bodies
+//   * C block scoping for temps: a pure scope stack (push a frame on every
+//     '{', pop it on '}'), no fixed depth levels — a temp lives in its direct
+//     parent block and dies at that block's closing '}'
+//   * temps only inside {} bodies (state-level temps are legal)
 //   * no nested conditionals (an if/else-if/else chain is one conditional)
 //   * no bare blocks
 //   * Traversals structure (>=1 goto, only ifs, exactly one goto per if body)
@@ -50,11 +52,11 @@ private:
     void parseTraversalsBlock(StateBodyItem& item);
 
     // statements
-    void parseActionStmts(std::vector<Stmt>& out, uint8_t depth);
-    Stmt parseTempDecl(uint8_t depth, int stateIndex);
-    Stmt parseAssignStmt(uint8_t depth, const lex::Token& nameTok);
-    Stmt parseCallStmt(uint8_t depth, const lex::Token& nameTok);
-    void parseIfChain(std::vector<Stmt>& out, uint8_t depth);
+    void parseActionStmts(std::vector<Stmt>& out);
+    Stmt parseTempDecl(int stateIndex);
+    Stmt parseAssignStmt(const lex::Token& nameTok);
+    Stmt parseCallStmt(const lex::Token& nameTok);
+    void parseIfChain(std::vector<Stmt>& out);
     Stmt parseIfHead(Stmt::Kind kind);
     void parseTraversalsStmts(std::vector<Stmt>& out);
 

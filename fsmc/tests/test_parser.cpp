@@ -30,7 +30,6 @@ TEST(parser, minimal_one_state_ast_shape) {
     ASSERT_EQ(actions.size(), std::size_t(2));
     ASSERT_EQ(actions[0].kind, Stmt::Kind::TempDecl);
     ASSERT_EQ(actions[0].tempName, std::string("x"));
-    ASSERT_EQ(actions[0].depth, uint8_t(2));
     ASSERT_TRUE(actions[0].init != nullptr);
     ASSERT_EQ(actions[0].init->kind, Expr::Kind::Literal);
     ASSERT_EQ(actions[0].init->type->name, std::string("int"));
@@ -39,7 +38,9 @@ TEST(parser, minimal_one_state_ast_shape) {
     ASSERT_EQ(actions[1].functionId, uint16_t(0x0A00));
     ASSERT_EQ(actions[1].tier, uint8_t(3));
     ASSERT_EQ(r.src.temps.size(), std::size_t(1));
-    ASSERT_EQ(r.src.temps[0].depth, uint8_t(2));
+    // the temp belongs to a scope-stack frame (the Actions body), not to a
+    // numbered depth level
+    ASSERT_TRUE(r.src.temps[0].scopeId >= 0);
 }
 
 TEST(parser, unknown_type_in_declaration_fails) {

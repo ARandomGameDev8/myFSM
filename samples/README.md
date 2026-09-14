@@ -22,7 +22,7 @@ streams, AST trees, transition table). Regenerate or create your own:
 | File | What it demonstrates |
 |---|---|
 | `patrol.fsm` | 4-state cycle, state-level temps, `goTo` / `stopMovement` claims |
-| `hunter.fsm` | if/else-if/else, temps at all 3 depths, vector math, `&&` |
+| `hunter.fsm` | if/else-if/else, block-scoped temps (state body / Actions / else body), vector math, `&&` |
 | `guard.fsm` | bool temps, else-if chain, Tier 2 mutation (`emit`, `setAnimation`, `setVisible`) |
 
 Full syntax reference: [`../fsmc/LANGUAGE.md`](../fsmc/LANGUAGE.md).

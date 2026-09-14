@@ -2,9 +2,9 @@
 const int tickLimit = 10;
 
 State Idle {
-    temp int tick = 0;              // state-level temp: lives for the whole state
+    temp int tick = 0;              // State-body temp: lives for the whole state
     Actions {
-        temp float waitTime = 0.1f; // depth-2 temp
+        temp float waitTime = 0.1f; // Actions-body temp: dies with this run
         tick = tick + 1;
         wait(waitTime);
     }

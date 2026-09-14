@@ -195,7 +195,10 @@ State <Name> {
 - Duplicating a block is an error (`duplicate Actions block in state 'X'`).
 - The two blocks may appear in either order; state-level `temp` declarations
   may appear anywhere in the state body (before, between, or after the
-  blocks) and are visible throughout the whole state.
+  blocks). As in C, a temp is visible **from its declaration onward** inside
+  that body, so declare state-level temps *before* the `Actions` /
+  `Traversals` blocks that use them — a use before the declaration is
+  `unknown variable 'x'` (§7).
 - `goto` is **not** allowed at state level (only inside `Traversals`).
 - Top-level `const`/`var` keywords inside a state body are an error.
 
@@ -206,41 +209,62 @@ temp <Type> name;            // declared, default value
 temp <Type> name = <expr>;   // declared and initialized (exact type match)
 ```
 
-**Where temps may live — the three scope depths:**
+**Scoping is exactly C block scoping, driven by a scope stack.** Every `{ … }`
+body opens one frame and its matching `}` closes it. A `temp` belongs to the
+frame of the block it is written in — its **direct parent `{}`** — and:
 
-| Depth | Location | Lifetime |
-|---|---|---|
-| 1 | State body (directly under `State X {`) | Created when the state is **entered** (once, before `Actions` run), destroyed when the state is **exited**. Persists across ticks while the AI stays in the state; visible throughout the whole state body — in both `Actions` and `Traversals`. |
-| 2 | `Actions` body | Created on each `Actions` execution, destroyed when `Actions` finishes. Not visible in `Traversals`. |
-| 3 | `if` / `else if` / `else` body | Created when that branch runs, destroyed when it finishes. Not visible after the whole `if` chain closes. |
+- it comes into existence **at its declaration**, not at the top of the block;
+- it is visible from there until the **closing `}` of that block**, including
+  inside every block nested in it;
+- it **dies at that closing `}`**. Using it afterwards is `unknown variable 'x'`.
 
-Scoping is C block scoping:
+**There are no fixed depth levels.** Nothing is numbered 1/2/3, no nesting
+level is special, and no depth is recorded in the AST or in the `.fsmb` module:
+a frame is just a frame, however deeply the blocks happen to nest. Which block
+owns a temp is **structural** — in the binary, the temp's declaration token is
+a child of the AST token of the block that declared it (that parent edge *is*
+the scope).
+
+The blocks a `temp` may be declared in, and what that lifetime means at
+runtime:
+
+| Block | Lifetime |
+|---|---|
+| State body (directly under `State X {`) | Created when the state is **entered** (once, before `Actions` run), destroyed when the state is **exited**. Persists across ticks while the AI stays in the state; visible throughout the whole state body — in both `Actions` and `Traversals`. |
+| `Actions` body | Created on each `Actions` execution, destroyed when `Actions` finishes. Not visible in `Traversals`. |
+| `if` / `else if` / `else` body | Created when that branch runs, destroyed when it finishes. Every branch of a chain is its own block, so a temp declared in one branch is not visible in the next one, nor after the chain closes. |
+
+Rules:
 
 - **Shadowing across nested blocks is allowed.** A `temp int x` inside an
-  `if` body hides a state-level `temp int x` only within that block.
+  `if` body hides a state-level `temp int x` only within that block; the outer
+  `x` is visible again as soon as the inner block closes.
 - **Redeclaration in the same block is an error** (`redeclaration of 'x' in
   this scope`).
-- **Out-of-scope use is an error** (`unknown variable 'x'`), including using a
-  branch temp after the `if` closed.
-- **A state-level temp is NOT visible in any other state** — each state has
+- **Out-of-scope use is an error** (`unknown variable 'x'`) — after the block
+  closed, in a sibling branch, or *before* the declaration in the same block.
+- **A state-level temp is NOT visible in any other state** — each state body is
   its own private frame (error: `unknown variable 'x'`).
 - **`temp` cannot be declared at file level** (top level only accepts
   `const` / `var` / `State` / `@ENTRY`).
 - `temp` is **not allowed at all inside `Traversals`** — not in the traversals
   body and not inside a traversals `if` body (see §10).
+- A **bare `{ … }` block does not open a scope**: `{` must follow `State`,
+  `Actions`, `Traversals`, `if`, `else if`, or `else`.
 
 ```fsm
 State Chase {
-    temp float lastDist = 99.0f;        // depth 1: lives as long as Chase
+    temp float lastDist = 99.0f;        // State body: lives as long as Chase
     Actions {
-        temp float dist = 3.0f;         // depth 2: dies with this Actions run
+        temp float dist = 3.0f;         // Actions body: dies with this run
         if (dist < 5.0f) {
-            temp float near = dist;     // depth 3: dies with this branch
+            temp float near = dist;     // if body: dies with this branch
         }
+        // 'near' is gone here; 'dist' and 'lastDist' are still in scope
     }
     Traversals {
-        if (lastDist < 1.0f) { goto Flee; }   // depth-1 temp: visible here
-        goto Chase;
+        if (lastDist < 1.0f) { goto Flee; }   // State-body temp: visible here
+        goto Chase;                           // 'dist' is NOT visible here
     }
 }
 ```
@@ -438,7 +462,8 @@ Rules:
 
 Lookup order when an identifier is used as a variable:
 
-1. **Temporaries** — innermost enclosing block first (depth 3 → 2 → 1),
+1. **Temporaries** — innermost enclosing block first, walking the scope stack
+   outward one block at a time (branch body → `Actions` body → state body),
    including the current state's state-level frame.
 2. **Globals** — `const` and `var` declarations that appear *earlier in the
    file* than the use.
@@ -452,6 +477,8 @@ Consequences:
 - `const` initializers may only reference *earlier* consts.
 - The same temp name may be reused in *different* blocks (new scope each
   time); it may not be redeclared in the *same* block.
+- Temps follow the C rule inside their own block too: visible from the
+  declaration onward, gone at the block's closing `}` (§7).
 
 ## 15. Function calls and overload resolution
 
@@ -723,16 +750,17 @@ fsm.fsm:8:9:  warning: bare goto before any if: subsequent statements are dead c
 |---|---|
 | 0 | compiled; `.fsmb` written (message `input.fsm -> output.fsmb (N bytes)`) |
 | 1 | usage / I/O error (bad arguments, missing input file, unwritable output) |
-| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. (Also: the input to `-d` disassemble mode is not a valid/corrupt `.fsmb` module.) |
+| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. (Also: the input to `-d` disassemble mode is not a valid `.fsmb` module — corrupt, truncated, or a different format version.) |
 
 **Debugging binaries:** `fsmc -d module.fsmb [-o module.fsmd]` (or `-o -`
 for stdout) walks the binary back through the module reader, validates every
 address/reference/function-id/token-type, and prints a human-readable dump:
 header + section map, decoded constant values, runtime vars with owner and
-binding slot, temps with depth/state, per-state instruction streams
-(`CLAIM var.field` / `CALL fn(resolved, args)` / `GOTO State`), the full AST
-tree per state, and the goto transition table. Corrupt or truncated modules
-are rejected with exit 2 and no dump written.
+binding slot, temps with their owning block and state, per-state instruction
+streams (`CLAIM var.field` / `CALL fn(resolved, args)` / `GOTO State`), the
+full AST tree per state, and the goto transition table. Corrupt, truncated or
+wrong-version modules (the reader only accepts the format version it writes,
+v0.2) are rejected with exit 2 and no dump written.
 
 ## 20. What is NOT allowed
 
@@ -781,8 +809,8 @@ Quick index of the common compile errors (exact messages):
 The full language in one file (this is `tests/fixtures/two_state.fsm`):
 
 ```fsm
-// two_state.fsm — if / else if / else, temps at all three depths,
-// Traversals with two ifs + a bare default goto.
+// two_state.fsm — if / else if / else, block-scoped temps (state body,
+// Actions body, if body), Traversals with two ifs + a bare default goto.
 const float chaseRange = 10.0f;        // global const, compile-time constant
 
 var Object3D player;                   // runtime vars: no initializers,
@@ -791,13 +819,13 @@ var NavMeshAgent agent;
 var bool enemyVisible;
 
 State Chase {
-    temp float lastDist = 99.0f;       // depth 1: created on state entry,
-                                       // destroyed on state exit
+    temp float lastDist = 99.0f;       // State-body frame: created on state
+                                       // entry, destroyed on state exit
     Actions {
-        temp float dist = getDistanceTo(player, enemy);   // depth 2, Tier 1 query
+        temp float dist = getDistanceTo(player, enemy);   // Actions frame, Tier 1 query
         lastDist = dist;                                  // exact-type assign
         if (enemyVisible) {
-            temp Vector3 dir = normalize(directionTo(player, enemy)); // depth 3
+            temp Vector3 dir = normalize(directionTo(player, enemy)); // if-body frame
             moveTowards(agent, dir, 5.0f);                // Tier 3: CLAIM/CALL/RELEASE
         } else if (lastDist < 3.0f) {
             followTarget(agent, enemy);
@@ -829,5 +857,5 @@ State Flee {
 Compile it:
 
 ```sh
-./bin/fsmc fsmc/tests/fixtures/two_state.fsm     # → two_state.fsmb (1246 bytes)
+./bin/fsmc fsmc/tests/fixtures/two_state.fsm     # → two_state.fsmb (1178 bytes)
 ```

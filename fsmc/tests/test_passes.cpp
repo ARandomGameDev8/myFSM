@@ -45,6 +45,34 @@ const char* kTwoState =
     "    }\n"
     "}\n"
     "@ENTRY Chase\n";
+
+// Index of the AST token whose children contain token #i (-1 for a root).
+std::vector<int> astParents(const ReadModule& m) {
+    std::vector<int> parent(m.ast.size(), -1);
+    for (std::size_t i = 0; i < m.ast.size(); ++i) {
+        for (uint32_t c : m.ast[i].children) {
+            uint32_t off = 0;
+            if (!m.astIndexByAddress(c, off)) continue;
+            for (std::size_t k = 0; k < m.astEntryOffsets.size(); ++k) {
+                if (m.astEntryOffsets[k] == off) { parent[k] = int(i); break; }
+            }
+        }
+    }
+    return parent;
+}
+
+// Index of the TEMP_VAR_DECL token that declares temporary #tempIndex.
+int tempDeclToken(const ReadModule& m, std::size_t tempIndex) {
+    const uint32_t want = m.tempEntryOffsets[tempIndex];
+    for (std::size_t t = 0; t < m.ast.size(); ++t) {
+        const ReadAstToken& tok = m.ast[t];
+        if (tok.type != uint8_t(fmt::AstTok::TempVarDecl) || tok.data.size() != 5) continue;
+        const uint32_t va = fh::le32(tok.data, 1);
+        if (fmt::addressSection(va) == fmt::SecTemp && fmt::addressOffset(va) == want)
+            return int(t);
+    }
+    return -1;
+}
 } // namespace
 
 TEST(passes, two_state_fixture_compiles) {
@@ -273,16 +301,14 @@ TEST(passes, round_trip_read_back_and_compare) {
     ASSERT_EQ(m.runtime[0].bindingSlot, uint32_t(0));
     ASSERT_EQ(m.runtime[3].name, std::string("enemyVisible"));
     ASSERT_EQ(m.runtime[3].bindingSlot, uint32_t(3));
-    // temps: Chase has lastDist(1), dist(2), dir(3); Flee has away(3)
+    // temps in canonical order: Chase has lastDist, dist, dir; Flee has away.
+    // No depth field is stored: which block owns a temp is structural (see
+    // temp_owning_block_is_structural_in_the_ast below).
     ASSERT_EQ(m.temps.size(), std::size_t(4));
     ASSERT_EQ(m.temps[0].name, std::string("lastDist"));
-    ASSERT_EQ(m.temps[0].depth, uint8_t(1));
     ASSERT_EQ(m.temps[1].name, std::string("dist"));
-    ASSERT_EQ(m.temps[1].depth, uint8_t(2));
     ASSERT_EQ(m.temps[2].name, std::string("dir"));
-    ASSERT_EQ(m.temps[2].depth, uint8_t(3));
     ASSERT_EQ(m.temps[3].name, std::string("away"));
-    ASSERT_EQ(m.temps[3].depth, uint8_t(2)); // Flee/Actions body
     // fsm
     ASSERT_EQ(m.fsm.size(), std::size_t(2));
     ASSERT_EQ(m.fsm[0].targets.size(), std::size_t(3));
@@ -299,6 +325,35 @@ TEST(passes, round_trip_read_back_and_compare) {
         }
         ASSERT_EQ(m.ast[idx].type, uint8_t(fmt::AstTok::State));
         ASSERT_EQ(m.ast[idx].data[0], uint8_t(i == 0 ? 1 : 0));
+    }
+}
+
+// Temporary-variable ownership after the removal of the fixed depth levels:
+// a temp belongs to the block whose AST token is the *parent* of its
+// TEMP_VAR_DECL token. lastDist -> State body, dist -> Actions body,
+// dir -> the if body, away -> Flee's Actions body.
+TEST(passes, temp_owning_block_is_structural_in_the_ast) {
+    auto r = fh::compile(kTwoState);
+    ASSERT_TRUE(r.ok);
+    ReadModule m;
+    std::string err;
+    ASSERT_TRUE(readModule(r.module, m, err));
+    ASSERT_TRUE(validateModule(m, err));
+
+    const std::vector<int> parents = astParents(m);
+    const uint8_t expectParent[4] = {
+        uint8_t(fmt::AstTok::State),   // lastDist: State Chase { ... }
+        uint8_t(fmt::AstTok::Actions), // dist:     Actions { ... }
+        uint8_t(fmt::AstTok::If),      // dir:      if (enemyVisible) { ... }
+        uint8_t(fmt::AstTok::Actions), // away:     State Flee / Actions { ... }
+    };
+    ASSERT_EQ(m.temps.size(), std::size_t(4));
+    for (std::size_t i = 0; i < m.temps.size(); ++i) {
+        const int decl = tempDeclToken(m, i);
+        ASSERT_TRUE(decl >= 0);
+        const int par = parents[static_cast<std::size_t>(decl)];
+        ASSERT_TRUE(par >= 0);
+        ASSERT_EQ(m.ast[static_cast<std::size_t>(par)].type, expectParent[i]);
     }
 }
 

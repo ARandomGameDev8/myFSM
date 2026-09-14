@@ -66,6 +66,24 @@ TEST(disassemble, two_state_shows_claims_calls_and_literals) {
     ASSERT_TRUE(t.find("slot") != std::string::npos);
 }
 
+// The Temporary section has no depth column any more: each temp is listed with
+// the block that owns it, recovered from the AST parent edge of its
+// TEMP_VAR_DECL token.
+TEST(disassemble, temps_are_listed_with_their_owning_block) {
+    auto r = compileFixture("two_state.fsm");
+    ASSERT_TRUE(r.ok);
+    ReadModule mod;
+    std::string err;
+    ASSERT_TRUE(parseAndValidate(r, mod, err));
+
+    const std::string t = disassemble(mod, "two_state.fsmb", true);
+    ASSERT_TRUE(t.find("scope state body") != std::string::npos); // lastDist
+    ASSERT_TRUE(t.find("scope Actions") != std::string::npos);    // dist, away
+    ASSERT_TRUE(t.find("scope if body") != std::string::npos);    // dir
+    ASSERT_TRUE(t.find("depth") == std::string::npos);            // no depth anywhere
+    ASSERT_TRUE(t.find("state: Chase") != std::string::npos);
+}
+
 TEST(disassemble, vector_literals_are_decoded_to_values) {
     auto r = fh::compile(
         "const Vector3 origin = Vector3(1.5f, -2.5f, 0.0f);\n"

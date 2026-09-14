@@ -81,10 +81,13 @@ struct Expr {
 
 // Statement. A state's Actions/Traversals body is a vector of Stmt in
 // source order.
+//
+// A statement carries no block-depth level: the block it belongs to is exactly
+// the container that holds it (StateDef::items, a StateBodyItem::stmts, or a
+// Stmt::body of an if/else-if/else), which is what the scope stack mirrors.
 struct Stmt {
     enum class Kind : uint8_t { TempDecl, Assign, Call, Goto, If, ElseIf, Else } kind = Kind::TempDecl;
     SrcLoc loc{1, 1};
-    uint8_t depth = 0; // enclosing block depth: 1 = State body, 2 = Actions/Traversals body, 3 = if/else-if/else body
 
     // TempDecl
     const TypeDefinition* type = nullptr;
@@ -139,11 +142,17 @@ struct GlobalVar {
     uint8_t owner = fmt::OwnerExternal; // runtime only; Pass 2 may promote to DSL
 };
 
+// One temporary variable. Lifetime is C block scoping: it is created at its
+// declaration and destroyed by the closing '}' of the block that declared it.
 struct TempVar {
     std::string name;
     SrcLoc loc{1, 1};
     const TypeDefinition* type = nullptr;
-    uint8_t depth = 0;    // 1 = State body, 2 = Actions/Traversals body, 3 = if body
+    // Id of the scope-stack frame — the direct parent '{' body — that declared
+    // this temp. Internal bookkeeping only: it is NOT serialized (the module has
+    // no depth field). The owning block is structural instead: the temp's
+    // TEMP_VAR_DECL token is a child of that block's AST token.
+    int scopeId = -1;
     int stateIndex = -1;
     int index = -1;       // index into ParsedSource::temps
 };

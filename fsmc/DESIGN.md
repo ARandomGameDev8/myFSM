@@ -36,10 +36,10 @@ link   = pass6_link(bytes)               -- reads bytes back, validates (src/mod
 ```
 
 The six passes are six distinct named functions with a visible boundary; none
-are merged. Parser-level validations (C scoping, no nested conditionals, no
-bare blocks, Traversals structure, overload resolution, operator type rules,
-Tier-2/Tier-3 semantics) run during parsing so the passes operate on a
-well-formed forest.
+are merged. Parser-level validations (C block scoping through the scope stack,
+no nested conditionals, no bare blocks, Traversals structure, overload
+resolution, operator type rules, Tier-2/Tier-3 semantics) run during parsing,
+so the passes operate on a well-formed forest.
 
 | Pass | Name | Boundary |
 |---|---|---|
@@ -60,7 +60,7 @@ well-formed forest.
   order. No timestamps, no environment input, no hash-map iteration on the
   output path (the only `unordered_map` is a name→index lookup table).
 * Output is byte-identical across runs and machines; verified by
-  `golden_bytes.minimal_module_exact_bytes` (401 pinned bytes) and
+  `golden_bytes.minimal_module_exact_bytes` (378 pinned bytes) and
   `golden_bytes.byte_identical_across_runs`.
 
 ---
@@ -76,12 +76,18 @@ memcpy, no undefined behavior). `std::vector<uint8_t>` buffers throughout.
 |---|---|---|
 | 0 | 4 | magic `0x46534D44` ("FSMD") |
 | 4 | 2 | version major `0` |
-| 6 | 2 | version minor `1` |
+| 6 | 2 | version minor `2` |
 | 8..35 | 8×4 | section start offsets: Global, Runtime, Temporary, State, Token, AST, FSM |
 
 Section offsets are absolute file offsets and always tile the file exactly:
 `36 ≤ global ≤ runtime ≤ temp ≤ state ≤ token ≤ ast ≤ fsm ≤ filesize`, with the
 FSM section ending at EOF.
+
+**v0.1 → v0.2**: the scope-depth bytes were removed — one from every Temporary
+Variable entry and one from every AST token (deviation 8). The entry layouts
+are version-specific, so `readModule` rejects any other major/minor pair
+(`unsupported module version X.Y (this fsmc reads v0.2)`) instead of
+misparsing an older module.
 
 ### 2.2 Section IDs and entry formats
 
@@ -90,11 +96,15 @@ FSM section ending at EOF.
 | 0 | null | (unused) | — |
 | 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` |
 | 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [1] owner [1] dirty [4] binding slot [2] len [·] name` |
-| 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [1] scope depth [2] len [·] name` |
+| 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [2] len [·] name` |
 | 4 | State | state directory | `[4] count` then `[4] AST-root addr [2] len [·] name` |
 | 5 | Token / Instruction | per-state instruction frames | `[4] state-addr [2] instr-count`, then `[1] opcode [1] operand-count [4]×operand` |
-| 6 | AST Adjacency | flat token array (pre-order DFS order) | `[1] type [1] depth [2] child-count [4]×child` + type-specific data |
+| 6 | AST Adjacency | flat token array (pre-order DFS order) | `[1] type [2] child-count [4]×child` + type-specific data |
 | 7 | FSM Adjacency | adjacency list | `[4] count` then `[4] src-state-addr [2] target-count [4]×target-state-addr` |
+
+Neither the Temporary entry nor the AST token carries a scope depth: the block
+that owns a temporary is **structural** — its `TEMP_VAR_DECL` token is a child
+of the AST token of the `{ … }` body that declared it (see §6).
 
 Self-addresses are packed addresses that point back at the entry itself; the
 State entry's address field points at the state's AST root token instead (the
@@ -132,10 +142,12 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 | 0x23 | VAR_REF | `[4] variable entry address` |
 
 AST emission order is pre-order DFS: a container/statement entry comes first,
-then its condition, then its children in source order. The Token section is
-framed per state: `[4] state-addr [2] instr-count` — **documented deviation**
-from the flat-instruction-list sketch, chosen so each state's stream is
-self-locating.
+then its condition, then its children in source order. The child edges are the
+only nesting information in the module: a container token (`STATE`, `ACTIONS`,
+`TRAVERSALS`, `IF`, `ELSE_IF`, `ELSE`) *is* a `{ … }` body, so it is exactly
+one scope for temporaries. The Token section is framed per state:
+`[4] state-addr [2] instr-count` — **documented deviation** from the
+flat-instruction-list sketch, chosen so each state's stream is self-locating.
 
 Variable-reference addresses may point into any of the Global (section 1),
 Runtime (2) or Temporary (3) sections — the section bits identify the kind.
@@ -203,12 +215,16 @@ State body (Actions and Traversals), *not* visible in other states.
 
 ### 3.2 Temp variables and scope (C block scoping)
 
-* `temp <T> name [= <expr>];` may appear at **depth 1** (State body), **depth 2**
-  (Actions/Traversals body) or **depth 3** (if / else-if / else body).
-* Scope stack: push frame on `{`, pop on `}`, declarations write to the top
-  frame, lookup walks top-to-bottom, shadowing allowed, redeclaration in the
-  *same* block is an error.
-* Depth is recorded in the Temporary Variable Section.
+* `temp <T> name [= <expr>];` may appear in any `{ … }` body that accepts
+  statements: the State body, the Actions body, or an if / else-if / else body.
+* **Scope stack, no fixed depth levels**: push a frame on every `{`, pop it on
+  the matching `}`; declarations write to the top frame (the declaration's
+  *direct parent block*), lookup walks the open frames top-to-bottom
+  (innermost first), shadowing is allowed, redeclaration in the *same* block is
+  an error, and a name is visible only **from its declaration onward**.
+* Nothing is serialized about the scope: no depth byte in the Temporary
+  Variable Section, none on AST tokens. Ownership is the parent edge of the
+  temp's `TEMP_VAR_DECL` token (§6).
 * Traversals cannot declare temps (only `if`/`goto` statements are allowed
   there).
 
@@ -531,21 +547,38 @@ Full ID table (name, id, tier, signature → return):
 
 ---
 
-## 6. Scope-depth convention
+## 6. Scope model (scope stack, no depth levels)
 
-Depth is recorded per temp in the Temporary Variable Section and on AST
-tokens:
+Scoping is C block scoping implemented as a pure scope stack (`include/scope.hpp`):
+one frame per `{ … }` body, pushed on `{` and popped — with all of its
+declarations discarded — on the matching `}`. A frame has an id (handed out on
+push, never reused); a `temp` records the id of the frame it was declared in
+(`TempVar::scopeId`) as internal bookkeeping, and lookup resolves innermost
+frame first. There is **no cap on the number of open frames and no numbered
+depth level anywhere** — not in the AST (`Stmt` / `TempVar` have no depth
+field), not in the binary (§2.2).
 
-| Depth | Block | Lifetime |
-|---|---|---|
-| 1 | State body (direct `temp` in `State { … }`) | created once on state entry, destroyed on state exit, visible in Actions **and** Traversals |
-| 2 | Actions / Traversals body | created when the block runs each tick, destroyed at block end |
-| 3 | if / else-if / else body | created while the branch is active, destroyed at branch end |
+Block lifetimes at runtime:
 
-Rules: temps only inside `{ … }` bodies (file-level `temp` is an error); C
-scope stack (push `{`, pop `}`, top-frame lookup, shadowing allowed,
-same-block redeclaration is an error); a temp declared in an inner block is
-not visible after the block closes (compile error).
+| Block (AST token) | Lifetime of the temps declared in it |
+|---|---|
+| State body (`STATE`) | created once on state entry, destroyed on state exit; visible in Actions **and** Traversals, and in every block nested inside the state body |
+| Actions body (`ACTIONS`) | created when the block runs each tick, destroyed at block end |
+| Traversals body (`TRAVERSALS`) | (no temps are allowed here) |
+| if / else-if / else body (`IF` / `ELSE_IF` / `ELSE`) | created while that branch is active, destroyed at branch end; each branch of a chain is its own frame |
+
+Rules: temps only inside `{ … }` bodies (file-level `temp` is an error); a name
+is visible from its declaration to the end of its block, including in nested
+blocks (where it may be shadowed); same-block redeclaration is an error; a use
+outside the declaring block — after it closed, in a sibling branch, or before
+the declaration — is `unknown variable 'x'`.
+
+**Ownership is structural.** Because a temp's scope is exactly the block whose
+child its declaration is, a reader recovers the scope of any temporary from the
+AST alone: walk a state's tree and remember the nearest enclosing container
+token (`STATE` / `ACTIONS` / `TRAVERSALS` / `IF` / `ELSE_IF` / `ELSE`) of each
+`TEMP_VAR_DECL`. `fsmc -d` does exactly that and prints it as the temp's
+`scope` (the disassembler's `tempScope` map).
 
 ---
 
@@ -586,9 +619,19 @@ signature; >1 match → ambiguous error, same list.
    are not supported") rather than failing as generic unexpected tokens, so
    `setAnimation(ctrl, "run")` produces an actionable message. The `String`
    type is reserved (no registry entry).
-7. **State-level temps are legal** (depth 1) — initialized once on state
-   entry, destroyed on state exit — per the user-confirmed correction to the
-   draft's "no temp vars at State level" wording.
+7. **State-level temps are legal** (declared in the State body's own scope
+   frame) — initialized once on state entry, destroyed on state exit — per the
+   user-confirmed correction to the draft's "no temp vars at State level"
+   wording.
+8. **No scope-depth field** (module v0.2). The draft's `[1] scope depth` byte
+   in the Temporary Variable Section and the `[1] depth` byte on every AST
+   token assumed three fixed depth levels (State body / block body / if body).
+   Temporaries are C block-scoped through a scope stack instead: a temp lives
+   in its direct parent `{ … }` and dies at that block's `}`, at any nesting
+   level, so a fixed level cannot describe it — and the nesting is already
+   encoded by the AST child edges. Both bytes were dropped (the format minor
+   version was bumped 1 → 2); the owning block of a temp is recovered from the
+   AST parent edge (§6).
 
 ---
 
@@ -602,14 +645,14 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, claim tables |
 | `lexer` | keywords (case-sensitive), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
-| `scope` | in/out of scope, shadowing, same-block redeclaration, state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection |
+| `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
 | `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 first-argument-must-be-variable, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
-| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, Tier-3 owner promotion, round-trip read-back & compare, corruption rejection, determinism |
-| `golden_bytes` | **pinned 401-byte module** for `tests/fixtures/minimal.fsm` (hand-verified), header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
-| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), claim field names, decoded literals (scalars + vectors), corrupted/truncated module rejection, deterministic dump output |
+| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, Tier-3 owner promotion, structural temp ownership in the AST (each temp's declaration is a child of its owning block token), round-trip read-back & compare, corruption rejection, determinism |
+| `golden_bytes` | **pinned 378-byte module** for `tests/fixtures/minimal.fsm` (hand-verified), module version pinned to v0.2 + rejection of other versions, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), claim field names, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), corrupted/truncated/wrong-version module rejection, deterministic dump output |
 
 Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`
-(if/else-if/else, temps at all three depths, Traversals with two ifs + bare
-default goto, Tier 3 claims), and `tests/fixtures/errors/*.fsm` (one file per
-major error class).
+(if/else-if/else, temps in the state body / Actions body / if body, Traversals
+with two ifs + bare default goto, Tier 3 claims), and
+`tests/fixtures/errors/*.fsm` (one file per major error class).

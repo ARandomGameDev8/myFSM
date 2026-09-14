@@ -1,7 +1,7 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/hunter.fsmb  (1668 bytes)
- format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/hunter.fsmb  (1574 bytes)
+ format   fsmb v0.2 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
@@ -9,11 +9,11 @@
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x0000004E   42 B   2
    [2]  Runtime    0x0000004E .. 0x000000B3   101 B  5
-   [3]  Temporary  0x000000B3 .. 0x00000108   85 B   6
-   [4]  State      0x00000108 .. 0x0000012A   34 B   3
-   [5]  Token      0x0000012A .. 0x00000288   350 B  38
-   [6]  AST        0x00000288 .. 0x00000652   970 B  88
-   [7]  FSM        0x00000652 .. 0x00000684   50 B   3
+   [3]  Temporary  0x000000B3 .. 0x00000102   79 B   6
+   [4]  State      0x00000102 .. 0x00000124   34 B   3
+   [5]  Token      0x00000124 .. 0x00000282   350 B  38
+   [6]  AST        0x00000282 .. 0x000005F4   882 B  88
+   [7]  FSM        0x000005F4 .. 0x00000626   50 B   3
 
  SECTION [1] GLOBAL VARIABLES (2)
    #0  attackRange     float         = 2.5f
@@ -27,12 +27,12 @@
    #4  playerVisible   bool                  owner=external  slot 4
 
  SECTION [3] TEMPORARY VARIABLES (6)
-   #0  lastSeenDist    float         depth 1   state: Hunt
-   #1  dist            float         depth 2   state: Hunt
-   #2  toPlayer        Vector3       depth 3   state: Hunt
-   #3  away            Vector3       depth 2   state: Flee
-   #4  ticks           int           depth 1   state: Lost
-   #5  dest            Vector3       depth 2   state: Lost
+   #0  lastSeenDist    float         scope state body    state: Hunt
+   #1  dist            float         scope Actions       state: Hunt
+   #2  toPlayer        Vector3       scope else body     state: Hunt
+   #3  away            Vector3       scope Actions       state: Flee
+   #4  ticks           int           scope state body    state: Lost
+   #5  dest            Vector3       scope Actions       state: Lost
 
  SECTION [4] STATES (3)
    #0  Hunt            ast root #0

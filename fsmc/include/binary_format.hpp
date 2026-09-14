@@ -12,7 +12,11 @@ namespace fsmc::fmt {
 // ---------------------------------------------------------------------------
 constexpr uint32_t kMagic = 0x46534D44; // "FSMD"
 constexpr uint16_t kVersionMajor = 0;
-constexpr uint16_t kVersionMinor = 1;
+// v0.2 — scope-depth bytes removed (Temporary Variable entries and AST tokens).
+// Temporary lifetime is C block scoping driven by the compiler's scope stack,
+// so no fixed depth level exists to record: the block that owns a temp is
+// structural (its TEMP_VAR_DECL token is a child of that block's AST token).
+constexpr uint16_t kVersionMinor = 2;
 constexpr std::size_t kHeaderSize = 36;
 
 // ---------------------------------------------------------------------------

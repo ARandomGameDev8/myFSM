@@ -36,9 +36,10 @@ struct EmitStateStream {
     std::vector<EmitInstr> instrs;
 };
 
+// One AST token. Token nesting — and therefore which block owns a temporary —
+// is expressed by `children` alone: there is no depth field anywhere.
 struct EmitToken {
     uint8_t type = 0;
-    uint8_t depth = 0;
     std::vector<int> children; // ordered token indices
 
     bool isEntry = false;          // STATE
@@ -108,10 +109,9 @@ public:
     }
 
 private:
-    int walkExpr(const Expr* e, uint8_t depth) {
+    int walkExpr(const Expr* e) {
         if (!e || !e->type) return -1; // compile already failed; keep the walk safe
         EmitToken t;
-        t.depth = depth;
         switch (e->kind) {
             case Expr::Kind::Literal: {
                 t.type = uint8_t(fmt::AstTok::Literal);
@@ -133,8 +133,8 @@ private:
                 t.opId = e->op;
                 int idx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(t));
-                em_.tokens[idx].opLeftTok = walkExpr(e->left, depth);
-                em_.tokens[idx].opRightTok = walkExpr(e->right, depth);
+                em_.tokens[idx].opLeftTok = walkExpr(e->left);
+                em_.tokens[idx].opRightTok = walkExpr(e->right);
                 return idx;
             }
             case Expr::Kind::Unary: {
@@ -142,7 +142,7 @@ private:
                 t.opId = e->op;
                 int idx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(t));
-                em_.tokens[idx].opLeftTok = walkExpr(e->left, depth);
+                em_.tokens[idx].opLeftTok = walkExpr(e->left);
                 return idx;
             }
             case Expr::Kind::Call: {
@@ -151,7 +151,7 @@ private:
                 int idx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(t));
                 for (const Expr* a : e->args) {
-                    int child = walkExpr(a, depth);
+                    int child = walkExpr(a);
                     em_.tokens[idx].argToks.push_back(child);
                 }
                 return idx;
@@ -165,13 +165,12 @@ private:
     // top-level tokens added, in order. Callers append those to their own
     // children vector — always by index, never through a pointer held across
     // a push_back (the pool reallocates).
-    std::vector<int> walkStmt(const Stmt& st, uint8_t depth, EmitStateStream* ss) {
+    std::vector<int> walkStmt(const Stmt& st, EmitStateStream* ss) {
         std::vector<int> added;
         switch (st.kind) {
             case Stmt::Kind::TempDecl: {
                 EmitToken d;
                 d.type = uint8_t(fmt::AstTok::TempVarDecl);
-                d.depth = depth;
                 d.declTypeTag = st.type ? st.type->typeTag : 0;
                 d.declVar = {2, st.tempId};
                 int dIdx = int(em_.tokens.size());
@@ -180,11 +179,10 @@ private:
                 if (st.init) {
                     EmitToken a;
                     a.type = uint8_t(fmt::AstTok::Assign);
-                    a.depth = depth;
                     a.assignTarget = {2, st.tempId};
                     int aIdx = int(em_.tokens.size());
                     em_.tokens.push_back(std::move(a));
-                    em_.tokens[aIdx].assignValueTok = walkExpr(st.init, depth);
+                    em_.tokens[aIdx].assignValueTok = walkExpr(st.init);
                     added.push_back(aIdx);
                     if (ss) {
                         ss->instrs.push_back(
@@ -197,11 +195,10 @@ private:
             case Stmt::Kind::Assign: {
                 EmitToken a;
                 a.type = uint8_t(fmt::AstTok::Assign);
-                a.depth = depth;
                 a.assignTarget = {varKindOf(st.target), st.target.index};
                 int aIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(a));
-                em_.tokens[aIdx].assignValueTok = walkExpr(st.value, depth);
+                em_.tokens[aIdx].assignValueTok = walkExpr(st.value);
                 added.push_back(aIdx);
                 if (ss) {
                     ss->instrs.push_back(
@@ -214,12 +211,11 @@ private:
             case Stmt::Kind::Call: {
                 EmitToken c;
                 c.type = uint8_t(fmt::AstTok::FunctionCall);
-                c.depth = depth;
                 c.functionId = st.functionId;
                 int cIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(c));
                 for (const Expr* a : st.args) {
-                    int child = walkExpr(a, depth);
+                    int child = walkExpr(a);
                     em_.tokens[cIdx].argToks.push_back(child);
                 }
                 added.push_back(cIdx);
@@ -252,7 +248,6 @@ private:
                 }
                 EmitToken g;
                 g.type = uint8_t(fmt::AstTok::Goto);
-                g.depth = depth;
                 g.gotoState = target;
                 int gIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(g));
@@ -268,12 +263,13 @@ private:
                                                               : uint8_t(fmt::AstTok::Else);
                 EmitToken i;
                 i.type = type;
-                i.depth = 3;
                 int iIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(i));
-                if (st.cond) em_.tokens[iIdx].condTok = walkExpr(st.cond, 3);
+                if (st.cond) em_.tokens[iIdx].condTok = walkExpr(st.cond);
+                // The branch body's tokens are children of the IF/ELSE_IF/ELSE
+                // token: that parent edge is the scope of anything declared here.
                 for (const Stmt& b : st.body) {
-                    for (int c : walkStmt(b, 3, ss)) {
+                    for (int c : walkStmt(b, ss)) {
                         em_.tokens[iIdx].children.push_back(c);
                     }
                 }
@@ -287,7 +283,6 @@ private:
     int walkState(const StateDef& st, int stateIndex) {
         EmitToken s;
         s.type = uint8_t(fmt::AstTok::State);
-        s.depth = 1;
         s.isEntry = st.isEntry;
         int sIdx = int(em_.tokens.size());
         em_.tokens.push_back(std::move(s));
@@ -298,7 +293,9 @@ private:
         // run on state entry, before Actions.
         for (const StateBodyItem& item : st.items) {
             if (item.kind == StateBodyItem::Kind::TempDecl) {
-                for (int c : walkStmt(item.decl, 1, &ss)) {
+                // State-body temps: children of the STATE token, i.e. owned by
+                // the state's own block (created on entry, destroyed on exit).
+                for (int c : walkStmt(item.decl, &ss)) {
                     em_.tokens[sIdx].children.push_back(c);
                 }
             }
@@ -307,11 +304,10 @@ private:
             if (item.kind == StateBodyItem::Kind::Actions) {
                 EmitToken a;
                 a.type = uint8_t(fmt::AstTok::Actions);
-                a.depth = 2;
                 int aIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(a));
                 for (const Stmt& stmt : item.stmts) {
-                    for (int c : walkStmt(stmt, 2, &ss)) {
+                    for (int c : walkStmt(stmt, &ss)) {
                         em_.tokens[aIdx].children.push_back(c);
                     }
                 }
@@ -319,11 +315,10 @@ private:
             } else if (item.kind == StateBodyItem::Kind::Traversals) {
                 EmitToken a;
                 a.type = uint8_t(fmt::AstTok::Traversals);
-                a.depth = 2;
                 int aIdx = int(em_.tokens.size());
                 em_.tokens.push_back(std::move(a));
                 for (const Stmt& stmt : item.stmts) {
-                    for (int c : walkStmt(stmt, 2, &ss)) {
+                    for (int c : walkStmt(stmt, &ss)) {
                         em_.tokens[aIdx].children.push_back(c);
                     }
                 }
@@ -406,11 +401,12 @@ Layout computeLayout(const ParsedSource& src, const Emission& em, const FsmGraph
     off = L.secStart[fmt::SecRuntime] + e;
 
     // Temporary Variable Section (canonical execution order)
+    // Entry: [4] self-addr [1] type tag [2] name length [·] name
     L.secStart[fmt::SecTemp] = uint32_t(off);
     e = 0;
     for (std::size_t i = 0; i < src.temps.size(); ++i) {
         L.tempAddr[i] = fmt::makeAddress(fmt::SecTemp, uint32_t(e));
-        e += 4 + 1 + 1 + 2 + src.temps[i].name.size();
+        e += 4 + 1 + 2 + src.temps[i].name.size();
     }
     off = L.secStart[fmt::SecTemp] + e;
 
@@ -435,11 +431,12 @@ Layout computeLayout(const ParsedSource& src, const Emission& em, const FsmGraph
     off = L.secStart[fmt::SecToken] + e;
 
     // AST Adjacency Section (flat token array)
+    // Entry: [1] type [2] child-count [4]x child + type-specific data
     L.secStart[fmt::SecAst] = uint32_t(off);
     e = 0;
     for (std::size_t i = 0; i < em.tokens.size(); ++i) {
         L.astAddr[i] = fmt::makeAddress(fmt::SecAst, uint32_t(e));
-        e += 1 + 1 + 2 + 4 * em.tokens[i].children.size() + astDataSize(em.tokens[i]);
+        e += 1 + 2 + 4 * em.tokens[i].children.size() + astDataSize(em.tokens[i]);
     }
     off = L.secStart[fmt::SecAst] + e;
 
@@ -591,7 +588,6 @@ std::vector<uint8_t> serializeModule(const ParsedSource& src, const AstForest& f
         const TempVar& t = src.temps[i];
         fmt::writeU32(out, L.tempAddr[i]);
         fmt::writeU8(out, t.type ? t.type->typeTag : 0);
-        fmt::writeU8(out, t.depth);
         fmt::writeString(out, t.name);
     }
 
@@ -620,7 +616,6 @@ std::vector<uint8_t> serializeModule(const ParsedSource& src, const AstForest& f
     for (std::size_t i = 0; i < em.tokens.size(); ++i) {
         const EmitToken& t = em.tokens[i];
         fmt::writeU8(out, t.type);
-        fmt::writeU8(out, t.depth);
         fmt::writeU16(out, uint16_t(t.children.size()));
         for (int c : t.children) fmt::writeU32(out, L.astAddr[static_cast<std::size_t>(c)]);
         writeTokenData(out, t, L);

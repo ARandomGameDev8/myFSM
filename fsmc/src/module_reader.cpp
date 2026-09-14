@@ -124,6 +124,15 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     if (!c.u32(magic)) { err = "truncated header"; return false; }
     if (magic != fmt::kMagic) { err = "bad magic number"; return false; }
     if (!c.u16(out.major) || !c.u16(out.minor)) { err = "truncated header"; return false; }
+    // The entry layouts are version-specific (v0.2 dropped the scope-depth
+    // bytes), so refuse anything else instead of misparsing it.
+    if (out.major != fmt::kVersionMajor || out.minor != fmt::kVersionMinor) {
+        err = "unsupported module version " + std::to_string(out.major) + "." +
+              std::to_string(out.minor) + " (this fsmc reads v" +
+              std::to_string(fmt::kVersionMajor) + "." +
+              std::to_string(fmt::kVersionMinor) + ")";
+        return false;
+    }
     for (int i = 1; i <= 7; ++i) {
         if (!c.u32(out.sectionOffsets[uint8_t(i)])) { err = "truncated header"; return false; }
     }
@@ -177,7 +186,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[3]) {
         uint32_t start = c.p;
         ReadTemp t;
-        if (!c.u32(t.addr) || !c.u8(t.tag) || !c.u8(t.depth)) {
+        if (!c.u32(t.addr) || !c.u8(t.tag)) {
             err = "truncated temp entry";
             return false;
         }
@@ -229,7 +238,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[6]) {
         uint32_t start = c.p;
         ReadAstToken t;
-        if (!c.u8(t.type) || !c.u8(t.depth)) { err = "truncated ast entry"; return false; }
+        if (!c.u8(t.type)) { err = "truncated ast entry"; return false; }
         uint16_t childCount = 0;
         if (!c.u16(childCount)) { err = "truncated ast entry"; return false; }
         for (uint16_t k = 0; k < childCount; ++k) {

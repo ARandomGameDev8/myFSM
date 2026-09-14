@@ -1,7 +1,7 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/guard.fsmb  (1213 bytes)
- format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/guard.fsmb  (1140 bytes)
+ format   fsmb v0.2 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
@@ -9,11 +9,11 @@
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x00000038   20 B   1
    [2]  Runtime    0x00000038 .. 0x000000A4   108 B  5
-   [3]  Temporary  0x000000A4 .. 0x000000D0   44 B   3
-   [4]  State      0x000000D0 .. 0x000000F1   33 B   2
-   [5]  Token      0x000000F1 .. 0x000001A9   184 B  22
-   [6]  AST        0x000001A9 .. 0x0000049D   756 B  70
-   [7]  FSM        0x0000049D .. 0x000004BD   32 B   2
+   [3]  Temporary  0x000000A4 .. 0x000000CD   41 B   3
+   [4]  State      0x000000CD .. 0x000000EE   33 B   2
+   [5]  Token      0x000000EE .. 0x000001A6   184 B  22
+   [6]  AST        0x000001A6 .. 0x00000454   686 B  70
+   [7]  FSM        0x00000454 .. 0x00000474   32 B   2
 
  SECTION [1] GLOBAL VARIABLES (1)
    #0  fireRange       float         = 10f
@@ -26,9 +26,9 @@
    #4  shotEventId     int                   owner=external  slot 4
 
  SECTION [3] TEMPORARY VARIABLES (3)
-   #0  wasFiring       bool          depth 1   state: Guard
-   #1  dist            float         depth 2   state: Guard
-   #2  canFire         bool          depth 2   state: Guard
+   #0  wasFiring       bool          scope state body    state: Guard
+   #1  dist            float         scope Actions       state: Guard
+   #2  canFire         bool          scope Actions       state: Guard
 
  SECTION [4] STATES (2)
    #0  Guard           ast root #0

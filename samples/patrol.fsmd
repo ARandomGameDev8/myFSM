@@ -1,7 +1,7 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/patrol.fsmb  (1187 bytes)
- format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/patrol.fsmb  (1125 bytes)
+ format   fsmb v0.2 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
@@ -9,11 +9,11 @@
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x00000039   21 B   1
    [2]  Runtime    0x00000039 .. 0x00000077   62 B   3
-   [3]  Temporary  0x00000077 .. 0x00000091   26 B   2
-   [4]  State      0x00000091 .. 0x000000C7   54 B   4
-   [5]  Token      0x000000C7 .. 0x000001EF   296 B  32
-   [6]  AST        0x000001EF .. 0x00000467   632 B  60
-   [7]  FSM        0x00000467 .. 0x000004A3   60 B   4
+   [3]  Temporary  0x00000077 .. 0x0000008F   24 B   2
+   [4]  State      0x0000008F .. 0x000000C5   54 B   4
+   [5]  Token      0x000000C5 .. 0x000001ED   296 B  32
+   [6]  AST        0x000001ED .. 0x00000429   572 B  60
+   [7]  FSM        0x00000429 .. 0x00000465   60 B   4
 
  SECTION [1] GLOBAL VARIABLES (1)
    #0  pauseTicks      int           = 3
@@ -24,8 +24,8 @@
    #2  waypointB       Object3D              owner=external  slot 2
 
  SECTION [3] TEMPORARY VARIABLES (2)
-   #0  ticks           int           depth 1   state: PauseAtA
-   #1  ticks           int           depth 1   state: PauseAtB
+   #0  ticks           int           scope state body    state: PauseAtA
+   #1  ticks           int           scope state body    state: PauseAtB
 
  SECTION [4] STATES (4)
    #0  GoToA           ast root #0

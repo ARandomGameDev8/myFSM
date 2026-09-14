@@ -137,6 +137,34 @@ const char* opcodeName(uint8_t op) {
 
 const char* ownerName(uint8_t o) { return o == fmt::OwnerDsl ? "dsl (Controller-owned)" : "external"; }
 
+// A token that corresponds to a '{' body — i.e. a scope for temporaries.
+bool isBlockTok(uint8_t type) {
+    switch (type) {
+        case uint8_t(fmt::AstTok::State):
+        case uint8_t(fmt::AstTok::Actions):
+        case uint8_t(fmt::AstTok::Traversals):
+        case uint8_t(fmt::AstTok::If):
+        case uint8_t(fmt::AstTok::ElseIf):
+        case uint8_t(fmt::AstTok::Else):
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Name of the block that owns a temporary (its direct parent '{}' body).
+const char* blockName(uint8_t type) {
+    switch (type) {
+        case uint8_t(fmt::AstTok::State): return "state body";
+        case uint8_t(fmt::AstTok::Actions): return "Actions";
+        case uint8_t(fmt::AstTok::Traversals): return "Traversals";
+        case uint8_t(fmt::AstTok::If): return "if body";
+        case uint8_t(fmt::AstTok::ElseIf): return "else if body";
+        case uint8_t(fmt::AstTok::Else): return "else body";
+        default: return "?";
+    }
+}
+
 std::string fnName(uint16_t id) {
     const FunctionDefinition* fn = BuiltinFunctions::instance().findById(id);
     return fn ? fn->name : hexU(id, 4);
@@ -168,6 +196,7 @@ struct Dis {
     std::unordered_map<uint32_t, std::string> runtimeName;
     std::unordered_map<uint32_t, std::string> tempName;
     std::vector<int> tempState;  // temp index -> state index (-1 if not found)
+    std::vector<int> tempScope;  // temp index -> AST token of its enclosing block
     std::vector<uint32_t> guard; // renderExpr recursion guard
 
     explicit Dis(const ReadModule& mod) : m(mod) { init(); }
@@ -187,25 +216,32 @@ struct Dis {
             tempName[m.tempEntryOffsets[i]] = m.temps[i].name;
 
         tempState.assign(m.temps.size(), -1);
+        tempScope.assign(m.temps.size(), -1);
         for (std::size_t si = 0; si < m.states.size(); ++si) {
             uint32_t root = 0;
-            if (astIndex(m.states[si].addr, root)) walkCollectTemps(root, int(si));
+            if (astIndex(m.states[si].addr, root)) walkCollectTemps(root, int(si), int(root));
         }
     }
 
-    void walkCollectTemps(uint32_t idx, int si) {
+    // Walks a state's AST. `blockIdx` is the nearest enclosing block token: a
+    // TEMP_VAR_DECL reached here is owned by that block, which is exactly the
+    // C lifetime the scope stack gave it at compile time.
+    void walkCollectTemps(uint32_t idx, int si, int blockIdx) {
         const ReadAstToken& t = m.ast[idx];
         if (t.type == uint8_t(fmt::AstTok::TempVarDecl) && t.data.size() == 5) {
             const uint32_t va = rd32(t.data, 1);
             if (fmt::addressSection(va) == fmt::SecTemp) {
                 auto it = tempIdx.find(fmt::addressOffset(va));
-                if (it != tempIdx.end() && tempState[it->second] < 0)
+                if (it != tempIdx.end() && tempState[it->second] < 0) {
                     tempState[it->second] = si;
+                    tempScope[it->second] = blockIdx;
+                }
             }
         }
+        const int childBlock = isBlockTok(t.type) ? int(idx) : blockIdx;
         for (uint32_t c : t.children) {
             uint32_t ci = 0;
-            if (astIndex(c, ci)) walkCollectTemps(ci, si);
+            if (astIndex(c, ci)) walkCollectTemps(ci, si, childBlock);
         }
     }
 
@@ -334,11 +370,11 @@ struct Dis {
 
     static std::string ind(int n) { return std::string(std::size_t(n) * 3, ' '); }
 
-    void dumpAstTree(uint32_t idx, int depth) {
-        os << ind(depth) << "#[" << idx << "] " << tokSummary(idx) << "\n";
+    void dumpAstTree(uint32_t idx, int indentLevel) {
+        os << ind(indentLevel) << "#[" << idx << "] " << tokSummary(idx) << "\n";
         for (uint32_t c : m.ast[idx].children) {
             uint32_t ci = 0;
-            if (astIndex(c, ci)) dumpAstTree(ci, depth + 1);
+            if (astIndex(c, ci)) dumpAstTree(ci, indentLevel + 1);
         }
     }
 
@@ -463,14 +499,17 @@ struct Dis {
         }
         os << "\n";
 
-        // TEMPS
+        // TEMPS — no depth field: the owning block comes from the AST parent
         os << " SECTION [3] TEMPORARY VARIABLES (" << m.temps.size() << ")\n";
         for (std::size_t i = 0; i < m.temps.size(); ++i) {
             const ReadTemp& t = m.temps[i];
+            const char* scope = "?";
+            if (i < tempScope.size() && tempScope[i] >= 0)
+                scope = blockName(m.ast[std::size_t(tempScope[i])].type);
             os << "   #" << i << "  " << pad(t.name, 16) << pad(typeNameByTag(t.tag), 14)
-               << "depth " << int(t.depth);
+               << "scope " << pad(scope, 14);
             if (i < tempState.size() && tempState[i] >= 0)
-                os << "   state: " << m.states[tempState[i]].name;
+                os << "state: " << m.states[tempState[i]].name;
             os << "\n";
         }
         os << "\n";
