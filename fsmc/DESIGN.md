@@ -412,8 +412,8 @@ Tier 3: the driven object (first parameter) must be a variable — see §3.7.
 | Transform2D / Transform3D | 0x22 / 0x23 | 4 | object (handle) |
 | Camera2D / Camera3D | 0x30 / 0x31 | 4 | camera (handle) |
 | Sprite2D / Sprite3D | 0x40 / 0x41 | 4 | sprite (handle) |
-| AnimationController2D / 3D | 0x50 / 0x51 | 4 | animation (handle) |
-| PhysicsObject2D / 3D | 0x60 / 0x61 | 4 | physics (handle) |
+| AnimationController2D / AnimationController3D | 0x50 / 0x51 | 4 | animation (handle) |
+| PhysicsObject2D / PhysicsObject3D | 0x60 / 0x61 | 4 | physics (handle) |
 | NavMeshAgent | 0x70 | 4 | navigation (handle) |
 
 Every type reference in the compiler goes through
