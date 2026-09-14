@@ -248,10 +248,14 @@ the module.
 ### 2.8 Execution-order conventions (encoded in the streams)
 
 1. **Entry phase** — state-level temp initializers (declaration order).
-2. **Actions**, in source order:
-   a. the `Actions`-body temp initializers (declaration order);
-   b. the `Start{}` statements — **once, when the state is entered**;
-   c. the `Update{}` statements — **every tick**.
+2. **Actions** — the `Actions` body's children **in source order**: each
+   `temp` initializer exactly where it is written, the `Start{}` statements
+   (**once, when the state is entered**) and the `Update{}` statements (**every
+   tick**). With the conventional layout — temps before the phase blocks — that
+   is: temp initializers (declaration order), then `Start{}`, then `Update{}`.
+   A `temp` written between or after the phase blocks is initialized at that
+   point in the stream instead, and is visible only from its declaration onward,
+   so a temp both phases share belongs before `Start{}`.
 3. **Traversals** — in source order; the runtime evaluates ifs in order and
    takes the first goto that fires (a trailing bare goto is the default
    transition).
@@ -772,7 +776,7 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | `lexer` | keywords (case-sensitive, `Start`/`Update` included — and `Startx`/`xUpdate` staying identifiers), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
 | `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
-| `phases` | the `Start{}`/`Update{}` rule set end to end: both blocks mandatory (and the two diagnostics when neither is present), each exactly once, `Start{}` first, empty phases allowed, every non-`temp` statement rejected directly in the `Actions` body (call / assignment / `if` / `goto`), `temp` declarations allowed there and visible in both phases, phase bodies as sibling frames (a `Start{}` temp unknown in `Update{}` and vice versa, one name reusable in both), `Start`/`Update` reserved as identifiers, `START`/`UPDATE` as `ACTIONS` children in the AST with no data and per-phase child lists, instruction order `Start` before `Update`, disassembly phase labels, the two `errors/` phase fixtures, validation rejecting a module that lost a phase container, and every fixture declaring both blocks |
+| `phases` | the `Start{}`/`Update{}` rule set end to end: both blocks mandatory (and the two diagnostics when neither is present), each exactly once, `Start{}` first, empty phases allowed, every non-`temp` statement rejected directly in the `Actions` body (call / assignment / `if` / `goto`), `temp` declarations allowed there and visible in both phases, phase bodies as sibling frames (a `Start{}` temp unknown in `Update{}` and vice versa, one name reusable in both), `Start`/`Update` reserved as identifiers, `START`/`UPDATE` as `ACTIONS` children in the AST with no data and per-phase child lists, instruction order `Start` before `Update` (including a `temp` written between the phases, which keeps its source position in both the AST and the instruction stream), nested phase blocks rejected, a temp declared after a phase block invisible inside it, disassembly phase labels, the two `errors/` phase fixtures, validation rejecting a module that lost a phase container, and every fixture declaring both blocks |
 | `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
 | `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token — `STATE`, `ACTIONS` or `IF`), round-trip read-back & compare, corruption rejection, determinism |

@@ -318,6 +318,72 @@ TEST(phases, error_fixtures_report_their_one_phase_diagnostic) {
     }
 }
 
+TEST(phases, a_phase_block_may_not_be_nested_in_another_block) {
+    // inside the other phase
+    auto r = fh::compile(stateWith("        Start { Start { } }\n        Update { }\n"));
+    ASSERT_FALSE(r.ok);
+    ASSERT_EQ(r.errors, 1); // one precise diagnostic, no stray-block cascade
+    ASSERT_TRUE(fh::hasErrorContaining(
+        r, "Start{} belongs directly in the Actions body, not inside another block"));
+
+    // inside an if body in a phase
+    auto r2 = fh::compile(stateWith("        Start { }\n"
+                                    "        Update { if (flag) { Update { } } }\n"));
+    ASSERT_FALSE(r2.ok);
+    ASSERT_EQ(r2.errors, 1);
+    ASSERT_TRUE(fh::hasErrorContaining(
+        r2, "Update{} belongs directly in the Actions body, not inside another block"));
+}
+
+TEST(phases, a_temp_declared_after_a_phase_block_is_not_visible_in_it) {
+    // C scoping is unchanged: visible from the declaration onward, so a temp
+    // written after Update{} cannot be used inside it
+    auto r = fh::compile(stateWith("        Start { }\n"
+                                   "        Update { late = 1; }\n"
+                                   "        temp int late = 5;\n"));
+    ASSERT_FALSE(r.ok);
+    ASSERT_TRUE(fh::hasErrorContaining(r, "unknown variable 'late'"));
+}
+
+TEST(phases, actions_body_children_keep_their_source_order) {
+    // A temp may be declared between the phase blocks; the AST and the
+    // instruction stream both keep source order (DESIGN.md §2.8).
+    auto r = fh::compile(stateWith("        Start { wait(1.0f); }\n"
+                                   "        temp int late = 5;\n"
+                                   "        Update { wait(2.0f); }\n"));
+    ASSERT_TRUE(r.ok);
+    ASSERT_EQ(r.errors, 0);
+
+    const StateBodyItem& item = r.src.states[0].items[0];
+    ASSERT_EQ(item.actionsChildren.size(), std::size_t(3));
+    ASSERT_EQ(int(item.actionsChildren[0].kind), int(StateBodyItem::Child::Kind::Start));
+    ASSERT_EQ(int(item.actionsChildren[1].kind), int(StateBodyItem::Child::Kind::Temp));
+    ASSERT_EQ(int(item.actionsChildren[2].kind), int(StateBodyItem::Child::Kind::Update));
+
+    ReadModule mod;
+    std::string err;
+    ASSERT_TRUE(parseAndValidate(r, mod, err));
+    // CALL wait(1f) | ASSIGN late = 5 | CALL wait(2f) | two traversals gotos
+    ASSERT_EQ(mod.stateInstrs[0].instrs.size(), std::size_t(5));
+    ASSERT_EQ(mod.stateInstrs[0].instrs[0].opcode, fmt::OpCall);
+    ASSERT_EQ(mod.stateInstrs[0].instrs[1].opcode, fmt::OpAssign);
+    ASSERT_EQ(mod.stateInstrs[0].instrs[2].opcode, fmt::OpCall);
+
+    // AST children of ACTIONS, in source order: START, TEMP + its ASSIGN, UPDATE
+    const int actions = firstTokenOfType(mod, fmt::AstTok::Actions);
+    ASSERT_TRUE(actions >= 0);
+    const ReadAstToken& act = mod.ast[static_cast<std::size_t>(actions)];
+    ASSERT_EQ(act.children.size(), std::size_t(4));
+    const int startIdx = tokenIndexAt(mod, act.children[0]);
+    const int tempIdx = tokenIndexAt(mod, act.children[1]);
+    const int updateIdx = tokenIndexAt(mod, act.children[3]);
+    ASSERT_EQ(mod.ast[static_cast<std::size_t>(startIdx)].type, uint8_t(fmt::AstTok::Start));
+    ASSERT_EQ(mod.ast[static_cast<std::size_t>(tempIdx)].type, uint8_t(fmt::AstTok::TempVarDecl));
+    ASSERT_EQ(mod.ast[static_cast<std::size_t>(updateIdx)].type, uint8_t(fmt::AstTok::Update));
+    ASSERT_TRUE(startIdx < tempIdx);
+    ASSERT_TRUE(tempIdx < updateIdx);
+}
+
 TEST(phases, a_module_that_lost_a_phase_block_fails_validation) {
     auto r = fh::compile(stateWith("        Start { wait(1.0f); }\n"
                                    "        Update { wait(2.0f); }\n"));

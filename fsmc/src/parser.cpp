@@ -494,6 +494,17 @@ bool Parser::parseOneActionStmt(std::vector<Stmt>& out) {
                            "Traversals, if, else if, or else");
             skipMatchingBraces();
             return true;
+        case lex::Tok::KwStart:
+        case lex::Tok::KwUpdate: {
+            // A phase block nested in a statement position: inside the other
+            // phase, inside an if body, and so on. Name the real rule instead of
+            // reporting a stray keyword plus a stray block.
+            const lex::Token t = next();
+            errorAt(t, std::string(t.kind == lex::Tok::KwStart ? "Start" : "Update") +
+                           "{} belongs directly in the Actions body, not inside another block");
+            if (at(lex::Tok::LBrace)) skipMatchingBraces();
+            return true;
+        }
         case lex::Tok::RBrace:
             return false; // caller's loop terminates
         case lex::Tok::End:

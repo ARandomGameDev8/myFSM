@@ -340,13 +340,18 @@ Both blocks may be empty (`Start { }`); neither may be missing.
   matching message for `Update{}`); an `Actions { }` with neither reports both.
 - **Only `temp` declarations may sit directly in the `Actions` body.** Anything
   else there is `action logic must be inside Start{} or Update{} (only 'temp'
-  declarations may appear directly in the Actions body)`. A temp declared there
-  is shared by both phases (§7) and is initialised before `Start{}` runs.
+  declarations may appear directly in the Actions body)` — including a nested
+  `Start{}`/`Update{}`, which is `Start{} belongs directly in the Actions body,
+  not inside another block`. A temp declared in the `Actions` body lives in the
+  `Actions` frame and is visible **from its declaration onward**, so write it
+  before `Start{}` — the conventional place — and both phases share it (§7).
 - **The phases are sibling scopes.** A temp declared inside `Start{}` is
   invisible in `Update{}` and vice versa (§7) — hoist it into the `Actions` body
   when both phases need it.
-- **Execution order is source order**: `Actions`-body temp initialisers, then
-  the `Start{}` statements, then the `Update{}` statements, then `Traversals`.
+- **Execution order is source order**: the `Actions` body's children as written
+  — each `temp` initialiser where it appears, then the `Start{}` statements,
+  then the `Update{}` statements (with temps declared first, the usual style,
+  that is: temp initialisers → `Start{}` → `Update{}`) — and then `Traversals`.
   The instruction stream in the `.fsmb` module stays flat and in that order;
   which phase an instruction belongs to is structural — the AST records the two
   phase blocks as `START` / `UPDATE` container tokens under `ACTIONS`, and every
@@ -879,6 +884,7 @@ Quick index of the common compile errors (exact messages):
 | `Update{}` written before `Start{}` | `Start{} must come before Update{} in the Actions body` |
 | A second `Start{}` / `Update{}` in one `Actions` | `duplicate Start{} block in the Actions body` / `duplicate Update{} block in the Actions body` |
 | Any statement but a `temp` declaration directly in the `Actions` body | `action logic must be inside Start{} or Update{} (only 'temp' declarations may appear directly in the Actions body)` |
+| A `Start{}` / `Update{}` nested inside another block (a phase body, an `if` body) | `Start{} belongs directly in the Actions body, not inside another block` |
 | Using a `Start{}` temp in `Update{}` (or the reverse) | `unknown variable 'x'` |
 | `var T x = ...;` (runtime initializer) | `runtime variables cannot have initializers (they are externally driven; values arrive through their binding slot)` |
 | `const T x;` without initializer / non-constant initializer | `static constant 'x' initializer is not a compile-time constant: ...` |
