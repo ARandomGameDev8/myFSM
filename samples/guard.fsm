@@ -1,0 +1,54 @@
+// samples/guard.fsm — a stationary guard: tracks the intruder, plays its
+// animation, flashes its light, and fires (emit) when the intruder is in
+// range and in line of sight.
+//
+// Shows: bool temps, && / !, an else-if chain, Tier 2 mutation functions
+// (setAnimation / setVisible / emit / setVelocity-adjacent), and a
+// degenerate state (Deregistered) that only has Actions.
+
+const float fireRange = 10.0f;
+
+var Object3D              intruder;
+var Object3D              guard;
+var AnimationController3D guardAnim;
+var Sprite3D              guardLight;
+var int                   shotEventId;   // engine-assigned event id (var, not const)
+
+State Guard {
+    temp bool wasFiring = false;
+    Actions {
+        temp float dist   = getDistanceTo(guard, intruder);
+        temp bool canFire = isInLineOfSight(guard, intruder) && dist <= fireRange;
+
+        if (canFire) {
+            lookAt(guard, intruder);
+            emit(shotEventId);           // Tier 2: raise an engine event
+            setVisible(guardLight, true);
+            setAnimation(guardAnim, 1);  // clip 1 = 'fire'
+            wasFiring = true;
+        } else if (dist <= fireRange * 2.0f) {
+            lookAt(guard, intruder);
+            play(guardAnim);             // back to idle loop
+            wasFiring = false;
+        } else {
+            wasFiring = false;
+        }
+    }
+    Traversals {
+        if (!isActive(intruder)) { goto Deregistered; }
+        goto Guard;
+    }
+}
+
+State Deregistered {
+    Actions {
+        stop(guardAnim);
+        setVisible(guardLight, false);
+    }
+    Traversals {
+        if (isActive(intruder)) { goto Guard; }
+        goto Deregistered;
+    }
+}
+
+@ENTRY Guard

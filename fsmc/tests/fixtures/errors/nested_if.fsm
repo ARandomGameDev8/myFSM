@@ -1,0 +1,14 @@
+// Conditionals may not be nested inside conditionals.
+var bool a;
+var bool b;
+State A {
+    Actions {
+        if (a) {
+            if (b) { } // ERROR: nested conditionals
+        }
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A

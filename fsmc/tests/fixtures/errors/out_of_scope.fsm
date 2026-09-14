@@ -1,0 +1,14 @@
+// A temp declared inside an if body is dead after the if closes.
+var bool ready;
+State A {
+    Actions {
+        if (ready) {
+            temp int x = 1;
+        }
+        x = x + 1; // ERROR: x out of scope
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A

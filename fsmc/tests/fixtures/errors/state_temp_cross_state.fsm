@@ -1,0 +1,19 @@
+// A state-level temp is NOT visible in a different state.
+State A {
+    temp int x = 1;
+    Actions {
+        x = x + 1;
+    }
+    Traversals {
+        goto B;
+    }
+}
+State B {
+    Actions {
+        temp int y = x; // ERROR: x not visible in state B
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A

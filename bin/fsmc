@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# fsmc — terminal driver for the FSM DSL compiler.
+#
+# Use it exactly like you'd use g++ on a .cpp file:
+#
+#   ./bin/fsmc input.fsm                  # writes input.fsmb next to the source
+#   ./bin/fsmc input.fsm -o out.fsmb      # explicit output path
+#   ./bin/fsmc --help                     # full usage
+#
+# Or install it once for a plain `fsmc` command anywhere:
+#
+#   make install        # copies the compiler to ~/.local/bin/fsmc
+#   fsmc input.fsm      # works from any directory, in any shell
+#
+# Exit codes:
+#   0  compiled successfully
+#   1  usage or I/O error (bad arguments, missing input file)
+#   2  compile error — diagnostics on stderr as "file:line:col: message";
+#      no .fsmb is ever emitted (not even partially)
+#
+# The C++ compiler itself lives in fsmc/ (CMake project). This script builds
+# it once if fsmc/build/fsmc is missing, then just runs it.
+#
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="$ROOT/fsmc/build"
+BIN="$BUILD_DIR/fsmc"
+
+build_compiler() {
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo "fsmc: cmake not found; installing via pip..." >&2
+        pip3 install --quiet --break-system-packages cmake || pip3 install --quiet cmake
+    fi
+    echo "fsmc: building the compiler (one-time, ~30 s)..." >&2
+    cmake -S "$ROOT/fsmc" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release >/dev/null
+    cmake --build "$BUILD_DIR" -j "$(nproc 2>/dev/null || echo 4)"
+}
+
+if [[ ! -x "$BIN" ]]; then
+    build_compiler
+fi
+
+exec "$BIN" "$@"

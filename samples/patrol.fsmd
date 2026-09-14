@@ -1,0 +1,128 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     samples/patrol.fsmb  (1187 bytes)
+ format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000039   21 B   1
+   [2]  Runtime    0x00000039 .. 0x00000077   62 B   3
+   [3]  Temporary  0x00000077 .. 0x00000091   26 B   2
+   [4]  State      0x00000091 .. 0x000000C7   54 B   4
+   [5]  Token      0x000000C7 .. 0x000001EF   296 B  32
+   [6]  AST        0x000001EF .. 0x00000467   632 B  60
+   [7]  FSM        0x00000467 .. 0x000004A3   60 B   4
+
+ SECTION [1] GLOBAL VARIABLES (1)
+   #0  pauseTicks      int           = 3
+
+ SECTION [2] RUNTIME VARIABLES (3)
+   #0  agent           NavMeshAgent          owner=dsl (Controller-owned)  slot 0
+   #1  waypointA       Object3D              owner=external  slot 1
+   #2  waypointB       Object3D              owner=external  slot 2
+
+ SECTION [3] TEMPORARY VARIABLES (2)
+   #0  ticks           int           depth 1   state: PauseAtA
+   #1  ticks           int           depth 1   state: PauseAtB
+
+ SECTION [4] STATES (4)
+   #0  GoToA           ast root #0
+   #1  PauseAtA        ast root #12
+   #2  GoToB           ast root #30
+   #3  PauseAtB        ast root #42
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'GoToA' — 7 instruction(s) ---
+   0   CLAIM   agent.position
+   1   CLAIM   agent.velocity
+   2   CALL    goTo(agent, waypointA)   [fn 0x060B]
+   3   RELEASE agent.position
+   4   RELEASE agent.velocity
+   5   GOTO    PauseAtA
+   6   GOTO    GoToA
+
+--- state #1 'PauseAtA' — 9 instruction(s) ---
+   0   ASSIGN  ticks = 0
+   1   CLAIM   agent.position
+   2   CLAIM   agent.velocity
+   3   CALL    stopMovement(agent)   [fn 0x062A]
+   4   RELEASE agent.position
+   5   RELEASE agent.velocity
+   6   ASSIGN  ticks = (ticks + 1)
+   7   GOTO    GoToB
+   8   GOTO    PauseAtA
+
+--- state #2 'GoToB' — 7 instruction(s) ---
+   0   CLAIM   agent.position
+   1   CLAIM   agent.velocity
+   2   CALL    goTo(agent, waypointB)   [fn 0x060B]
+   3   RELEASE agent.position
+   4   RELEASE agent.velocity
+   5   GOTO    PauseAtB
+   6   GOTO    GoToB
+
+--- state #3 'PauseAtB' — 9 instruction(s) ---
+   0   ASSIGN  ticks = 0
+   1   CLAIM   agent.position
+   2   CLAIM   agent.velocity
+   3   CALL    stopMovement(agent)   [fn 0x062A]
+   4   RELEASE agent.position
+   5   RELEASE agent.velocity
+   6   ASSIGN  ticks = (ticks + 1)
+   7   GOTO    GoToA
+   8   GOTO    PauseAtB
+
+ SECTION [6] AST (60 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'GoToA' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] CALL goTo(NavMeshAgent, Object3D)
+   #[5] TRAVERSALS
+      #[6] IF    cond: hasReachedDestination(agent, waypointA)
+         #[10] GOTO PauseAtA
+      #[11] GOTO GoToA
+
+--- state #1 'PauseAtA' ---
+#[12] STATE
+   #[13] TEMP int ticks
+   #[14] ASSIGN ticks = 0
+   #[16] ACTIONS
+      #[17] CALL stopMovement(NavMeshAgent)
+      #[19] ASSIGN ticks = (ticks + 1)
+   #[23] TRAVERSALS
+      #[24] IF    cond: (ticks >= pauseTicks)
+         #[28] GOTO GoToB
+      #[29] GOTO PauseAtA
+
+--- state #2 'GoToB' ---
+#[30] STATE
+   #[31] ACTIONS
+      #[32] CALL goTo(NavMeshAgent, Object3D)
+   #[35] TRAVERSALS
+      #[36] IF    cond: hasReachedDestination(agent, waypointB)
+         #[40] GOTO PauseAtB
+      #[41] GOTO GoToB
+
+--- state #3 'PauseAtB' ---
+#[42] STATE
+   #[43] TEMP int ticks
+   #[44] ASSIGN ticks = 0
+   #[46] ACTIONS
+      #[47] CALL stopMovement(NavMeshAgent)
+      #[49] ASSIGN ticks = (ticks + 1)
+   #[53] TRAVERSALS
+      #[54] IF    cond: (ticks >= pauseTicks)
+         #[58] GOTO GoToA
+      #[59] GOTO PauseAtB
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   GoToA        -> PauseAtA
+   GoToA        -> GoToA
+   PauseAtA     -> GoToB
+   PauseAtA     -> PauseAtA
+   GoToB        -> PauseAtB
+   GoToB        -> GoToB
+   PauseAtB     -> GoToA
+   PauseAtB     -> PauseAtB

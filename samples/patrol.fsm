@@ -1,0 +1,57 @@
+// samples/patrol.fsm — a patrol AI: walks A -> B -> A forever,
+// pausing a few ticks at each waypoint.
+//
+// Shows: state-level temps (tick counter), Tier 3 navigation claims,
+// a 4-state cycle, goto to states declared later in the file.
+
+const int pauseTicks = 3;
+
+var NavMeshAgent agent;
+var Object3D     waypointA;
+var Object3D     waypointB;
+
+State GoToA {
+    Actions {
+        goTo(agent, waypointA);   // Tier 3: CLAIM position+velocity -> call -> RELEASE
+    }
+    Traversals {
+        if (hasReachedDestination(agent, waypointA)) { goto PauseAtA; }
+        goto GoToA;               // self-loop until the destination is reached
+    }
+}
+
+State PauseAtA {
+    temp int ticks = 0;           // created when PauseAtA is entered, dies on exit
+    Actions {
+        stopMovement(agent);
+        ticks = ticks + 1;
+    }
+    Traversals {
+        if (ticks >= pauseTicks) { goto GoToB; }
+        goto PauseAtA;
+    }
+}
+
+State GoToB {
+    Actions {
+        goTo(agent, waypointB);
+    }
+    Traversals {
+        if (hasReachedDestination(agent, waypointB)) { goto PauseAtB; }
+        goto GoToB;
+    }
+}
+
+State PauseAtB {
+    temp int ticks = 0;
+    Actions {
+        stopMovement(agent);
+        ticks = ticks + 1;
+    }
+    Traversals {
+        if (ticks >= pauseTicks) { goto GoToA; }   // back to the start
+        goto PauseAtB;
+    }
+}
+
+@ENTRY GoToA

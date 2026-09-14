@@ -1,0 +1,11 @@
+// goTo has no (NavMeshAgent, int) overload.
+var NavMeshAgent navAgent;
+State A {
+    Actions {
+        goTo(navAgent, 5); // ERROR: no matching overload
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A
