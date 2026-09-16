@@ -2,14 +2,19 @@
 // exit, and drives the per-tick Update + Traversals flow.
 //
 // Tick order for the head state:
+//   0. first tick only: initial entry (none -> head), serving the state
+//      initializers + Start — the Start server runs only on head changes,
+//      inside Update, never in Start();
 //   1. honor wait()/waitUntil() suspension (skip the tick while suspended);
 //   2. honor an externally commanded transition (query server), if any;
 //   3. Update round, then Traversals round (either block may be absent —
 //      the compiler only requires at least one of Actions/Traversals);
 //   4. perform the requested transition, if any.
 //
-// Every entry (initial boot or a transition) runs the state initializers +
-// Start immediately; Update/Traversals begin on the following tick.
+// Every entry runs the state initializers + Start in the tick that enters
+// it. Boot itself enters nothing and serves nothing: the first tick
+// performs the initial entry and then serves that tick's Update/Traversals
+// for the fresh head; later transitions take effect for following ticks.
 // `goto CurrentState` (self-loop) means *stay*: no exit/enter, no Start
 // re-run, no broadcast — otherwise trailing default gotos would reset the
 // state's temps every tick and time-based transitions could never fire.
@@ -184,8 +189,11 @@ namespace MyFSM.Core
                 error = "module has no entry state";
                 return false;
             }
-            CurrentState = _entryState;
-            EnterState(CurrentState);
+            // Boot selects the entry head but enters NOTHING and serves
+            // nothing: the first Tick performs the initial entry (none ->
+            // head) and serves its Start round there. Until then the head
+            // is none (CurrentStateName == "<none>").
+            CurrentState = -1;
             Booted = true;
             return true;
         }
@@ -210,6 +218,27 @@ namespace MyFSM.Core
                 return false;
             }
             _exec.TickCount++;
+
+            // 0. Initial entry: the first head change (none -> head).
+            // Served here so the Start server runs only on head changes,
+            // inside Update, never in Start(). No change event is reported:
+            // boot is not a transition. An external request that arrived
+            // before the first tick overrides the entry head directly —
+            // one entry, one Start round, no double serving.
+            if (CurrentState < 0)
+            {
+                int first = _entryState;
+                if (_hasExternalRequest)
+                {
+                    _hasExternalRequest = false;
+                    if (_externalTarget >= 0 && _externalTarget < StateCount)
+                        first = _externalTarget;
+                    else
+                        _exec.Log.Error("external transition target out of range");
+                }
+                CurrentState = first;
+                EnterState(CurrentState);
+            }
 
             // 1. wait()/waitUntil() suspension.
             if (_exec.IsSuspended)

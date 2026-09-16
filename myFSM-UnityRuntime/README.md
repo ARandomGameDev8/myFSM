@@ -77,9 +77,11 @@ AI's frame:
 
 1. `MovementSystem.Advance` — in-flight motion/rotation goals step closer
    (fresh positions for this tick's decisions; runs even while suspended).
-2. `StateHandler.Tick` — suspension check (`wait`/`waitUntil`), then any
-   externally commanded transition, then the Update round, then the
-   Traversals round, then the requested transition (if any).
+2. `StateHandler.Tick` — on the very first tick the head is entered
+   (none → entry) and its Start round runs; then the suspension check
+   (`wait`/`waitUntil`), then any externally commanded transition, then the
+   Update round, then the Traversals round, then the requested transition
+   (if any).
 3. If the head state changed: record it in the DB timetable and publish
    one `StateChangeEvent` to **both** broadcast servers.
 

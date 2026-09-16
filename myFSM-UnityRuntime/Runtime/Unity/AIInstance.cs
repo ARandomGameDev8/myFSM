@@ -10,8 +10,9 @@
 // (fresh positions for decisions), then the Update + Traversals rounds,
 // then its own DB/broadcast bookkeeping. The main server never ticks AIs;
 // it only keeps the registry and runs the query scheduler in LateUpdate
-// (after every AI). Bindings must be applied before boot because Start{}
-// runs at boot; the journal replays them across hot reloads.
+// (after every AI). Bindings must be applied before boot because the entry
+// state's Start{} runs on the very first Update; the journal replays them
+// across hot reloads.
 
 using System;
 using System.Collections.Generic;
@@ -113,7 +114,8 @@ namespace MyFSM.Unity
 
         /// <summary>
         /// Hook for generated classes: bind scene objects / values in code
-        /// here. Runs after the inspector bindings, before boot (Start{}).
+        /// here. Runs after the inspector bindings, before boot (the entry
+        /// Start{} runs later, on the first Update).
         /// </summary>
         protected virtual void OnBindingsRequired()
         {

@@ -47,7 +47,8 @@ another. One AI's frame:
    pause — the component still runs, it just idles; `enabled = false` is
    the hard pause: Unity never calls `Update` at all).
 2. `Movement.Advance` (fresh positions, even while suspended), then
-   `Execution.Tick` (suspension → external transition → Update round →
+   `Execution.Tick` (first tick: initial entry none → head + its Start
+   round; then suspension → external transition → Update round →
    Traversals round → transition).
 3. If the head state changed: append a `StateChangeEntry` to the DB
    timetable, then publish one `StateChangeEvent` to the ordered server and

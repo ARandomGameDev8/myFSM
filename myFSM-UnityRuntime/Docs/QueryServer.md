@@ -148,7 +148,7 @@ ticks T | transitions T | instances N | ready R/N M=M | long-term L | ordered-su
 `ReloadModule` steps: read + full-validate the bytes → require the same
 state count with identical names in order → require the same runtime slots
 (slot/tag/name per index) → reboot every instance of the asset (ids stable,
-binding journal replayed, entry state re-entered) → re-register the asset
+binding journal replayed, entry state re-entered on the next Update) → re-register the asset
 (keeping `InstanceCount`). Per-instance failures are reported together
 (`reloaded N, failed: #2: …`); schema problems fail before anything moves.
 

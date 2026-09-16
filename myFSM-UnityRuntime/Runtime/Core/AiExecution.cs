@@ -5,8 +5,9 @@
 // and the state handler. The Unity layer (AIInstance) creates exactly one of
 // these, applies binding-slot values, then boots and ticks it.
 //
-// Lifecycle: Create -> bind runtime slots -> Boot (enters the entry state,
-// runs state initializers + Start) -> Tick every frame.
+// Lifecycle: Create -> bind runtime slots -> Boot (selects the entry head,
+// enters nothing) -> Tick every frame (the first tick enters the head and
+// runs state initializers + Start, then Update/Traversals like any tick).
 
 using System;
 using System.Collections.Generic;
