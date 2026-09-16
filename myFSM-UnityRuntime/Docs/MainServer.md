@@ -2,8 +2,9 @@
 
 `Runtime/Unity/MainServer.cs`. The main server is the root of the runtime:
 it owns the AI registry, the internal DB, the query server and both
-broadcast servers, ticks every AI each frame, and executes every query and
-command. There is exactly one at runtime.
+broadcast servers, and executes every query and command. It never ticks AIs
+— each AI ticks itself in its own `Update()`. There is exactly one server
+at runtime.
 
 ## Lifecycle & access
 
@@ -35,21 +36,30 @@ MainServer same = MainServer.Instance;       // set by Awake / EnsureExists
 - `TryGetAI(id, out ai)` — lookup for queries/commands/game code.
 - `ConnectExternal(name)` — shorthand for `Queries.RegisterClient(name)`.
 
-## Frame tick (`Update`, private — runs automatically)
+## Frame tick
 
-1. Snapshot the AI list (registration order).
-2. Per AI: skip unbooted; if `Paused`, record a paused tick-sample and skip;
-   else `TickInternal()` = `Movement.Advance` (fresh positions, even while
-   suspended) then `Execution.Tick` (suspension → external transition →
-   Update round → Traversals round → transition).
-3. If the tick produced a state change: append a `StateChangeEntry` to the
-   DB timetable, then publish one `StateChangeEvent` to the ordered server
-   and then the priority server.
-4. Record the AI's tick-sample (`OnInstanceTick`), bump `Db.TotalTicks`,
-   then `Queries.Tick()` serves external clients.
+Each AI ticks itself in its own `Update()` (`AIInstance.Update` →
+`TickInternal()`), in Unity's own component order — not registration order.
+Use Unity's Script Execution Order settings if some AI must tick before
+another. One AI's frame:
+
+1. Skip if unbooted; if `Paused`, record a paused tick-sample and skip (soft
+   pause — the component still runs, it just idles; `enabled = false` is
+   the hard pause: Unity never calls `Update` at all).
+2. `Movement.Advance` (fresh positions, even while suspended), then
+   `Execution.Tick` (suspension → external transition → Update round →
+   Traversals round → transition).
+3. If the head state changed: append a `StateChangeEntry` to the DB
+   timetable, then publish one `StateChangeEvent` to the ordered server and
+   then the priority server; record the AI's tick-sample (`OnInstanceTick`).
+
+The server's own frame work is one private `LateUpdate()`, which Unity runs
+after *every* AI's `Update()`: bump `Db.TotalTicks`, then `Queries.Tick()`
+serves external clients.
 
 So queries always observe post-tick state, and broadcasts always fire before
-that frame's query responses are produced.
+that frame's query responses are produced — the same guarantee a central
+loop gave, while the server's own frame work never visits AIs at all.
 
 ## Query backend (`IQueryBackend.Execute`)
 

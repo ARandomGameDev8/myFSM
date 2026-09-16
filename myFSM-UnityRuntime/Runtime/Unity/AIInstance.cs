@@ -6,10 +6,12 @@
 // inspector-driven version of the same thing.
 //
 // Lifecycle: Unity Start() -> BootFromAsset() -> MainServer registry.
-// The main server then ticks this AI every frame (registration order):
-// movement advance first (fresh positions for decisions), then the AI's
-// Update + Traversals rounds. Bindings must be applied before boot because
-// Start{} runs at boot; the journal replays them across hot reloads.
+// Each AI then ticks ITSELF in its own Update(): movement advance first
+// (fresh positions for decisions), then the Update + Traversals rounds,
+// then its own DB/broadcast bookkeeping. The main server never ticks AIs;
+// it only keeps the registry and runs the query scheduler in LateUpdate
+// (after every AI). Bindings must be applied before boot because Start{}
+// runs at boot; the journal replays them across hot reloads.
 
 using System;
 using System.Collections.Generic;
@@ -394,16 +396,68 @@ namespace MyFSM.Unity
         }
 
         // ----------------------------------------------------------
-        // Per-frame (driven by the main server, registration order)
+        // Per-frame (self-ticked: Unity calls Update() on every AI;
+        // the main server keeps the registry, never ticks AIs)
         // ----------------------------------------------------------
+
+        /// <summary>
+        /// The AI's own frame tick: movement advance (fresh positions for
+        /// this tick's decisions), then the Update + Traversals rounds with
+        /// head-state transitions, then this AI's DB/broadcast bookkeeping.
+        /// Subclasses overriding this MUST call base.Update() or the AI
+        /// silently stops ticking (Unity invokes only the most-derived
+        /// Update). Prefer Paused / enabled=false over overriding.
+        /// </summary>
+        protected virtual void Update()
+        {
+            TickInternal();
+        }
 
         internal StateChangeInfo TickInternal()
         {
-            if (!Booted || Paused || Execution == null) return null;
+            if (!Booted || Execution == null) return null;
+            MainServer main = MainServer.Instance;
+            long calls = Execution.CallCount;
+            if (Paused)
+            {
+                if (main != null)
+                    main.Db.OnInstanceTick(InstanceId, CurrentStateName, calls, true, false);
+                return null;
+            }
             // Fresh positions for this tick's decisions, then serve.
             Movement.Advance(Execution.Time.DeltaTime, Dispatcher, Execution);
             StateChangeInfo change;
             if (!Execution.Tick(out change)) return null;
+            if (main != null)
+            {
+                if (change != null)
+                {
+                    main.Db.RecordStateChange(new StateChangeEntry
+                    {
+                        Tick = main.Db.TotalTicks,
+                        Time = main.TimeProvider.Time,
+                        InstanceId = InstanceId,
+                        InstanceName = DisplayName,
+                        FromState = change.FromName,
+                        ToState = change.ToName,
+                        Reason = change.Reason
+                    });
+                    StateChangeEvent e = new StateChangeEvent
+                    {
+                        Tick = main.Db.TotalTicks,
+                        Time = main.TimeProvider.Time,
+                        InstanceId = InstanceId,
+                        InstanceName = DisplayName,
+                        FromState = change.FromName,
+                        ToState = change.ToName,
+                        Reason = change.Reason
+                    };
+                    main.OrderedBroadcast.Publish(e);
+                    main.PriorityBroadcast.Publish(e);
+                }
+                bool suspended = Execution.IsSuspended;
+                main.Db.OnInstanceTick(InstanceId, CurrentStateName, calls, false, suspended);
+            }
             return change;
         }
     }

@@ -4,8 +4,8 @@
 // (asset + instance records, state-change timetable, emit log), and the two
 // independent service servers: the query server (external systems use the AI
 // system as a service) and the live broadcast servers (state changes pushed
-// to subscribers). Ticks every frame: each AI in registration order, then the
-// query scheduler.
+// to subscribers). AIs tick themselves (own Update); the server only ticks
+// the query scheduler in LateUpdate, after every AI has ticked.
 
 using System;
 using System.Collections.Generic;
@@ -170,52 +170,13 @@ namespace MyFSM.Unity
         }
 
         // ----------------------------------------------------------
-        // Frame tick
+        // Frame tick: the server never ticks AIs (each AI ticks itself
+        // in its own Update). LateUpdate runs after EVERY AI's Update,
+        // so the query scheduler always observes post-tick states.
         // ----------------------------------------------------------
 
-        private void Update()
+        private void LateUpdate()
         {
-            AIInstance[] snapshot = _ais.ToArray();
-            for (int i = 0; i < snapshot.Length; i++)
-            {
-                AIInstance ai = snapshot[i];
-                if (ai == null) continue;
-                if (!ai.Booted) continue;
-                long calls = ai.Execution != null ? ai.Execution.CallCount : 0;
-                if (ai.Paused)
-                {
-                    Db.OnInstanceTick(ai.InstanceId, ai.CurrentStateName, calls, true, false);
-                    continue;
-                }
-                StateChangeInfo change = ai.TickInternal();
-                if (change != null)
-                {
-                    Db.RecordStateChange(new StateChangeEntry
-                    {
-                        Tick = Db.TotalTicks,
-                        Time = TimeProvider.Time,
-                        InstanceId = ai.InstanceId,
-                        InstanceName = ai.DisplayName,
-                        FromState = change.FromName,
-                        ToState = change.ToName,
-                        Reason = change.Reason
-                    });
-                    StateChangeEvent e = new StateChangeEvent
-                    {
-                        Tick = Db.TotalTicks,
-                        Time = TimeProvider.Time,
-                        InstanceId = ai.InstanceId,
-                        InstanceName = ai.DisplayName,
-                        FromState = change.FromName,
-                        ToState = change.ToName,
-                        Reason = change.Reason
-                    };
-                    OrderedBroadcast.Publish(e);
-                    PriorityBroadcast.Publish(e);
-                }
-                bool suspended = ai.Execution != null && ai.Execution.IsSuspended;
-                Db.OnInstanceTick(ai.InstanceId, ai.CurrentStateName, calls, false, suspended);
-            }
             Db.TotalTicks++;
             Queries.Tick();
         }

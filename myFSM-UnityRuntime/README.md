@@ -71,18 +71,20 @@ phases (`Start{}`/`Update{}`), transitions and variables all come from the
 compiled file; the Unity side supplies bound scene objects, time, and the
 engine services behind the 179 built-in functions.
 
-Every frame, `MainServer.Update()` does:
+Every frame, each AI ticks itself in its own `Update()` (Unity component
+order — the main server never ticks AIs, it only keeps the registry). One
+AI's frame:
 
-1. For each registered AI in registration order (skipping unbooted/paused):
-   1. `MovementSystem.Advance` — in-flight motion/rotation goals step closer
-      (fresh positions for this tick's decisions; runs even while suspended).
-   2. `StateHandler.Tick` — suspension check (`wait`/`waitUntil`), then any
-      externally commanded transition, then the Update round, then the
-      Traversals round, then the requested transition (if any).
-   3. If the head state changed: record it in the DB timetable and publish
-      one `StateChangeEvent` to **both** broadcast servers.
-2. `Db.TotalTicks++`, then `Queries.Tick()` — the query scheduler serves
-   external clients.
+1. `MovementSystem.Advance` — in-flight motion/rotation goals step closer
+   (fresh positions for this tick's decisions; runs even while suspended).
+2. `StateHandler.Tick` — suspension check (`wait`/`waitUntil`), then any
+   externally commanded transition, then the Update round, then the
+   Traversals round, then the requested transition (if any).
+3. If the head state changed: record it in the DB timetable and publish
+   one `StateChangeEvent` to **both** broadcast servers.
+
+After every AI has ticked, the server's `LateUpdate()` runs `Db.TotalTicks++`,
+then `Queries.Tick()` — the query scheduler serves external clients.
 
 Errors during serving never throw inside the player loop: they log (with the
 AI's `[myFSM name]` prefix) and yield default values. Only boot/structural
