@@ -34,10 +34,13 @@ import zipfile
 APP_NAME = "myFSM Unity Runtime"
 MANIFEST_NAME = "myfsm-package.json"
 RECEIPT_NAME = ".myfsm-install.json"
-# Where the runtime lives today (see repo branches); override with --url.
-DEFAULT_URL = "https://github.com/ARandomGameDev8/MyFSM-UnityRuntime/archive/refs/heads/test.zip"
-DEFAULT_GIT_URL = "https://github.com/ARandomGameDev8/MyFSM-UnityRuntime.git"
+# Where the runtime lives today: the myFSM repo's test branch carries the
+# myFSM-UnityRuntime/ package one level down (a standalone repo with the
+# package at root also works — the layout is auto-detected).
+DEFAULT_URL = "https://github.com/ARandomGameDev8/myFSM/archive/refs/heads/test.zip"
+DEFAULT_GIT_URL = "https://github.com/ARandomGameDev8/myFSM.git"
 DEFAULT_GIT_BRANCH = "test"
+PACKAGE_SUBDIR = "myFSM-UnityRuntime"  # package location inside the myFSM repo
 COMPANY_DIR = "myFSM"
 TOOLS_SUBDIR = "Tools"  # payload layout: Tools/<rid>/{fsmc,fsmc.exe,lib...}, Tools/include/
 
@@ -391,6 +394,20 @@ def acquire_git(url, branch, workdir):
     if proc.returncode != 0:
         raise ValueError("git clone failed: " + (proc.stderr or proc.stdout).strip()[-500:])
     return Payload(dest, "git: %s (%s)" % (url, branch or "default branch"))
+
+
+def resolve_package_root(payload_root):
+    """Finds the dir holding the manifest: the payload root itself
+    (standalone repo layout) or the myFSM-UnityRuntime/ subdir (myFSM
+    repo layout). Raises a clean error when neither has one."""
+    if os.path.isfile(os.path.join(payload_root, MANIFEST_NAME)):
+        return payload_root
+    nested = os.path.join(payload_root, PACKAGE_SUBDIR)
+    if os.path.isfile(os.path.join(nested, MANIFEST_NAME)):
+        info("Package found in subdir: %s/" % PACKAGE_SUBDIR)
+        return nested
+    raise ValueError("payload has no %s at its root or in %s/ (%s) — wrong folder/archive?"
+                     % (MANIFEST_NAME, PACKAGE_SUBDIR, payload_root))
 
 
 def load_manifest(payload_root):
@@ -817,7 +834,8 @@ def main(argv=None):
                 branch = DEFAULT_GIT_BRANCH
             payload = acquire_git(git_url, branch, workdir.name)
         try:
-            manifest = load_manifest(payload.root)
+            pkg_root = resolve_package_root(payload.root)
+            manifest = load_manifest(pkg_root)
         except ValueError as ex:
             return fail(str(ex))
         info("Payload: %s v%s (%s)" % (manifest.get("name"), manifest.get("version"),
@@ -828,7 +846,7 @@ def main(argv=None):
         if args.no_compiler:
             info("Skipped (--no-compiler).")
         else:
-            ensure_compiler(payload.root, args, auto_yes, workdir.name)
+            ensure_compiler(pkg_root, args, auto_yes, workdir.name)
 
         # --- Stage 4: project
         print("\n[4/6] Finding your Unity project...")
@@ -862,7 +880,7 @@ def main(argv=None):
             print("  %s v%s  ->  %s" % (manifest.get("name"), manifest.get("version"), dest))
             if not confirm("Install?", default_yes=True):
                 return fail("aborted by user")
-        copied = copy_entries(payload.root, manifest, dest)
+        copied = copy_entries(pkg_root, manifest, dest)
         if copied == 0:
             return fail("nothing was copied; refusing to write a receipt")
         receipt = write_receipt(dest, manifest, payload.label, copied)
