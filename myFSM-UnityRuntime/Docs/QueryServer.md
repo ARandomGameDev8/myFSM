@@ -214,6 +214,34 @@ loop — the serve set itself never exceeds 20), the serve quantum is capped
 at 60 backend calls/frame, and backend work scales with
 instances/rows/module size.
 
+## Spam & abuse behavior: what if a client spams `Enqueue` every frame?
+
+Three layers keep one abusive client from stalling the server:
+
+1. **Cap 15 fails fast.** Inbound holds at most 15 requests; over-cap
+   enqueues return `false` after O(1) checks and never enter any server
+   queue. The spammer burns only its own `Update` time.
+2. **Quantum M ≤ 3 per tick.** A ready client gets at most M
+   `backend.Execute` calls per frame (default 2); the rest wait in its own
+   FIFO. The whole tick serves at most 60 requests total.
+3. **One client = one slot.** Tracking is unique (ready *or* long-term,
+   never twice), so a spammer occupies exactly 1 of N ready slots and gets
+   1/R of the round-robin; everyone else cycles normally. (The near/far rule
+   adds a fourth layer: re-entrant self-enqueues from inside your own slice
+   wait a tick, so a custom backend can't recurse a slice forever — the
+   stock backend never enqueues, so this one is latent.)
+
+Two honest caveats:
+
+- **M bounds the *count*, not the *cost*.** 3 calls/frame is small, but 3 ×
+  `ReloadModule` re-parses the module and reboots every instance of the
+  asset, every frame. There is no per-query-code rate limiting — throttling
+  expensive queries is backend-side work, not scheduler work.
+- **The response queue is the one uncapped structure.** Every refused
+  enqueue pushes a failure response the client must collect; a spammer that
+  never calls `TryTakeResponse` grows its *own* response queue. Its own
+  memory leak, not a server stall.
+
 ## Error catalog (all `Error` strings)
 
 - `unknown query code N` / `unknown command code N`
