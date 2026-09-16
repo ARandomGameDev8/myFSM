@@ -27,6 +27,7 @@ bool isFloat(const TypeDefinition* t) { return t && t->name == "float"; }
 bool isDouble(const TypeDefinition* t) { return t && t->name == "double"; }
 bool isBool(const TypeDefinition* t) { return t && t->name == "bool"; }
 bool isVector(const TypeDefinition* t) { return t && t->isNumeric && t->category == "vector"; }
+bool isString(const TypeDefinition* t) { return t && t->name == "string"; }
 
 bool intMul(int64_t a, int64_t b, int64_t& out) {
     if (a == 0 || b == 0) { out = 0; return true; }
@@ -63,6 +64,7 @@ bool foldExpr(const Expr* e, ConstPool& pool, ConstValue& out, std::string& err)
                 case 0x02: out.f = static_cast<float>(e->litReal); break;
                 case 0x03: out.d = e->litReal; break;
                 case 0x04: out.b = e->litBool; break;
+                case 0x05: out.str = e->litStr; break; // string
                 default:
                     if (isVector(e->type)) {
                         out.v = e->litVec;
@@ -87,6 +89,22 @@ bool foldExpr(const Expr* e, ConstPool& pool, ConstValue& out, std::string& err)
             }
             // Reconstruct the value from the stored little-endian bytes.
             const std::vector<uint8_t>& raw = g->constBytes;
+            if (isString(g->type)) {
+                // Variable width: [4] byte length + UTF-8 bytes.
+                if (raw.size() < 4) {
+                    err = "internal: malformed constant '" + g->name + "'";
+                    return false;
+                }
+                const uint32_t len = uint32_t(raw[0]) | (uint32_t(raw[1]) << 8) |
+                                     (uint32_t(raw[2]) << 16) | (uint32_t(raw[3]) << 24);
+                if (raw.size() != std::size_t(4) + len) {
+                    err = "internal: malformed constant '" + g->name + "'";
+                    return false;
+                }
+                out.type = g->type;
+                out.str.assign(raw.begin() + 4, raw.begin() + 4 + len);
+                return true;
+            }
             if (raw.size() != g->type->sizeBytes) {
                 err = "internal: malformed constant '" + g->name + "'";
                 return false;
@@ -194,6 +212,8 @@ bool foldExpr(const Expr* e, ConstPool& pool, ConstValue& out, std::string& err)
             if (l.vcount != r.vcount) { err = "vector constants of different rank"; return false; }
             eq = true;
             for (int k = 0; k < l.vcount; ++k) if (l.v[k] != r.v[k]) { eq = false; break; }
+        } else if (isString(lt) && isString(rt)) {
+            eq = l.str == r.str;
         } else {
             err = "comparison of incompatible constant types";
             return false;
@@ -214,6 +234,21 @@ bool foldExpr(const Expr* e, ConstPool& pool, ConstValue& out, std::string& err)
             case fmt::OpGe: out.b = cmp >= 0; break;
             default: break;
         }
+        return true;
+    }
+
+    // --- string concatenation ---
+    if (isString(lt) || isString(rt)) {
+        if (e->op != fmt::OpPlus) {
+            err = "only '+' is defined for strings in a constant expression";
+            return false;
+        }
+        if (!isString(lt) || !isString(rt)) {
+            err = "'+' concatenates two strings";
+            return false;
+        }
+        out.type = lt;
+        out.str = l.str + r.str;
         return true;
     }
 

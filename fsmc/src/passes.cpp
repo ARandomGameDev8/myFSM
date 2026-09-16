@@ -17,18 +17,25 @@ namespace {
 //   state items in source order -> statements in order -> if bodies in order.
 void walkStateStmts(const StateDef& st,
                     const std::function<void(const Stmt&)>& visit) {
+    std::function<void(const Stmt&)> rec;
+    rec = [&](const Stmt& s2) {
+        visit(s2);
+        for (const Stmt& b : s2.body) rec(b);
+    };
+    auto walkList = [&](const std::vector<Stmt>& list) {
+        for (const Stmt& s : list) rec(s);
+    };
     for (const StateBodyItem& item : st.items) {
         if (item.kind == StateBodyItem::Kind::TempDecl) {
             visit(item.decl);
-        } else {
-            for (const Stmt& s : item.stmts) {
-                std::function<void(const Stmt&)> rec;
-                rec = [&](const Stmt& s2) {
-                    visit(s2);
-                    for (const Stmt& b : s2.body) rec(b);
-                };
-                rec(s);
-            }
+            continue;
+        }
+        // Actions body temps (shared by both phase blocks) and, for Traversals,
+        // the transition statements.
+        walkList(item.stmts);
+        if (item.kind == StateBodyItem::Kind::Actions) {
+            walkList(item.startStmts);  // Start{}
+            walkList(item.updateStmts); // Update{}
         }
     }
 }
@@ -124,37 +131,8 @@ AstForest pass2_buildAstForest(const ParsedSource& src, const SymbolTable& sym,
         diag.error({1, 1}, "internal: temp table does not match the AST forest");
     }
 
-    // Runtime ownership: a runtime variable that is claimed by any Tier 3
-    // call becomes owner = DSL (the Controller hands it over at runtime).
-    int runtimeCount = 0;
-    for (const GlobalVar& g : src.globals) {
-        if (!g.isConst) ++runtimeCount;
-    }
-    forest.runtimeOwner.assign(runtimeCount, fmt::OwnerExternal);
-    // c.var.index is the mixed global-table index; map it to the runtime
-    // slot (declaration order among runtime variables only).
-    auto runtimeSlot = [&](int globalIndex) {
-        int slot = 0;
-        for (std::size_t i = 0; i < src.globals.size(); ++i) {
-            if (src.globals[i].isConst) continue;
-            if (static_cast<int>(i) == globalIndex) return slot;
-            ++slot;
-        }
-        return -1;
-    };
-    for (const StateDef& st : src.states) {
-        walkStateStmts(st, [&](const Stmt& s) {
-            if (s.kind != Stmt::Kind::Call) return;
-            for (const ClaimBinding& c : s.claims) {
-                if (c.var.kind == VarKind::Runtime) {
-                    int slot = runtimeSlot(c.var.index);
-                    if (slot >= 0) {
-                        forest.runtimeOwner[static_cast<std::size_t>(slot)] = fmt::OwnerDsl;
-                    }
-                }
-            }
-        });
-    }
+    // (Ownership derivation used to live here: claims are gone from the
+    // language's binary encoding, so runtime variables carry no owner.)
 
     // Reference integrity: every variable reference points at a live table.
     std::function<void(const Expr*)> checkExpr;

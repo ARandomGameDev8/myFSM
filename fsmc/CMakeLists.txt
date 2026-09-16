@@ -41,6 +41,21 @@ add_executable(fsmc src/main.cpp)
 target_link_libraries(fsmc PRIVATE fsmc_lib)
 
 # ---------------------------------------------------------------------------
+# Shared library for hosts (Unity C# wrapper via P/Invoke): the same pipeline
+# as the CLI, exposed through include/myfsm_c_api.h. No main(), no I/O.
+# Build: cmake --build build --target myfsmc  ->  myfsmc.dll / libmyfsmc.so|dylib
+# ---------------------------------------------------------------------------
+set_target_properties(fsmc_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(myfsmc SHARED src/c_api.cpp)
+target_link_libraries(myfsmc PRIVATE fsmc_lib)
+target_compile_definitions(myfsmc PRIVATE MYFSM_BUILDING_LIB)
+set_target_properties(myfsmc PROPERTIES
+  OUTPUT_NAME myfsmc
+  VERSION 0.5.0
+  SOVERSION 0
+)
+
+# ---------------------------------------------------------------------------
 # Tests (hand-rolled framework, no external dependencies) via CTest
 # ---------------------------------------------------------------------------
 enable_testing()
@@ -54,8 +69,10 @@ add_executable(fsmc_tests
   tests/test_overloads.cpp
   tests/test_traversals.cpp
   tests/test_passes.cpp
+  tests/test_phases.cpp
   tests/test_golden_bytes.cpp
   tests/test_disassemble.cpp
+  tests/test_strings.cpp
 )
 target_link_libraries(fsmc_tests PRIVATE fsmc_lib)
 target_compile_definitions(fsmc_tests PRIVATE
@@ -63,8 +80,8 @@ target_compile_definitions(fsmc_tests PRIVATE
 )
 
 set(FSMC_TEST_SUITES
-  lib_types lib_functions lexer parser scope overloads traversals passes golden_bytes
-  disassemble
+  lib_types lib_functions lexer parser scope overloads traversals passes phases
+  golden_bytes disassemble strings
 )
 foreach(suite IN LISTS FSMC_TEST_SUITES)
   add_test(NAME ${suite} COMMAND fsmc_tests ${suite})

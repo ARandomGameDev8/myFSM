@@ -8,8 +8,8 @@
 
 using namespace fsmc;
 
-TEST(lib_types, all_count_is_21) {
-    ASSERT_EQ(BuiltinTypes::instance().all().size(), std::size_t(21));
+TEST(lib_types, all_count_is_22) {
+    ASSERT_EQ(BuiltinTypes::instance().all().size(), std::size_t(22));
 }
 
 TEST(lib_types, every_type_reachable_by_name) {
@@ -43,6 +43,7 @@ TEST(lib_types, table_matches_spec) {
         {"float", 0x02, 4, false, true, true, "primitive"},
         {"double", 0x03, 8, false, true, true, "primitive"},
         {"bool", 0x04, 1, false, false, true, "primitive"},
+        {"string", 0x05, 0, false, false, true, "primitive"},
         {"Vector2", 0x10, 8, false, true, true, "vector"},
         {"Vector3", 0x11, 12, false, true, true, "vector"},
         {"Quaternion", 0x12, 16, false, true, true, "vector"},
@@ -73,6 +74,8 @@ TEST(lib_types, table_matches_spec) {
 }
 
 TEST(lib_types, unknown_name_is_null) {
+    // `string` (lowercase) is a type since v0.4; `String` never was
+    EXPECT_TRUE(BuiltinTypes::instance().find("string") != nullptr);
     EXPECT_TRUE(BuiltinTypes::instance().find("String") == nullptr);
     EXPECT_TRUE(BuiltinTypes::instance().find("vector3") == nullptr);
     EXPECT_TRUE(BuiltinTypes::instance().find("") == nullptr);

@@ -1,0 +1,13 @@
+// Both phase blocks are mandatory: this Actions has an Update{} but no Start{}.
+var bool ready;
+State A {
+    Actions {
+        Update { // ERROR: Actions must contain a Start{} block
+            wait(0.5f);
+        }
+    }
+    Traversals {
+        goto A;
+    }
+}
+@ENTRY A

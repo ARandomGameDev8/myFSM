@@ -1,59 +1,57 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/guard.fsmb  (1213 bytes)
- format   fsmb v0.1 — magic 0x46534D44 ("FSMD"), little-endian
+ file     samples/guard.fsmb  (1181 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
 
  SECTION MAP — 7 sections tile the file after the 36-byte header
    [id]  section    file range           size     entries
    [1]  Global     0x00000024 .. 0x00000038   20 B   1
-   [2]  Runtime    0x00000038 .. 0x000000A4   108 B  5
-   [3]  Temporary  0x000000A4 .. 0x000000D0   44 B   3
-   [4]  State      0x000000D0 .. 0x000000F1   33 B   2
-   [5]  Token      0x000000F1 .. 0x000001A9   184 B  22
-   [6]  AST        0x000001A9 .. 0x0000049D   756 B  70
-   [7]  FSM        0x0000049D .. 0x000004BD   32 B   2
+   [2]  Runtime    0x00000038 .. 0x0000009A   98 B   5
+   [3]  Temporary  0x0000009A .. 0x000000C3   41 B   3
+   [4]  State      0x000000C3 .. 0x000000E4   33 B   2
+   [5]  Token      0x000000E4 .. 0x00000180   156 B  20
+   [6]  AST        0x00000180 .. 0x0000047D   765 B  79
+   [7]  FSM        0x0000047D .. 0x0000049D   32 B   2
 
  SECTION [1] GLOBAL VARIABLES (1)
    #0  fireRange       float         = 10f
 
  SECTION [2] RUNTIME VARIABLES (5)
-   #0  intruder        Object3D              owner=external  slot 0
-   #1  guard           Object3D              owner=dsl (Controller-owned)  slot 1
-   #2  guardAnim       AnimationController3D owner=external  slot 2
-   #3  guardLight      Sprite3D              owner=external  slot 3
-   #4  shotEventId     int                   owner=external  slot 4
+   #0  intruder        Object3D              slot 0
+   #1  guard           Object3D              slot 1
+   #2  guardAnim       AnimationController3D slot 2
+   #3  guardLight      Sprite3D              slot 3
+   #4  shotEventId     int                   slot 4
 
  SECTION [3] TEMPORARY VARIABLES (3)
-   #0  wasFiring       bool          depth 1   state: Guard
-   #1  dist            float         depth 2   state: Guard
-   #2  canFire         bool          depth 2   state: Guard
+   #0  wasFiring       bool          scope state body    state: Guard
+   #1  dist            float         scope Actions       state: Guard
+   #2  canFire         bool          scope Actions       state: Guard
 
  SECTION [4] STATES (2)
    #0  Guard           ast root #0
-   #1  Deregistered    ast root #57
+   #1  Deregistered    ast root #64
 
  SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
---- state #0 'Guard' — 18 instruction(s) ---
+--- state #0 'Guard' — 16 instruction(s) ---
    0   ASSIGN  wasFiring = false
    1   ASSIGN  dist = getDistanceTo(guard, intruder)
    2   ASSIGN  canFire = (isInLineOfSight(guard, intruder) && (dist <= fireRange))
-   3   CLAIM   guard.rotation
-   4   CALL    lookAt(guard, intruder)   [fn 0x0700]
-   5   RELEASE guard.rotation
+   3   CALL    play(guardAnim)   [fn 0x0300]
+   4   CALL    setVisible(guardLight, false)   [fn 0x0206]
+   5   CALL    lookAt(guard, intruder)   [fn 0x0700]
    6   CALL    emit(shotEventId)   [fn 0x0A02]
    7   CALL    setVisible(guardLight, true)   [fn 0x0206]
    8   CALL    setAnimation(guardAnim, 1)   [fn 0x0310]
    9   ASSIGN  wasFiring = true
-   10  CLAIM   guard.rotation
-   11  CALL    lookAt(guard, intruder)   [fn 0x0700]
-   12  RELEASE guard.rotation
-   13  CALL    play(guardAnim)   [fn 0x0300]
-   14  ASSIGN  wasFiring = false
-   15  ASSIGN  wasFiring = false
-   16  GOTO    Deregistered
-   17  GOTO    Guard
+   10  CALL    lookAt(guard, intruder)   [fn 0x0700]
+   11  CALL    play(guardAnim)   [fn 0x0300]
+   12  ASSIGN  wasFiring = false
+   13  ASSIGN  wasFiring = false
+   14  GOTO    Deregistered
+   15  GOTO    Guard
 
 --- state #1 'Deregistered' — 4 instruction(s) ---
    0   CALL    stop(guardAnim)   [fn 0x0302]
@@ -61,7 +59,7 @@
    2   GOTO    Guard
    3   GOTO    Deregistered
 
- SECTION [6] AST (70 tokens) — per-state tree, pre-order (#[n] = token index)
+ SECTION [6] AST (79 tokens) — per-state tree, pre-order (#[n] = token index)
 --- state #0 'Guard' ---
 #[0] STATE   [ENTRY]
    #[1] TEMP bool wasFiring
@@ -71,32 +69,38 @@
       #[6] ASSIGN dist = getDistanceTo(guard, intruder)
       #[10] TEMP bool canFire
       #[11] ASSIGN canFire = (isInLineOfSight(guard, intruder) && (dist <= fireRange))
-      #[19] IF    cond: canFire
-         #[21] CALL lookAt(Object3D, Object3D)
-         #[24] CALL emit(int)
-         #[26] CALL setVisible(Sprite3D, bool)
-         #[29] CALL setAnimation(AnimationController3D, int)
-         #[32] ASSIGN wasFiring = true
-      #[34] ELSE_IF    cond: (dist <= (fireRange * 2f))
-         #[40] CALL lookAt(Object3D, Object3D)
-         #[43] CALL play(AnimationController3D)
-         #[45] ASSIGN wasFiring = false
-      #[47] ELSE
-         #[48] ASSIGN wasFiring = false
-   #[50] TRAVERSALS
-      #[51] IF    cond: !isActive(intruder)
-         #[55] GOTO Deregistered
-      #[56] GOTO Guard
+      #[19] START   (runs once, on state entry)
+         #[20] CALL play(AnimationController3D)
+         #[22] CALL setVisible(Sprite3D, bool)
+      #[25] UPDATE  (runs every tick)
+         #[26] IF    cond: canFire
+            #[28] CALL lookAt(Object3D, Object3D)
+            #[31] CALL emit(int)
+            #[33] CALL setVisible(Sprite3D, bool)
+            #[36] CALL setAnimation(AnimationController3D, int)
+            #[39] ASSIGN wasFiring = true
+         #[41] ELSE_IF    cond: (dist <= (fireRange * 2f))
+            #[47] CALL lookAt(Object3D, Object3D)
+            #[50] CALL play(AnimationController3D)
+            #[52] ASSIGN wasFiring = false
+         #[54] ELSE
+            #[55] ASSIGN wasFiring = false
+   #[57] TRAVERSALS
+      #[58] IF    cond: !isActive(intruder)
+         #[62] GOTO Deregistered
+      #[63] GOTO Guard
 
 --- state #1 'Deregistered' ---
-#[57] STATE
-   #[58] ACTIONS
-      #[59] CALL stop(AnimationController3D)
-      #[61] CALL setVisible(Sprite3D, bool)
-   #[64] TRAVERSALS
-      #[65] IF    cond: isActive(intruder)
-         #[68] GOTO Guard
-      #[69] GOTO Deregistered
+#[64] STATE
+   #[65] ACTIONS
+      #[66] START   (runs once, on state entry)
+         #[67] CALL stop(AnimationController3D)
+         #[69] CALL setVisible(Sprite3D, bool)
+      #[72] UPDATE  (runs every tick)
+   #[73] TRAVERSALS
+      #[74] IF    cond: isActive(intruder)
+         #[77] GOTO Guard
+      #[78] GOTO Deregistered
 
  SECTION [7] FSM ADJACENCY (goto transitions, in source order)
    Guard        -> Deregistered

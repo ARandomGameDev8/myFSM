@@ -2,11 +2,14 @@
 const int tickLimit = 10;
 
 State Idle {
-    temp int tick = 0;              // state-level temp: lives for the whole state
+    temp int tick = 0;              // State-body temp: lives for the whole state
     Actions {
-        temp float waitTime = 0.1f; // depth-2 temp
-        tick = tick + 1;
-        wait(waitTime);
+        temp float waitTime = 0.1f; // Actions-body temp: visible in both phases
+        Start { }                   // nothing to set up on entry
+        Update {
+            tick = tick + 1;
+            wait(waitTime);
+        }
     }
     Traversals {
         if (tick >= tickLimit) { goto Idle; }

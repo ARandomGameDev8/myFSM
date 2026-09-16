@@ -18,6 +18,10 @@ std::vector<uint8_t> ConstValue::toBytes() const {
         case 0x04: // bool
             fmt::writeU8(out, b ? 1 : 0);
             break;
+        case 0x05: // string — [4] byte length + UTF-8 bytes (variable width)
+            fmt::writeU32(out, uint32_t(str.size()));
+            fmt::writeBytes(out, reinterpret_cast<const uint8_t*>(str.data()), str.size());
+            break;
         case 0x10: // Vector2
         case 0x11: // Vector3
         case 0x12: // Quaternion

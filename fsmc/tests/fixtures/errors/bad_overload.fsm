@@ -2,7 +2,10 @@
 var NavMeshAgent navAgent;
 State A {
     Actions {
-        goTo(navAgent, 5); // ERROR: no matching overload
+        Start { }
+        Update {
+            goTo(navAgent, 5); // ERROR: no matching overload
+        }
     }
     Traversals {
         goto A;

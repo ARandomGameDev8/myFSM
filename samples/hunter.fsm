@@ -1,9 +1,10 @@
 // samples/hunter.fsm — a classic Hunt / Flee / Lost AI.
 //
-// Shows: if / else-if / else, temps at all three depths, vector math
-// (component-wise +, scalar *), the && operator, and multiple Tier 3
-// navigation calls with different claims (moveTowards claims
-// position+velocity, lookAt claims rotation).
+// Shows: if / else-if / else, block-scoped temps (each one lives in the {}
+// body that declares it — including the Start{} and Update{} bodies), vector
+// math (component-wise +, scalar *), the && operator, and multiple Tier 3 calls
+// that drive an object passed as their first argument (moveTowards drives the
+// hunter's movement, lookAt its facing).
 
 const float attackRange = 2.5f;
 const float fleeBelow   = 25.0f;
@@ -15,16 +16,21 @@ var float        health;
 var bool         playerVisible;
 
 State Hunt {
-    temp float lastSeenDist = 999.0f;     // depth 1: persists across ticks
+    temp float lastSeenDist = 999.0f;     // State body: persists across ticks
     Actions {
-        temp float dist = getDistanceTo(hunter, player);      // depth 2
-        lastSeenDist = dist;
-        if (dist <= attackRange) {
-            stopMovement(agent);
-            lookAt(hunter, player);
-        } else {
-            temp Vector3 toPlayer = directionTo(hunter, player);  // depth 3
-            moveTowards(agent, toPlayer, 3.5f);
+        temp float dist = getDistanceTo(hunter, player);  // Actions body: both phases see it
+        Start {
+            lookAt(hunter, player);       // snap to the player the moment we spot it
+        }
+        Update {
+            lastSeenDist = dist;
+            if (dist <= attackRange) {
+                stopMovement(agent);
+                lookAt(hunter, player);
+            } else {
+                temp Vector3 toPlayer = directionTo(hunter, player);  // dies with this else
+                moveTowards(agent, toPlayer, 3.5f);
+            }
         }
     }
     Traversals {
@@ -37,7 +43,10 @@ State Hunt {
 State Flee {
     Actions {
         temp Vector3 away = getFleeDirection(getPosition(hunter), getPosition(player));
-        sprintTowards(agent, away, 1.5f);
+        Start { }                         // fleeing needs no entry setup
+        Update {
+            sprintTowards(agent, away, 1.5f);   // re-steered every tick
+        }
     }
     Traversals {
         if (health >= fleeBelow && playerVisible) { goto Hunt; }
@@ -49,8 +58,12 @@ State Lost {
     temp int ticks = 0;
     Actions {
         temp Vector3 dest = getWanderVector(getPosition(hunter), 5.0f);
-        moveTowards(agent, dest, 2.0f);
-        ticks = ticks + 1;
+        Start {
+            moveTowards(agent, dest, 2.0f);     // pick a wander target once, on entry
+        }
+        Update {
+            ticks = ticks + 1;                  // count the ticks spent lost
+        }
     }
     Traversals {
         if (playerVisible) { goto Hunt; }

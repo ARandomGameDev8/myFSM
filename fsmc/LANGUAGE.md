@@ -18,7 +18,7 @@ document is [`DESIGN.md`](DESIGN.md).
 5. [`@ENTRY`](#5-entry)
 6. [`State`](#6-state)
 7. [`temp` variables and scoping](#7-temp-variables-and-scoping)
-8. [`Actions` — statements](#8-actions--statements)
+8. [`Actions` — the `Start{}` and `Update{}` phases](#8-actions--the-start-and-update-phases)
 9. [Conditionals: `if` / `else if` / `else`](#9-conditionals)
 10. [`Traversals` — transitions](#10-traversals--transitions)
 11. [Expressions and operators](#11-expressions-and-operators)
@@ -26,7 +26,7 @@ document is [`DESIGN.md`](DESIGN.md).
 13. [Vector literals](#13-vector-literals)
 14. [Variable resolution and name rules](#14-variable-resolution-and-name-rules)
 15. [Function calls and overload resolution](#15-function-calls-and-overload-resolution)
-16. [Function tiers and claims](#16-function-tiers-and-claims)
+16. [Function tiers](#16-function-tiers)
 17. [Built-in types (complete list)](#17-built-in-types)
 18. [Built-in functions (complete list)](#18-built-in-functions)
 19. [Diagnostics and exit codes](#19-diagnostics-and-exit-codes)
@@ -48,6 +48,10 @@ stateDecl := "State" name "{" stateBody "}"
 stateBody := { tempDecl | actionsBlock | traversalsBlock }
             — at least one of actionsBlock / traversalsBlock
             — each block at most once per state
+actionsBlock := "Actions" "{" { tempDecl }
+                "Start"  "{" { actionStmt } "}"
+                "Update" "{" { actionStmt } "}" "}"
+            — both phase blocks are mandatory, in this order (§8)
 entryDecl := "@ENTRY" stateName
 ```
 
@@ -60,8 +64,11 @@ Rules:
   (forward state references are fine).
 - Names in the global section (`const` + `var`) share one namespace — no
   duplicates. State names share one namespace — no duplicates.
-- Everything is **case-sensitive**. `State`, `Actions`, `Traversals` are
-  uppercase; `if`, `else`, `goto`, `temp`, `const`, `var` are lowercase.
+- Every `Actions` block carries exactly one `Start` block and one `Update`
+  block, in that order, and all action statements live inside them (§8).
+- Everything is **case-sensitive**. `State`, `Actions`, `Start`, `Update`,
+  `Traversals` are uppercase; `if`, `else`, `goto`, `temp`, `const`, `var` are
+  lowercase.
 
 ```fsm
 // Order that compiles: globals first, then states, then @ENTRY.
@@ -89,6 +96,12 @@ Otherwise (own line, or after `;`, `=`, `(`, `{`, `}`, `,`, a keyword, an
 operator, …) it starts a **comment**. Whitespace alone does **not** break the
 ambiguity — only a newline or a non-value token does.
 
+When it bites, the diagnostic names the rule: `unexpected token '//' at top
+level (expected const, var, State, or @ENTRY) — note: '//' after a value on the
+same line is floor division, not a comment; put this comment on its own line`.
+The construct most likely to trip it is `@ENTRY Idle // the start state`, since
+`@ENTRY` is the one item with no terminating `;`.
+
 ```fsm
 temp int a = 7 // 2;        // floor division: a == 3  (the // sticks to the 7)
 temp int b = 7; // note     // comment: ';' breaks the value run
@@ -106,8 +119,9 @@ operator.
 
 - **Identifiers**: start with a letter or `_`, continue with letters, digits,
   or `_`. (e.g. `player`, `lastDist`, `_private`)
-- **Keywords** (reserved, case-sensitive): `State`, `Actions`, `Traversals`,
-  `if`, `else`, `goto`, `temp`, `const`, `var`, `true`, `false`, `@ENTRY`.
+- **Keywords** (reserved, case-sensitive): `State`, `Actions`, `Start`,
+  `Update`, `Traversals`, `if`, `else`, `goto`, `temp`, `const`, `var`,
+  `true`, `false`, `@ENTRY`.
   `return` is lexed but rejected wherever it appears ("return statements are
   not supported by this language").
 - **Operators and punctuation**:
@@ -139,6 +153,8 @@ const float  chaseRange  = 10.0f;
 const float  chaseR2     = chaseRange * chaseRange;     // earlier const OK
 const Vector3 homePos    = Vector3(1.0f, 2.0f, 3.0f);   // vector constants OK
 const bool   startPaused = true && false;               // folds to false
+const string greeting    = "hello";                     // string constants OK
+const string banner      = greeting + ", world";        // folds to one string
 ```
 
 ### Runtime variables
@@ -185,7 +201,11 @@ var NavMeshAgent agent;
 ```fsm
 State <Name> {
     temp <Type> <name> [= <expr>];      // optional, any number, any order
-    Actions     { ... }                 // at most once
+    Actions     {                       // at most once
+        temp <Type> <name> [= <expr>];  //   optional, visible in both phases
+        Start  { ... }                  //   mandatory — runs once, on entry
+        Update { ... }                  //   mandatory — runs every tick
+    }
     Traversals  { ... }                 // at most once
 }
 ```
@@ -195,9 +215,15 @@ State <Name> {
 - Duplicating a block is an error (`duplicate Actions block in state 'X'`).
 - The two blocks may appear in either order; state-level `temp` declarations
   may appear anywhere in the state body (before, between, or after the
-  blocks) and are visible throughout the whole state.
+  blocks). As in C, a temp is visible **from its declaration onward** inside
+  that body, so declare state-level temps *before* the `Actions` /
+  `Traversals` blocks that use them — a use before the declaration is
+  `unknown variable 'x'` (§7).
 - `goto` is **not** allowed at state level (only inside `Traversals`).
 - Top-level `const`/`var` keywords inside a state body are an error.
+- An `Actions` block without both phase blocks is an error, and so is any
+  statement other than a `temp` declaration written directly in its body — see
+  §8 for the whole rule set.
 
 ## 7. `temp` variables and scoping
 
@@ -206,50 +232,89 @@ temp <Type> name;            // declared, default value
 temp <Type> name = <expr>;   // declared and initialized (exact type match)
 ```
 
-**Where temps may live — the three scope depths:**
+**Scoping is exactly C block scoping, driven by a scope stack.** Every `{ … }`
+body opens one frame and its matching `}` closes it. A `temp` belongs to the
+frame of the block it is written in — its **direct parent `{}`** — and:
 
-| Depth | Location | Lifetime |
-|---|---|---|
-| 1 | State body (directly under `State X {`) | Created when the state is **entered** (once, before `Actions` run), destroyed when the state is **exited**. Persists across ticks while the AI stays in the state; visible throughout the whole state body — in both `Actions` and `Traversals`. |
-| 2 | `Actions` body | Created on each `Actions` execution, destroyed when `Actions` finishes. Not visible in `Traversals`. |
-| 3 | `if` / `else if` / `else` body | Created when that branch runs, destroyed when it finishes. Not visible after the whole `if` chain closes. |
+- it comes into existence **at its declaration**, not at the top of the block;
+- it is visible from there until the **closing `}` of that block**, including
+  inside every block nested in it;
+- it **dies at that closing `}`**. Using it afterwards is `unknown variable 'x'`.
 
-Scoping is C block scoping:
+**There are no fixed depth levels.** Nothing is numbered 1/2/3, no nesting
+level is special, and no depth is recorded in the AST or in the `.fsmb` module:
+a frame is just a frame, however deeply the blocks happen to nest. Which block
+owns a temp is **structural** — in the binary, the temp's declaration token is
+a child of the AST token of the block that declared it (that parent edge *is*
+the scope).
+
+The blocks a `temp` may be declared in, and what that lifetime means at
+runtime:
+
+| Block | Lifetime |
+|---|---|
+| State body (directly under `State X {`) | Created when the state is **entered** (once, before `Actions` run), destroyed when the state is **exited**. Persists across ticks while the AI stays in the state; visible throughout the whole state body — in `Actions` (both phases) and `Traversals`. |
+| `Actions` body (directly under `Actions {`, next to the phase blocks) | Created on each `Actions` execution, destroyed when `Actions` finishes. Visible in **both** `Start{}` and `Update{}` — this is the place for a value the two phases share. Not visible in `Traversals`. |
+| `Start` body | Created when the `Start{}` phase runs, destroyed when it finishes. **Not visible in `Update{}`** (nor in `Traversals`). |
+| `Update` body | Created when the `Update{}` phase runs, destroyed when it finishes. **Not visible in `Start{}`** — `Start{}` is compiled and runs first (nor in `Traversals`). |
+| `if` / `else if` / `else` body | Created when that branch runs, destroyed when it finishes. Every branch of a chain is its own block, so a temp declared in one branch is not visible in the next one, nor after the chain closes. |
+
+Rules:
 
 - **Shadowing across nested blocks is allowed.** A `temp int x` inside an
-  `if` body hides a state-level `temp int x` only within that block.
+  `if` body hides a state-level `temp int x` only within that block; the outer
+  `x` is visible again as soon as the inner block closes.
 - **Redeclaration in the same block is an error** (`redeclaration of 'x' in
   this scope`).
-- **Out-of-scope use is an error** (`unknown variable 'x'`), including using a
-  branch temp after the `if` closed.
-- **A state-level temp is NOT visible in any other state** — each state has
+- **Out-of-scope use is an error** (`unknown variable 'x'`) — after the block
+  closed, in a sibling branch, or *before* the declaration in the same block.
+- **A state-level temp is NOT visible in any other state** — each state body is
   its own private frame (error: `unknown variable 'x'`).
 - **`temp` cannot be declared at file level** (top level only accepts
   `const` / `var` / `State` / `@ENTRY`).
 - `temp` is **not allowed at all inside `Traversals`** — not in the traversals
   body and not inside a traversals `if` body (see §10).
+- **The two phase blocks are sibling frames, not nested ones.** A temp declared
+  inside `Start{}` cannot be used in `Update{}` and vice versa; declare it
+  directly in the `Actions` body if both phases need it.
+- A **bare `{ … }` block does not open a scope**: `{` must follow `State`,
+  `Actions`, `Start`, `Update`, `Traversals`, `if`, `else if`, or `else`.
 
 ```fsm
 State Chase {
-    temp float lastDist = 99.0f;        // depth 1: lives as long as Chase
+    temp float lastDist = 99.0f;        // State body: lives as long as Chase
     Actions {
-        temp float dist = 3.0f;         // depth 2: dies with this Actions run
-        if (dist < 5.0f) {
-            temp float near = dist;     // depth 3: dies with this branch
+        temp float dist = 3.0f;         // Actions body: both phases see it
+        Start {
+            temp float seed = dist;     // Start body: dies with this phase
+            lastDist = seed;
+        }
+        Update {
+            // 'seed' is gone here; 'dist' and 'lastDist' are still in scope
+            if (dist < 5.0f) {
+                temp float near = dist; // if body: dies with this branch
+            }
+            // 'near' is gone here
         }
     }
     Traversals {
-        if (lastDist < 1.0f) { goto Flee; }   // depth-1 temp: visible here
-        goto Chase;
+        if (lastDist < 1.0f) { goto Flee; }   // State-body temp: visible here
+        goto Chase;                           // 'dist' is NOT visible here
     }
 }
 ```
 
-## 8. `Actions` — statements
+## 8. `Actions` — the `Start{}` and `Update{}` phases
 
-`Actions` runs once per tick while the AI is in the state. Allowed statements:
+`Actions` holds everything the AI *does* while it is in the state. Its body is
+split into two **mandatory** phase blocks, and every action statement lives in
+one of them:
 
 ```ebnf
+actionsBlock := "Actions" "{" { tempDecl }
+                "Start"  "{" { actionStmt } "}"
+                "Update" "{" { actionStmt } "}" "}"
+
 actionStmt := tempDecl
              | varName "=" expression ";"        // assignment
              | functionCall ";"                  // Tier 2 / Tier 3 call
@@ -257,27 +322,69 @@ actionStmt := tempDecl
              | ";"                               // empty statement
 ```
 
-- **Assignment**: the target may be a `var` (runtime) or a `temp` in scope —
-  never a `const` (`static constants cannot be assigned: 'x'`). The
-  expression's type must **exactly** match the target's type.
-- **Function call statements**: Tier 2 and Tier 3 functions are statements
-  (see §16). Tier 1 functions produce values — use them inside expressions
+| Phase | Runs | Typical use |
+|---|---|---|
+| `Start { … }` | **once**, when the state is entered, before the first `Update` | one-off setup: seed a counter or timer, face the target, kick off an animation, do the first steering push |
+| `Update { … }` | **every tick** while the AI stays in the state | the recurring behaviour: queries, steering, conditionals |
+
+Both blocks may be empty (`Start { }`); neither may be missing.
+
+**Rules**
+
+- **Order is fixed**: `Start{}` first, then `Update{}` — otherwise
+  `Start{} must come before Update{} in the Actions body`.
+- **Exactly one of each.** A second one is `duplicate Start{} block in the
+  Actions body` / `duplicate Update{} block in the Actions body`. A missing one
+  is reported at the `Actions` keyword: `Actions must contain a Start{} block —
+  it holds the statements that run once, when the state is entered` (and the
+  matching message for `Update{}`); an `Actions { }` with neither reports both.
+- **Only `temp` declarations may sit directly in the `Actions` body.** Anything
+  else there is `action logic must be inside Start{} or Update{} (only 'temp'
+  declarations may appear directly in the Actions body)` — including a nested
+  `Start{}`/`Update{}`, which is `Start{} belongs directly in the Actions body,
+  not inside another block`. A temp declared in the `Actions` body lives in the
+  `Actions` frame and is visible **from its declaration onward**, so write it
+  before `Start{}` — the conventional place — and both phases share it (§7).
+- **The phases are sibling scopes.** A temp declared inside `Start{}` is
+  invisible in `Update{}` and vice versa (§7) — hoist it into the `Actions` body
+  when both phases need it.
+- **Execution order is source order**: the `Actions` body's children as written
+  — each `temp` initialiser where it appears, then the `Start{}` statements,
+  then the `Update{}` statements (with temps declared first, the usual style,
+  that is: temp initialisers → `Start{}` → `Update{}`) — and then `Traversals`.
+  The instruction stream in the `.fsmb` module stays flat and in that order;
+  which phase an instruction belongs to is structural — the AST records the two
+  phase blocks as `START` / `UPDATE` container tokens under `ACTIONS`, and every
+  instruction points back into that tree (§19, DESIGN.md §2.4/§2.8). A runtime
+  executes the `START` subtree on entry only and the `UPDATE` subtree every
+  tick.
+- The statements themselves are unchanged: **assignment** targets a `var`
+  (runtime) or a `temp` in scope — never a `const` (`static constants cannot be
+  assigned: 'x'`) — and the expression's type must **exactly** match the
+  target's type. **Function call statements** are Tier 2 and Tier 3 functions
+  (§16); Tier 1 functions produce values, so they belong inside expressions
   (`temp float d = distanceTo(a, b);`).
-- **Not allowed in Actions**: `goto` (transitions live in `Traversals`),
-  `return`, bare blocks (`{ }` not attached to a keyword), and nested
-  conditionals (see §9).
+- **Not allowed inside a phase block**: `goto` (transitions live in
+  `Traversals`), `return`, bare blocks (`{ }` not attached to a keyword), and
+  nested conditionals (§9).
 
 ```fsm
 Actions {
-    temp float dist = getDistanceTo(player, enemy);
-    lastDist = dist;                        // state-level temp, exact type
-    if (enemyVisible) {
-        temp Vector3 dir = normalize(directionTo(player, enemy));
-        moveTowards(agent, dir, 5.0f);      // Tier 3 call statement
-    } else if (lastDist < 3.0f) {
-        followTarget(agent, enemy);
-    } else {
-        stopMovement(agent);
+    temp float dist = getDistanceTo(player, enemy);   // shared by both phases
+    Start {
+        lastDist = dist;                              // seed once, on entry
+        stopMovement(agent);                          // halt the old steering
+    }
+    Update {
+        lastDist = dist;                              // exact-type assign
+        if (enemyVisible) {
+            temp Vector3 dir = normalize(directionTo(player, enemy)); // if-body frame
+            moveTowards(agent, dir, 5.0f);            // Tier 3: one CALL
+        } else if (lastDist < 3.0f) {
+            followTarget(agent, enemy);
+        } else {
+            stopMovement(agent);
+        }
     }
 }
 ```
@@ -370,9 +477,10 @@ Use parentheses whenever in doubt — they never hurt.
 | Operator | Operands | Result |
 |---|---|---|
 | `&&` `\|\|` | `bool` + `bool` | `bool` |
-| `==` `!=` | exact same type (numeric or `bool`); **handles rejected** | `bool` |
+| `==` `!=` | exact same type (numeric, `bool` or `string`); **handles rejected** | `bool` |
 | `<` `>` `<=` `>=` | numeric **scalars** (int/float/double, promoted); **vectors rejected** (even same-type); `bool` rejected; handles rejected | `bool` |
-| `+` `-` | same-type vectors (component-wise); scalar+scalar with promotion (int→float→double); `bool` rejected; handles rejected | promoted scalar / same vector type |
+| `+` | `string` + `string` (**concatenation**); same-type vectors (component-wise); scalar+scalar with promotion (int→float→double); `bool` rejected; handles rejected | `string` / promoted scalar / same vector type |
+| `-` | same-type vectors (component-wise); scalar+scalar with promotion; `bool`/`string`/handles rejected | promoted scalar / same vector type |
 | `*` | scalars (promoted); scalar × vector **in either order**; vector × vector **rejected** (use `dot()`); `bool`/handles rejected | promoted scalar / same vector type |
 | `/` | numeric scalars, **`int / int` → `float`** (true division); no vectors, no `bool` | `float` or promoted scalar |
 | `//` | **`int // int` only** | `int`, **floor** (toward −∞: `-7 // 2 == -4`) |
@@ -392,6 +500,12 @@ Notes:
 - Scalar promotion only happens **between scalars** (`int` + `float` →
   `float`). A `float` and a `double` mix → `double`. Vectors never promote
   across types (`Vector2` + `Vector3` is an error).
+- **`string` is deliberately narrow**: `+` (concatenation) and `==` / `!=`
+  (exact byte comparison) are the only operators defined on it. There is **no
+  string↔number conversion** in either direction, no ordering (`<`), no
+  indexing, no length, no slicing, and no `string` parameter anywhere in the
+  built-in function registry — a string can only be stored, compared,
+  concatenated and handed to the Controller through a binding slot.
 
 ## 12. Literals
 
@@ -401,14 +515,19 @@ Notes:
 | decimal / exponent | `3.14`, `1e3`, `2.5E-4` | **`double`** (the default!) |
 | decimal with `f` suffix | `3.14f`, `1.0F` | `float` |
 | boolean | `true`, `false` | `bool` |
-| string | `"hello"` | **not supported — compile error** |
+| string | `"hello"`, `""` | `string` |
 
 - **Gotcha:** `5.0` is a `double`, not a `float`. So
   `temp float x = 5.0;` is a **type-mismatch error** — write `5.0f`.
-- String literals are recognized (so you get a precise diagnostic) but the
-  language has no string type: `string literals are not supported (string
-  type is reserved for future use)`. Supported escapes if you ever need them:
-  `\n \t \r \" \\`.
+- **String literals** are ordinary expressions: they may initialize a `const`,
+  a `temp` or be assigned to a runtime `var`, appear in conditions, and be
+  concatenated. They are `string` (never `char*`-like or numeric).
+- Supported escapes: `\n \t \r \" \\` — anything else is
+  `unknown escape sequence '\q' in string literal`. A literal must close on
+  its own line (`unterminated string literal` otherwise).
+- The stored value is the **decoded** UTF-8 bytes; the module keeps them as
+  `[4] byte length` + bytes (see DESIGN.md §2.2), so escapes cost nothing at
+  runtime and `""` is a legal empty string.
 
 ## 13. Vector literals
 
@@ -438,8 +557,11 @@ Rules:
 
 Lookup order when an identifier is used as a variable:
 
-1. **Temporaries** — innermost enclosing block first (depth 3 → 2 → 1),
-   including the current state's state-level frame.
+1. **Temporaries** — innermost enclosing block first, walking the scope stack
+   outward one block at a time (branch body → phase body, `Start{}` or
+   `Update{}` → `Actions` body → state body), including the current state's
+   state-level frame. The two phase bodies are siblings, so the walk never
+   crosses from one into the other.
 2. **Globals** — `const` and `var` declarations that appear *earlier in the
    file* than the use.
 
@@ -452,6 +574,8 @@ Consequences:
 - `const` initializers may only reference *earlier* consts.
 - The same temp name may be reused in *different* blocks (new scope each
   time); it may not be redeclared in the *same* block.
+- Temps follow the C rule inside their own block too: visible from the
+  declaration onward, gone at the block's closing `}` (§7).
 
 ## 15. Function calls and overload resolution
 
@@ -491,7 +615,7 @@ Practical consequences:
   `getPosition(Object2D)` returns `Vector2`. Mixed (e.g. a `Camera3D` and an
   `Object2D`) fails.
 
-## 16. Function tiers and claims
+## 16. Function tiers
 
 Functions come in three tiers; the tier determines where and how you may call
 them.
@@ -500,22 +624,20 @@ them.
 |---|---|---|---|
 | 1 — query | Read-only engine state | expressions, conditions, initializers, call arguments | none |
 | 2 — mutate | Writes engine state | statement only (`emit`, `setPosition`, …) | first argument (the mutated object) must **not** be a static `const` — pass a runtime `var` or `temp` |
-| 3 — Controller-driven | Navigation / steering / control that the Controller owns | statement only | first argument must be a **variable** (runtime `var` or `temp`) so the ownership handoff can be encoded at compile time |
+| 3 — Controller-driven | Navigation / steering / control that the Controller carries out over time | statement only | the driven object must be a **variable** (runtime `var` or `temp`) |
 
-Tier 3 functions that take an agent/object **claim** fields of that variable
-for the duration of the call. The compiler emits `CLAIM` before the call and
-`RELEASE` after it. Which fields are claimed, per function:
+The Tier 3 functions that drive an object — `goTo`, `followTarget`,
+`findShortestPathAndMove`, `follow`, `sprintTowards`, `moveTowards`,
+`stopMovement`, `lookAt` — take that object as their **first** argument, so
+that argument has to be a variable: a literal, a static `const`, or the result
+of another call will not do. `wait` and `waitUntil` are Tier 3 as well but
+drive no object, so any expression is fine there (`wait(0.5f)`).
 
-| Function | Claimed fields |
-|---|---|
-| `goTo`, `findShortestPathAndMove`, `sprintTowards`, `moveTowards`, `stopMovement` | `agent.position`, `agent.velocity` |
-| `followTarget`, `follow` | `agent.position`, `agent.velocity`, `agent.rotation` |
-| `lookAt` | `src.rotation` |
-| `wait`, `waitUntil` | (none) |
-
-Claimed variables are treated as **Controller-owned** for the module: a
-runtime `var` that is claimed by any Tier 3 call anywhere in the file is
-marked owner = DSL in the binary.
+Nothing about this is recorded in the module. A Tier 3 call compiles to a
+single `CALL` instruction like any other call: the binary format has no claim
+list, no ownership flag and no `CLAIM`/`RELEASE` instructions (they were
+removed in v0.3). Which fields of the object a function touches is an
+implementation detail of the Controller, not of the DSL.
 
 ```fsm
 var NavMeshAgent agent;
@@ -523,7 +645,10 @@ var NavMeshAgent agent;
 State Chase {
     Actions {
         temp Vector3 dir = Vector3(0.0f, 0.0f, 1.0f);
-        moveTowards(agent, dir, 5.0f);   // CLAIM position+velocity → call → RELEASE
+        Start { }
+        Update {
+            moveTowards(agent, dir, 5.0f);  // one CALL; 'agent' must be a variable
+        }
     }
     Traversals { goto Chase; }
 }
@@ -531,7 +656,7 @@ State Chase {
 
 ## 17. Built-in types
 
-All 21 built-in types (the single source of truth is
+All 22 built-in types (the single source of truth is
 `lib/builtin_types.cpp`; every type name in the compiler resolves through
 `BuiltinTypes::find`):
 
@@ -542,6 +667,7 @@ All 21 built-in types (the single source of truth is
 | `float` | 0x02 | 4 | primitive, numeric |
 | `double` | 0x03 | 8 | primitive, numeric |
 | `bool` | 0x04 | 1 | primitive |
+| `string` | 0x05 | *variable* | primitive, variable width (`[4] length` + UTF-8 bytes) |
 | `Vector2` | 0x10 | 8 | vector, numeric (2 floats) |
 | `Vector3` | 0x11 | 12 | vector, numeric (3 floats) |
 | `Quaternion` | 0x12 | 16 | vector, numeric (4 floats) |
@@ -561,6 +687,9 @@ All 21 built-in types (the single source of truth is
 
 Handles are opaque 4-byte references: no arithmetic, no comparisons, no
 literals — only the functions below operate on them.
+
+`string` is the only variable-width type: it has no fixed `Bytes`, and no
+built-in function takes one (see §11 for the operators that do exist).
 
 ## 18. Built-in functions
 
@@ -723,16 +852,19 @@ fsm.fsm:8:9:  warning: bare goto before any if: subsequent statements are dead c
 |---|---|
 | 0 | compiled; `.fsmb` written (message `input.fsm -> output.fsmb (N bytes)`) |
 | 1 | usage / I/O error (bad arguments, missing input file, unwritable output) |
-| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. (Also: the input to `-d` disassemble mode is not a valid/corrupt `.fsmb` module.) |
+| 2 | one or more compile **errors** — **no `.fsmb` is ever emitted**, not even partially. Warnings alone do not prevent output. (Also: the input to `-d` disassemble mode is not a valid `.fsmb` module — corrupt, truncated, or a different format version.) |
 
 **Debugging binaries:** `fsmc -d module.fsmb [-o module.fsmd]` (or `-o -`
 for stdout) walks the binary back through the module reader, validates every
 address/reference/function-id/token-type, and prints a human-readable dump:
-header + section map, decoded constant values, runtime vars with owner and
-binding slot, temps with depth/state, per-state instruction streams
-(`CLAIM var.field` / `CALL fn(resolved, args)` / `GOTO State`), the full AST
-tree per state, and the goto transition table. Corrupt or truncated modules
-are rejected with exit 2 and no dump written.
+header + section map, decoded constant values, runtime vars with their type
+and binding slot, temps with their owning block and state, per-state
+instruction streams (`ASSIGN var = expr` / `CALL fn(resolved, args)` /
+`GOTO State`), the full AST tree per state — including the `START (runs once,
+on state entry)` and `UPDATE (runs every tick)` phase containers — and the goto
+transition table. Corrupt, truncated or wrong-version modules (the reader only
+accepts the format version it writes, v0.5) are rejected with exit 2 and no
+dump written.
 
 ## 20. What is NOT allowed
 
@@ -747,7 +879,13 @@ Quick index of the common compile errors (exact messages):
 | Anything but one `goto` in a traversals `if` body | `Traversals if body must contain exactly one goto statement` |
 | `Traversals` with no `goto` at all | `Traversals body must contain at least one goto statement` |
 | `temp` in `Traversals` (body or if body) | `only 'if' and 'goto' statements are allowed in Traversals` |
-| Bare `{ ... }` block not attached to a keyword | `unexpected block; { must follow a State, Actions, Traversals, if, else if, or else` |
+| Bare `{ ... }` block not attached to a keyword | `unexpected block; { must follow a State, Actions, Start, Update, Traversals, if, else if, or else` |
+| `Actions` with no `Start{}` / no `Update{}` / neither | `Actions must contain a Start{} block — it holds the statements that run once, when the state is entered` / `Actions must contain an Update{} block — it holds the statements that run every tick` |
+| `Update{}` written before `Start{}` | `Start{} must come before Update{} in the Actions body` |
+| A second `Start{}` / `Update{}` in one `Actions` | `duplicate Start{} block in the Actions body` / `duplicate Update{} block in the Actions body` |
+| Any statement but a `temp` declaration directly in the `Actions` body | `action logic must be inside Start{} or Update{} (only 'temp' declarations may appear directly in the Actions body)` |
+| A `Start{}` / `Update{}` nested inside another block (a phase body, an `if` body) | `Start{} belongs directly in the Actions body, not inside another block` |
+| Using a `Start{}` temp in `Update{}` (or the reverse) | `unknown variable 'x'` |
 | `var T x = ...;` (runtime initializer) | `runtime variables cannot have initializers (they are externally driven; values arrive through their binding slot)` |
 | `const T x;` without initializer / non-constant initializer | `static constant 'x' initializer is not a compile-time constant: ...` |
 | Assigning to a `const` | `static constants cannot be assigned: 'x'` |
@@ -757,7 +895,10 @@ Quick index of the common compile errors (exact messages):
 | No `@ENTRY` / two `@ENTRY` / entry names unknown state | `missing @ENTRY: exactly one @ENTRY is required per file` / `duplicate @ENTRY (exactly one is required per file)` / `@ENTRY must name a declared state: 'X'` |
 | Duplicate state / global name | `duplicate state 'X'` / `duplicate global variable 'x'` |
 | `void` as a variable type | `void cannot be used as a variable type` |
-| String literal anywhere | `string literals are not supported (string type is reserved for future use)` |
+| `string` with an operator other than `+` `==` `!=` | `'<' is not defined for strings` / `'*' is not defined for strings` / `unary '-' requires a numeric operand, got string` |
+| `string` mixed with a number | `'+' concatenates two strings, got string and int (there is no string/number conversion)` |
+| `String` (capital S) as a type name | `unknown type 'String' in declaration` |
+| Bad escape / unclosed literal | `unknown escape sequence '\q' in string literal` / `unterminated string literal` |
 | `vector * vector` | `vector * vector is not supported (use dot() for a dot product)` |
 | Relational op on vectors / bool | `relational operators are not defined for vectors` |
 | Mixed vector types in `+` `-` | `mixed vector types: Vector2 and Vector3` |
@@ -768,7 +909,7 @@ Quick index of the common compile errors (exact messages):
 | Unknown function / function | `unknown function 'name'` |
 | No / multiple matching overloads | `no overload of 'name' matches arguments (...). Candidates: ...` / `call to 'name' ... is ambiguous. Candidates: ...` |
 | Tier 2 first arg is a static `const` (e.g. `emit(constId)`) | `static constants cannot be the mutating argument of Tier 2 function 'name'` |
-| Tier 3 first arg is not a variable | `Tier 3 function 'name' claims 'agent.position'; its first argument must be a runtime or temporary variable so the claim can be bound` |
+| Tier 3 driven object is not a variable | `Tier 3 function 'name' drives its first argument; that argument must be a runtime or temporary variable` |
 | Out-of-scope temp | `unknown variable 'x'` |
 | Redeclaration in same block | `redeclaration of 'x' in this scope` |
 | `goto`/`@ENTRY` to unknown state | `unknown state 'X' in goto` / `@ENTRY must name a declared state: 'X'` |
@@ -781,8 +922,9 @@ Quick index of the common compile errors (exact messages):
 The full language in one file (this is `tests/fixtures/two_state.fsm`):
 
 ```fsm
-// two_state.fsm — if / else if / else, temps at all three depths,
-// Traversals with two ifs + a bare default goto.
+// two_state.fsm — if / else if / else, block-scoped temps (state body,
+// Actions body, Start body, if body), the mandatory Start{}/Update{} phase
+// blocks, and Traversals with two ifs + a bare default goto.
 const float chaseRange = 10.0f;        // global const, compile-time constant
 
 var Object3D player;                   // runtime vars: no initializers,
@@ -791,18 +933,24 @@ var NavMeshAgent agent;
 var bool enemyVisible;
 
 State Chase {
-    temp float lastDist = 99.0f;       // depth 1: created on state entry,
-                                       // destroyed on state exit
+    temp float lastDist = 99.0f;       // State-body frame: created on state
+                                       // entry, destroyed on state exit
     Actions {
-        temp float dist = getDistanceTo(player, enemy);   // depth 2, Tier 1 query
-        lastDist = dist;                                  // exact-type assign
-        if (enemyVisible) {
-            temp Vector3 dir = normalize(directionTo(player, enemy)); // depth 3
-            moveTowards(agent, dir, 5.0f);                // Tier 3: CLAIM/CALL/RELEASE
-        } else if (lastDist < 3.0f) {
-            followTarget(agent, enemy);
-        } else {
-            stopMovement(agent);
+        temp float dist = getDistanceTo(player, enemy);   // Actions frame, Tier 1
+                                                          // query: both phases see it
+        Start {                                           // runs once, on entry
+            lastDist = dist;                              // seed the tracker
+        }
+        Update {                                          // runs every tick
+            if (enemyVisible) {
+                temp Vector3 dir = normalize(directionTo(player, enemy)); // if-body frame
+                moveTowards(agent, dir, 5.0f);            // Tier 3: one CALL
+            } else if (lastDist < 3.0f) {
+                followTarget(agent, enemy);
+            } else {
+                stopMovement(agent);
+            }
+            lastDist = dist;                              // exact-type assign
         }
     }
     Traversals {
@@ -815,7 +963,10 @@ State Chase {
 State Flee {
     Actions {
         temp Vector3 away = getFleeDirection(getPosition(player), getPosition(enemy));
-        moveTowards(agent, away, 8.0f);
+        Start { }                                       // nothing to set up
+        Update {
+            moveTowards(agent, away, 8.0f);
+        }
     }
     Traversals {
         if (!enemyVisible) { goto Chase; }
@@ -823,11 +974,13 @@ State Flee {
     }
 }
 
-@ENTRY Chase                                // exactly one, names a declared state
+// exactly one @ENTRY, and it names a declared state (the comment goes on its
+// own line: after a value, `//` is floor division — §2)
+@ENTRY Chase
 ```
 
 Compile it:
 
 ```sh
-./bin/fsmc fsmc/tests/fixtures/two_state.fsm     # → two_state.fsmb (1246 bytes)
+./bin/fsmc fsmc/tests/fixtures/two_state.fsm     # → two_state.fsmb (1050 bytes)
 ```

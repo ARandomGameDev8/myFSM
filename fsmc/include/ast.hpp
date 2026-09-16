@@ -37,18 +37,14 @@ struct ConstValue {
     bool b = false;
     std::array<float, 4> v{};
     int vcount = 0; // 2 / 3 / 4 for Vector2 / Vector3 / Quaternion
+    std::string str; // string only
 
-    // Little-endian raw bytes, exactly sizeBytes wide (from BuiltinTypes).
+    // Little-endian raw bytes: exactly sizeBytes wide for fixed-size types,
+    // `[4] byte length` + UTF-8 bytes for `string`.
     std::vector<uint8_t> toBytes() const;
 };
 
 struct Expr;
-
-struct ClaimBinding {
-    VarInfo var;           // variable bound to the call's first argument
-    uint8_t fieldIndex = 0; // position = 0, velocity = 1, rotation = 2
-    std::string claim;     // original claim string, for diagnostics
-};
 
 // Expression tree. Ownership: the owning ParsedSource keeps every Expr alive
 // in an expr pool; Expr* fields are non-owning.
@@ -63,6 +59,7 @@ struct Expr {
     bool litBool = false;
     std::array<float, 4> litVec{};
     int litVecCount = 0;
+    std::string litStr; // string literal (escapes already decoded by the lexer)
 
     // VarRef payload
     VarInfo var;
@@ -81,10 +78,13 @@ struct Expr {
 
 // Statement. A state's Actions/Traversals body is a vector of Stmt in
 // source order.
+//
+// A statement carries no block-depth level: the block it belongs to is exactly
+// the container that holds it (StateDef::items, a StateBodyItem::stmts, or a
+// Stmt::body of an if/else-if/else), which is what the scope stack mirrors.
 struct Stmt {
     enum class Kind : uint8_t { TempDecl, Assign, Call, Goto, If, ElseIf, Else } kind = Kind::TempDecl;
     SrcLoc loc{1, 1};
-    uint8_t depth = 0; // enclosing block depth: 1 = State body, 2 = Actions/Traversals body, 3 = if/else-if/else body
 
     // TempDecl
     const TypeDefinition* type = nullptr;
@@ -101,7 +101,6 @@ struct Stmt {
     uint16_t functionId = 0;
     uint8_t tier = 0;
     std::vector<Expr*> args;
-    std::vector<ClaimBinding> claims; // Tier 3 only, bound to the first argument
 
     // Goto
     std::string targetName;
@@ -118,7 +117,30 @@ struct StateBodyItem {
     enum class Kind : uint8_t { TempDecl, Actions, Traversals } kind = Kind::TempDecl;
     SrcLoc loc{1, 1};
     Stmt decl;            // when kind == TempDecl (carries tempName/type/tempId/init)
-    std::vector<Stmt> stmts; // when kind == Actions / Traversals
+    // Actions: the `temp` declarations written directly in the Actions body —
+    // they live in the Actions frame, so both phase blocks can see them.
+    // Traversals: the transition statements.
+    std::vector<Stmt> stmts;
+
+    // Actions only: the two mandatory phase blocks. Start{} runs once, when the
+    // state is entered; Update{} runs every tick. Each is its own scope, nested
+    // inside the Actions frame, so a temp declared in one is invisible in the
+    // other.
+    std::vector<Stmt> startStmts;
+    std::vector<Stmt> updateStmts;
+    SrcLoc startLoc{1, 1};
+    SrcLoc updateLoc{1, 1};
+    bool hasStart = false;
+    bool hasUpdate = false;
+
+    // Actions only: the source order of the body's direct children, so the AST
+    // mirrors it exactly (a temp may be declared before, between or after the
+    // two phase blocks).
+    struct Child {
+        enum class Kind : uint8_t { Temp, Start, Update } kind = Kind::Temp;
+        int tempIndex = -1; // index into stmts, when kind == Temp
+    };
+    std::vector<Child> actionsChildren;
 };
 
 struct StateDef {
@@ -136,14 +158,19 @@ struct GlobalVar {
     std::vector<uint8_t> constBytes; // const only: folded value, sizeBytes wide
     int index = -1;                  // index into ParsedSource::globals
     int bindingSlot = -1;            // runtime only: slot id (declaration order)
-    uint8_t owner = fmt::OwnerExternal; // runtime only; Pass 2 may promote to DSL
 };
 
+// One temporary variable. Lifetime is C block scoping: it is created at its
+// declaration and destroyed by the closing '}' of the block that declared it.
 struct TempVar {
     std::string name;
     SrcLoc loc{1, 1};
     const TypeDefinition* type = nullptr;
-    uint8_t depth = 0;    // 1 = State body, 2 = Actions/Traversals body, 3 = if body
+    // Id of the scope-stack frame — the direct parent '{' body — that declared
+    // this temp. Internal bookkeeping only: it is NOT serialized (the module has
+    // no depth field). The owning block is structural instead: the temp's
+    // TEMP_VAR_DECL token is a child of that block's AST token.
+    int scopeId = -1;
     int stateIndex = -1;
     int index = -1;       // index into ParsedSource::temps
 };

@@ -12,7 +12,24 @@ namespace fsmc::fmt {
 // ---------------------------------------------------------------------------
 constexpr uint32_t kMagic = 0x46534D44; // "FSMD"
 constexpr uint16_t kVersionMajor = 0;
-constexpr uint16_t kVersionMinor = 1;
+// v0.2 — scope-depth bytes removed (Temporary Variable entries and AST tokens).
+// Temporary lifetime is C block scoping driven by the compiler's scope stack,
+// so no fixed depth level exists to record: the block that owns a temp is
+// structural (its TEMP_VAR_DECL token is a child of that block's AST token).
+// v0.3 — claim/ownership removed: no CLAIM/RELEASE instructions, no `owner`
+// byte and no `dirty` byte in Runtime Variable entries. The module no longer
+// says anything about who owns a runtime variable or which of its fields a
+// function drives.
+// v0.4 — the `string` type (tag 0x05) and with it the format's first
+// variable-width value: a string is stored as `[4] byte length` + UTF-8 bytes,
+// both in Global Variable entries (constant initializers) and in LITERAL AST
+// tokens. Every other type still occupies exactly its `sizeBytes`.
+// v0.5 — the Actions body is split into two mandatory phase blocks: START
+// (0x07) and UPDATE (0x08) are container tokens and, with `temp` declarations,
+// the only children of ACTIONS. Both are blocks, so both are temporary scopes,
+// and which instructions run once on entry vs. every tick is structural — no
+// instruction-frame layout changed.
+constexpr uint16_t kVersionMinor = 5;
 constexpr std::size_t kHeaderSize = 36;
 
 // ---------------------------------------------------------------------------
@@ -81,8 +98,9 @@ enum Opcode : uint8_t {
     OpGreater = 0x11,
     OpLte = 0x12,
     OpGte = 0x13,
-    OpClaim = 0x14,
-    OpRelease = 0x15,
+    // 0x14 (OpClaim) and 0x15 (OpRelease) are RETIRED as of module v0.3 —
+    // claim/ownership encoding was removed from the format. Per the ID policy
+    // they are never reused, and a module that contains one is invalid.
 };
 
 // ---------------------------------------------------------------------------
@@ -96,6 +114,8 @@ enum class AstTok : uint8_t {
     If = 0x04,
     ElseIf = 0x05,
     Else = 0x06,
+    Start = 0x07,  // Actions phase block: runs once, when the state is entered
+    Update = 0x08, // Actions phase block: runs every tick
     // Leaves
     FunctionCall = 0x10,
     Goto = 0x11,
@@ -131,23 +151,15 @@ enum OpId : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
-// Runtime-variable ownership (owner byte of the Runtime Variable Section)
+// Runtime-variable ownership: REMOVED (module v0.3).
+//
+// Runtime Variable entries used to carry an `owner` byte (external / DSL) and
+// a `dirty` byte, and Tier 3 calls used to be bracketed by CLAIM / RELEASE
+// instructions naming the driven fields. None of that exists any more: a
+// runtime variable is described by its type, its binding slot and its name,
+// and a call is just a CALL. `enum Owner`, `enum ClaimField` and
+// `claimFieldIndex()` were deleted with them.
 // ---------------------------------------------------------------------------
-enum Owner : uint8_t {
-    OwnerExternal = 0x00,
-    OwnerDsl = 0x01,
-};
-
-// Claim field indices (second operand of CLAIM / RELEASE).
-enum ClaimField : uint8_t {
-    ClaimFieldPosition = 0,
-    ClaimFieldVelocity = 1,
-    ClaimFieldRotation = 2,
-};
-
-// Maps the field suffix of a claim string ("agent.position") to its index.
-// Returns false for unknown fields (would be a registry bug).
-bool claimFieldIndex(const std::string& claim, uint8_t& fieldIndex);
 
 // ---------------------------------------------------------------------------
 // Explicit little-endian byte writers. No struct memcpy anywhere.

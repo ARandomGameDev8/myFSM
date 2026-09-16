@@ -9,13 +9,27 @@
 
 namespace fsmc {
 
-// RAII scope-frame guard: exactly one pop per block, even on error paths.
+// RAII scope-frame guard: one frame per '{' body, exactly one pop per '}',
+// even on error paths. The stack — not a numbered depth level — is what gives
+// a temporary its C lifetime: alive from its declaration until the closing '}'
+// of the block that declared it, visible (and shadowable) in nested blocks.
 namespace {
 struct ScopeGuard {
     ScopeStack& stack;
     explicit ScopeGuard(ScopeStack& s) : stack(s) { stack.push(); }
     ~ScopeGuard() { stack.pop(); }
 };
+
+// `//` directly after a value on the same line is the floor-division operator,
+// not a comment (LANGUAGE.md §2). The one construct that ends without a `;` is
+// `@ENTRY <State>`, so a trailing comment there — `@ENTRY Idle // the start` —
+// is lexed as an operator and lands here as a confusing "unexpected token";
+// append the rule so the fix is obvious.
+std::string slashSlashHint(const lex::Token& t) {
+    if (t.kind != lex::Tok::SlashSlash) return std::string();
+    return " — note: '//' after a value on the same line is floor division, not a "
+           "comment; put this comment on its own line";
+}
 } // namespace
 
 Parser::Parser(const std::vector<lex::Token>& tokens, Diagnostics& diag)
@@ -63,10 +77,10 @@ void Parser::skipMatchingBraces() {
         return;
     }
     next(); // '{'
-    int depth = 1;
-    while (!at(lex::Tok::End) && depth > 0) {
-        if (at(lex::Tok::LBrace)) ++depth;
-        if (at(lex::Tok::RBrace)) --depth;
+    int openBraces = 1;
+    while (!at(lex::Tok::End) && openBraces > 0) {
+        if (at(lex::Tok::LBrace)) ++openBraces;
+        if (at(lex::Tok::RBrace)) --openBraces;
         next();
     }
 }
@@ -95,7 +109,8 @@ void Parser::parseTopLevel() {
             case lex::Tok::Entry: parseEntry(); break;
             default:
                 errorAt(cur(), "unexpected token '" + cur().text +
-                                 "' at top level (expected const, var, State, or @ENTRY)");
+                                 "' at top level (expected const, var, State, or @ENTRY)" +
+                                 slashSlashHint(cur()));
                 next();
                 break;
         }
@@ -201,7 +216,6 @@ void Parser::parseGlobalVar() {
     int runtimeCount = 0;
     for (const auto& g : src_.globals) if (!g.isConst) ++runtimeCount;
     gv.bindingSlot = runtimeCount;
-    gv.owner = fmt::OwnerExternal;
     src_.globals.push_back(std::move(gv));
 }
 
@@ -247,13 +261,13 @@ void Parser::parseState() {
 
 void Parser::parseStateBody(StateDef& st, int stateIndex) {
     if (!expect(lex::Tok::LBrace, "'{' after the state name")) return;
-    ScopeGuard guard(scope_); // depth-1 frame: state-level temps
+    ScopeGuard guard(scope_); // frame for the State body: state-level temps
     const lex::Token* closer = nullptr;
     bool hasActions = false, hasTraversals = false;
     while (!at(lex::Tok::RBrace) && !at(lex::Tok::End)) {
         switch (cur().kind) {
             case lex::Tok::KwTemp: {
-                Stmt d = parseTempDecl(1, stateIndex);
+                Stmt d = parseTempDecl(stateIndex);
                 StateBodyItem item;
                 item.kind = StateBodyItem::Kind::TempDecl;
                 item.loc = d.loc;
@@ -303,8 +317,8 @@ void Parser::parseStateBody(StateDef& st, int stateIndex) {
                 break;
             }
             case lex::Tok::LBrace: {
-                errorAt(cur(), "unexpected block; { must follow a State, Actions, Traversals, if, "
-                               "else if, or else");
+                errorAt(cur(), "unexpected block; { must follow a State, Actions, Start, Update, "
+                               "Traversals, if, else if, or else");
                 skipMatchingBraces();
                 break;
             }
@@ -325,50 +339,51 @@ void Parser::parseStateBody(StateDef& st, int stateIndex) {
 }
 
 void Parser::parseActionsBlock(StateBodyItem& item) {
-    next(); // 'Actions'
+    const lex::Token kw = next(); // 'Actions'
     if (!expect(lex::Tok::LBrace, "'{' after 'Actions'")) return;
-    ScopeGuard guard(scope_); // depth-2 frame
-    parseActionStmts(item.stmts, 2);
-    expect(lex::Tok::RBrace, "'}' closing the Actions body");
-}
-
-void Parser::parseTraversalsBlock(StateBodyItem& item) {
-    next(); // 'Traversals'
-    if (!expect(lex::Tok::LBrace, "'{' after 'Traversals'")) return;
-    ScopeGuard guard(scope_); // depth-2 frame (traversals cannot declare temps)
-    seenTravIf_ = false;
-    parseTraversalsStmts(item.stmts);
-    expect(lex::Tok::RBrace, "'}' closing the Traversals body");
-    bool anyGoto = false;
-    for (const auto& s : item.stmts) {
-        if (s.kind == Stmt::Kind::Goto) { anyGoto = true; break; }
-        if (s.kind == Stmt::Kind::If && !s.body.empty()) { anyGoto = true; break; }
-    }
-    if (!anyGoto) {
-        diag_.error({item.loc.line, item.loc.col},
-                    "Traversals body must contain at least one goto statement");
-    }
-}
-
-// ---------------------------------------------------------------------------
-// statements (Actions context: depth 2 or 3)
-// ---------------------------------------------------------------------------
-
-void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
+    // Frame for the Actions body itself: `temp` declarations written directly
+    // here live across both phase blocks (and are visible from their
+    // declaration onward, as everywhere else).
+    ScopeGuard guard(scope_);
     while (!at(lex::Tok::RBrace) && !at(lex::Tok::End)) {
         switch (cur().kind) {
-            case lex::Tok::KwTemp: {
-                out.push_back(parseTempDecl(depth, stateIndex_));
-                break;
-            }
-            case lex::Tok::KwIf: {
-                if (inConditionalBody_) {
-                    const lex::Token t = cur();
-                    errorAt(t, "nested conditionals are not allowed inside conditionals");
+            case lex::Tok::KwStart:
+            case lex::Tok::KwUpdate: {
+                const bool isStart = cur().kind == lex::Tok::KwStart;
+                const char* name = isStart ? "Start" : "Update";
+                const lex::Token t = next();
+                if (isStart ? item.hasStart : item.hasUpdate) {
+                    errorAt(t, std::string("duplicate ") + name + "{} block in the Actions body");
                     skipMatchingBraces();
                     break;
                 }
-                parseIfChain(out, depth);
+                if (isStart && item.hasUpdate) {
+                    errorAt(t, "Start{} must come before Update{} in the Actions body");
+                }
+                (isStart ? item.hasStart : item.hasUpdate) = true;
+                (isStart ? item.startLoc : item.updateLoc) = {t.line, t.col};
+                StateBodyItem::Child child;
+                child.kind = isStart ? StateBodyItem::Child::Kind::Start
+                                     : StateBodyItem::Child::Kind::Update;
+                item.actionsChildren.push_back(child);
+                const std::string openMsg = std::string("'{' after '") + name + "'";
+                if (!expect(lex::Tok::LBrace, openMsg.c_str())) break;
+                {
+                    // One frame per phase block: a temp declared in Start{} dies
+                    // at its '}' and is invisible in Update{}, and vice versa.
+                    ScopeGuard phaseGuard(scope_);
+                    parseActionStmts(isStart ? item.startStmts : item.updateStmts);
+                }
+                const std::string closeMsg = std::string("'}' closing the ") + name + " body";
+                expect(lex::Tok::RBrace, closeMsg.c_str());
+                break;
+            }
+            case lex::Tok::KwTemp: {
+                StateBodyItem::Child child;
+                child.kind = StateBodyItem::Child::Kind::Temp;
+                child.tempIndex = static_cast<int>(item.stmts.size());
+                item.stmts.push_back(parseTempDecl(stateIndex_));
+                item.actionsChildren.push_back(child);
                 break;
             }
             case lex::Tok::KwGoto: {
@@ -386,46 +401,142 @@ void Parser::parseActionStmts(std::vector<Stmt>& out, uint8_t depth) {
             case lex::Tok::Semicolon:
                 next();
                 break;
-            case lex::Tok::LBrace: {
-                errorAt(cur(), "unexpected block; { must follow a State, Actions, Traversals, if, "
-                               "else if, or else");
+            case lex::Tok::LBrace:
+                // A bare block: report the precise error only (not the generic
+                // "action logic" one) and swallow the body.
+                errorAt(cur(), "unexpected block; { must follow a State, Actions, Start, Update, "
+                               "Traversals, if, else if, or else");
                 skipMatchingBraces();
                 break;
-            }
-            case lex::Tok::RBrace:
-                return; // caller's loop terminates
-            case lex::Tok::End:
-                errorAt(cur(), "unexpected end of file (missing '}'?)");
-                return;
-            case lex::Tok::Ident: {
-                if (peekAt(1).kind == lex::Tok::Assign) {
-                    const lex::Token name = next();
-                    out.push_back(parseAssignStmt(depth, name));
-                } else if (peekAt(1).kind == lex::Tok::LParen) {
-                    const lex::Token name = next();
-                    out.push_back(parseCallStmt(depth, name));
-                } else {
-                    errorAt(cur(), "unexpected token '" + cur().text +
-                                       "' (expected a temp declaration, assignment, or function call)");
-                    skipToStatementBoundary();
-                }
-                break;
-            }
             default: {
-                errorAt(cur(), "unexpected token '" + cur().text + "' in statement position");
-                next();
+                // Any other statement: parse it for exact recovery, drop it, and
+                // report once — action logic belongs in Start{} or Update{}.
+                const lex::Token t = cur();
+                std::vector<Stmt> scratch;
+                (void)parseOneActionStmt(scratch);
+                errorAt(t, "action logic must be inside Start{} or Update{} (only 'temp' "
+                           "declarations may appear directly in the Actions body)");
                 break;
             }
         }
     }
+    expect(lex::Tok::RBrace, "'}' closing the Actions body");
+    if (!item.hasStart) {
+        errorAt(kw, "Actions must contain a Start{} block — it holds the statements that run "
+                    "once, when the state is entered");
+    }
+    if (!item.hasUpdate) {
+        errorAt(kw, "Actions must contain an Update{} block — it holds the statements that run "
+                    "every tick");
+    }
 }
 
-Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
+void Parser::parseTraversalsBlock(StateBodyItem& item) {
+    next(); // 'Traversals'
+    if (!expect(lex::Tok::LBrace, "'{' after 'Traversals'")) return;
+    ScopeGuard guard(scope_); // frame for the Traversals body (no temps allowed in it)
+    seenTravIf_ = false;
+    parseTraversalsStmts(item.stmts);
+    expect(lex::Tok::RBrace, "'}' closing the Traversals body");
+    bool anyGoto = false;
+    for (const auto& s : item.stmts) {
+        if (s.kind == Stmt::Kind::Goto) { anyGoto = true; break; }
+        if (s.kind == Stmt::Kind::If && !s.body.empty()) { anyGoto = true; break; }
+    }
+    if (!anyGoto) {
+        diag_.error({item.loc.line, item.loc.col},
+                    "Traversals body must contain at least one goto statement");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// statements (Actions context)
+// ---------------------------------------------------------------------------
+
+void Parser::parseActionStmts(std::vector<Stmt>& out) {
+    while (!at(lex::Tok::RBrace) && !at(lex::Tok::End)) {
+        if (!parseOneActionStmt(out)) return;
+    }
+}
+
+bool Parser::parseOneActionStmt(std::vector<Stmt>& out) {
+    switch (cur().kind) {
+        case lex::Tok::KwTemp:
+            out.push_back(parseTempDecl(stateIndex_));
+            return true;
+        case lex::Tok::KwIf: {
+            if (inConditionalBody_) {
+                const lex::Token t = cur();
+                errorAt(t, "nested conditionals are not allowed inside conditionals");
+                skipMatchingBraces();
+                return true;
+            }
+            parseIfChain(out);
+            return true;
+        }
+        case lex::Tok::KwGoto: {
+            const lex::Token t = next();
+            errorAt(t, "goto is only allowed inside Traversals");
+            skipToStatementBoundary();
+            return true;
+        }
+        case lex::Tok::KwReturn: {
+            const lex::Token t = next();
+            errorAt(t, "return statements are not supported by this language");
+            skipToStatementBoundary();
+            return true;
+        }
+        case lex::Tok::Semicolon:
+            next();
+            return true;
+        case lex::Tok::LBrace:
+            errorAt(cur(), "unexpected block; { must follow a State, Actions, Start, Update, "
+                           "Traversals, if, else if, or else");
+            skipMatchingBraces();
+            return true;
+        case lex::Tok::KwStart:
+        case lex::Tok::KwUpdate: {
+            // A phase block nested in a statement position: inside the other
+            // phase, inside an if body, and so on. Name the real rule instead of
+            // reporting a stray keyword plus a stray block.
+            const lex::Token t = next();
+            errorAt(t, std::string(t.kind == lex::Tok::KwStart ? "Start" : "Update") +
+                           "{} belongs directly in the Actions body, not inside another block");
+            if (at(lex::Tok::LBrace)) skipMatchingBraces();
+            return true;
+        }
+        case lex::Tok::RBrace:
+            return false; // caller's loop terminates
+        case lex::Tok::End:
+            errorAt(cur(), "unexpected end of file (missing '}'?)");
+            return false;
+        case lex::Tok::Ident: {
+            if (peekAt(1).kind == lex::Tok::Assign) {
+                const lex::Token name = next();
+                out.push_back(parseAssignStmt(name));
+            } else if (peekAt(1).kind == lex::Tok::LParen) {
+                const lex::Token name = next();
+                out.push_back(parseCallStmt(name));
+            } else {
+                errorAt(cur(), "unexpected token '" + cur().text +
+                                   "' (expected a temp declaration, assignment, or function call)");
+                skipToStatementBoundary();
+            }
+            return true;
+        }
+        default:
+            errorAt(cur(), "unexpected token '" + cur().text + "' in statement position" +
+                               slashSlashHint(cur()));
+            next();
+            return true;
+    }
+}
+
+Stmt Parser::parseTempDecl(int stateIndex) {
     const lex::Token kw = next(); // 'temp'
     Stmt s;
     s.kind = Stmt::Kind::TempDecl;
     s.loc = {kw.line, kw.col};
-    s.depth = depth;
 
     const lex::Token* typeTok = expect(lex::Tok::Ident, "a type name after 'temp'");
     if (!typeTok) return s;
@@ -451,7 +562,7 @@ Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
     tv.name = s.tempName;
     tv.loc = {nameTok->line, nameTok->col};
     tv.type = type;
-    tv.depth = depth;
+    tv.scopeId = scope_.currentFrameId(); // the direct parent '{' body
     tv.stateIndex = stateIndex;
     tv.index = tempId;
     src_.temps.push_back(std::move(tv));
@@ -473,11 +584,10 @@ Stmt Parser::parseTempDecl(uint8_t depth, int stateIndex) {
     return s;
 }
 
-Stmt Parser::parseAssignStmt(uint8_t depth, const lex::Token& nameTok) {
+Stmt Parser::parseAssignStmt(const lex::Token& nameTok) {
     Stmt s;
     s.kind = Stmt::Kind::Assign;
     s.loc = {nameTok.line, nameTok.col};
-    s.depth = depth;
 
     VarInfo target;
     if (!resolveVariable(nameTok, target)) {
@@ -505,11 +615,10 @@ Stmt Parser::parseAssignStmt(uint8_t depth, const lex::Token& nameTok) {
     return s;
 }
 
-Stmt Parser::parseCallStmt(uint8_t depth, const lex::Token& nameTok) {
+Stmt Parser::parseCallStmt(const lex::Token& nameTok) {
     Stmt s;
     s.kind = Stmt::Kind::Call;
     s.loc = {nameTok.line, nameTok.col};
-    s.depth = depth;
     s.funcName = nameTok.text;
 
     if (!expect(lex::Tok::LParen, "'(' after the function name")) {
@@ -543,7 +652,7 @@ Stmt Parser::parseCallStmt(uint8_t depth, const lex::Token& nameTok) {
 // conditionals
 // ---------------------------------------------------------------------------
 
-void Parser::parseIfChain(std::vector<Stmt>& out, uint8_t depth) {
+void Parser::parseIfChain(std::vector<Stmt>& out) {
     Stmt first = parseIfHead(Stmt::Kind::If);
     out.push_back(std::move(first));
 
@@ -556,7 +665,6 @@ void Parser::parseIfChain(std::vector<Stmt>& out, uint8_t depth) {
             break; // an if/else-if/else chain ends at 'else'
         }
     }
-    (void)depth;
 }
 
 Stmt Parser::parseIfHead(Stmt::Kind kind) {
@@ -565,7 +673,6 @@ Stmt Parser::parseIfHead(Stmt::Kind kind) {
     if (kind == Stmt::Kind::If || kind == Stmt::Kind::ElseIf) {
         const lex::Token kw = next(); // 'if' or the 'if' of 'else if'
         s.loc = {kw.line, kw.col};
-        s.depth = 3; // an if/else-if/else body is always block depth 3
         if (!expect(lex::Tok::LParen, "'(' after 'if'")) {
             skipMatchingBraces();
             return s;
@@ -581,14 +688,13 @@ Stmt Parser::parseIfHead(Stmt::Kind kind) {
     } else {
         const lex::Token kw = cur(); // 'else'
         s.loc = {kw.line, kw.col};
-        s.depth = 3;
     }
     if (!expect(lex::Tok::LBrace, "'{' after the if condition")) return s;
 
-    ScopeGuard guard(scope_); // depth-3 frame
+    ScopeGuard guard(scope_); // one frame per branch body
     bool saveInCond = inConditionalBody_;
     inConditionalBody_ = true;
-    parseActionStmts(s.body, 3);
+    parseActionStmts(s.body);
     inConditionalBody_ = saveInCond;
 
     expect(lex::Tok::RBrace, "'}' closing the if body");
@@ -603,7 +709,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                 s.kind = Stmt::Kind::If;
                 const lex::Token kw = next(); // 'if'
                 s.loc = {kw.line, kw.col};
-                s.depth = 3;
                 if (!expect(lex::Tok::LParen, "'(' after 'if'")) {
                     skipMatchingBraces();
                     out.push_back(std::move(s));
@@ -633,7 +738,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                     Stmt g;
                     g.kind = Stmt::Kind::Goto;
                     g.loc = {cur().line, cur().col};
-                    g.depth = 3;
                     next(); // 'goto'
                     const lex::Token* target = expect(lex::Tok::Ident, "a state name after 'goto'");
                     if (target) g.targetName = target->text;
@@ -665,7 +769,6 @@ void Parser::parseTraversalsStmts(std::vector<Stmt>& out) {
                 Stmt g;
                 g.kind = Stmt::Kind::Goto;
                 g.loc = {t.line, t.col};
-                g.depth = 2;
                 const lex::Token* target = expect(lex::Tok::Ident, "a state name after 'goto'");
                 if (target) g.targetName = target->text;
                 expect(lex::Tok::Semicolon, "';' after the goto target");
@@ -1013,9 +1116,15 @@ Expr* Parser::parsePrimary() {
             return raw;
         }
         case lex::Tok::StringLit: {
-            errorAt(t, "string literals are not supported (string type is reserved for future use)");
             next();
-            return makePoison({t.line, t.col});
+            auto e = std::make_unique<Expr>();
+            e->kind = Expr::Kind::Literal;
+            e->loc = {t.line, t.col};
+            e->type = BuiltinTypes::instance().find("string");
+            e->litStr = t.strValue; // escapes already decoded by the lexer
+            Expr* raw = e.get();
+            src_.exprPool.push_back(std::move(e));
+            return raw;
         }
         case lex::Tok::Ident: {
             next();
@@ -1131,30 +1240,17 @@ void Parser::applyStatementCallSemantics(Stmt& st, const FunctionDefinition* fn,
                               "function '" + fn->name + "'");
         }
     }
-    // Tier 3: every declared claim binds to the call's first argument, which
-    // must be a variable (runtime or temp) so the ownership handoff can be
-    // encoded at compile time.
-    if (fn->tier == 3 && !fn->claims.empty()) {
-        if (st.args.empty()) return;
+    // Tier 3: a call that drives an object drives the one passed as its first
+    // argument, which therefore has to be a live variable (runtime or temp) —
+    // not a static constant, a literal or a call result. This is a source-level
+    // rule only: nothing is recorded about it in the module (claims and
+    // ownership were removed from the binary format).
+    if (fn->tier == 3 && fn->requiresVariableTarget && !st.args.empty()) {
         const Expr* a0 = st.args[0];
         if (!a0 || a0->kind != Expr::Kind::VarRef ||
             a0->var.kind == VarKind::GlobalConst) {
-            errorAt(nameTok, "Tier 3 function '" + fn->name + "' claims '" +
-                            fn->claims.front() + "'; its first argument must be a runtime or "
-                            "temporary variable so the claim can be bound");
-            return;
-        }
-        for (const std::string& claim : fn->claims) {
-            uint8_t field = 0;
-            if (!fmt::claimFieldIndex(claim, field)) {
-                errorAt(nameTok, "internal: unknown claim field in '" + claim + "'");
-                continue;
-            }
-            ClaimBinding cb;
-            cb.var = a0->var;
-            cb.fieldIndex = field;
-            cb.claim = claim;
-            st.claims.push_back(std::move(cb));
+            errorAt(nameTok, "Tier 3 function '" + fn->name + "' drives its first argument; "
+                             "that argument must be a runtime or temporary variable");
         }
     }
 }

@@ -20,19 +20,21 @@ struct ReadGlobal {
     std::string name;
 };
 
+// Entry: [4] self-addr [1] type tag [4] binding slot [2] name length [·] name.
+// No owner and no dirty byte: ownership is not encoded in the module (v0.3).
 struct ReadRuntime {
     uint32_t addr = 0;
     uint8_t tag = 0;
-    uint8_t owner = 0;
-    uint8_t dirty = 0;
     uint32_t bindingSlot = 0;
     std::string name;
 };
 
+// Entry: [4] self-addr [1] type tag [2] name length [·] name.
+// No scope-depth field: a temp's block is structural (its TEMP_VAR_DECL token
+// is a child of the AST token of the block that declared it).
 struct ReadTemp {
     uint32_t addr = 0;
     uint8_t tag = 0;
-    uint8_t depth = 0;
     std::string name;
 };
 
@@ -51,9 +53,9 @@ struct ReadStateInstrs {
     std::vector<ReadInstr> instrs;
 };
 
+// Entry: [1] type [2] child-count [4]x child address + type-specific data.
 struct ReadAstToken {
     uint8_t type = 0;
-    uint8_t depth = 0;
     std::vector<uint32_t> children; // child addresses (ordered)
     std::vector<uint8_t> data;      // raw data bytes (type-specific)
 };

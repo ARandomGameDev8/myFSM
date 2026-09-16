@@ -1,19 +1,6 @@
 #include "binary_format.hpp"
 
-#include <cstring>
-
 namespace fsmc::fmt {
-
-bool claimFieldIndex(const std::string& claim, uint8_t& fieldIndex) {
-    // Claim strings look like "agent.position" or "src.rotation": the prefix
-    // is the parameter placeholder, the suffix after '.' is the field.
-    std::size_t dot = claim.rfind('.');
-    std::string field = dot == std::string::npos ? claim : claim.substr(dot + 1);
-    if (field == "position") { fieldIndex = ClaimFieldPosition; return true; }
-    if (field == "velocity") { fieldIndex = ClaimFieldVelocity; return true; }
-    if (field == "rotation") { fieldIndex = ClaimFieldRotation; return true; }
-    return false;
-}
 
 // ---------------------------------------------------------------------------
 // explicit little-endian writers

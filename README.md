@@ -5,9 +5,31 @@ Reads one `.fsm` source file, emits one little-endian `.fsmb` binary (36-byte
 header + 7 sections), byte-for-byte deterministic.
 
 - **Writing `.fsm` files?** → [`fsmc/LANGUAGE.md`](fsmc/LANGUAGE.md) — the full
-  language reference: syntax of every feature, all 21 types, all 179 function
+  language reference: syntax of every feature, all 22 types, all 179 function
   overloads, type rules, scoping, and every compile error.
 - **Binary format / design** → [`fsmc/DESIGN.md`](fsmc/DESIGN.md)
+- **Ready-to-compile examples** → [`samples/`](samples/)
+
+Every state's `Actions` block splits into two mandatory phases — `Start{}` runs
+once when the state is entered, `Update{}` runs every tick — and all action
+logic lives in one of them (excerpt from [`samples/patrol.fsm`](samples/patrol.fsm)):
+
+```fsm
+const int pauseTicks = 3;
+var NavMeshAgent agent;
+
+State PauseAtA {
+    temp int ticks = 0;                 // state-body temp: alive while in the state
+    Actions {
+        Start  { stopMovement(agent); } // runs once, when the state is entered
+        Update { ticks = ticks + 1; }   // runs every tick
+    }
+    Traversals {
+        if (ticks >= pauseTicks) { goto GoToB; }
+        goto PauseAtA;
+    }
+}
+```
 
 ## Compile a .fsm file (terminal)
 
@@ -35,7 +57,7 @@ Or use the Makefile directly:
 make                                    # build the compiler
 make compile INPUT=my_state.fsm         # compile (OUT=my_state.fsmb by default)
 make compile INPUT=my_state.fsm OUT=/tmp/out.fsmb
-make test                               # run all 10 CTest suites
+make test                               # run all 13 CTest suites
 make clean                              # remove fsmc/build/
 ```
 
@@ -45,13 +67,13 @@ make clean                              # remove fsmc/build/
 |------|---------|
 | 0 | compiled successfully |
 | 1 | usage / I/O error (bad arguments, missing input file) |
-| 2 | compile error — `file:line:col: message` on stderr; **no `.fsmb` is ever emitted**, not even partially. (Also used for an invalid/corrupt `.fsmb` in `-d` disassemble mode.) |
+| 2 | compile error — `file:line:col: message` on stderr; **no `.fsmb` is ever emitted**, not even partially. (Also used for an invalid, corrupt or wrong-version `.fsmb` in `-d` disassemble mode.) |
 
 ### Try the bundled fixtures
 
 ```sh
-./bin/fsmc fsmc/tests/fixtures/minimal.fsm   # → minimal.fsmb (401 bytes, golden-pinned)
-./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (1246 bytes)
+./bin/fsmc fsmc/tests/fixtures/minimal.fsm   # → minimal.fsmb (392 bytes, golden-pinned)
+./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (1050 bytes)
 ./bin/fsmc fsmc/tests/fixtures/errors/bad_overload.fsm   # exits 2 with a diagnostic
 ```
 
@@ -62,16 +84,17 @@ fsmc/                  the compiler (CMake project)
   CMakeLists.txt       fsmc_lib + fsmc CLI + fsmc_tests, CTest wiring
   LANGUAGE.md          the full language reference (syntax of every feature)
   DESIGN.md            normative binary layout, full 179-entry function ID
-                       table, CLAIM/RELEASE encoding, scope + overload rules,
-                       and the 7 documented deviations from spec v0.3
-  lib/                 BuiltinTypes (21) / BuiltinFunctions (179) — pure data,
+                       table, retired-encoding notes, scope + overload rules,
+                       and the 9 documented deviations from spec v0.3
+  lib/                 BuiltinTypes (22) / BuiltinFunctions (179) — pure data,
                        the single source of truth for all types & functions
-  include/  src/       hand-rolled lexer, recursive-descent parser, scoping,
+  include/  src/       hand-rolled lexer, recursive-descent parser, scope-stack
+                       scoping (Start{}/Update{} phase blocks included),
                        six named compiler passes (symbols → AST → goto
                        collection → FSM adjacency → serialization → linking),
                        byte-exact two-phase serializer, module reader,
                        disassembler (-d → .fsmd)
-  tests/               11 CTest suites + fixtures (golden bytes pinned)
+  tests/               13 CTest suites + fixtures (golden bytes pinned)
 bin/fsmc               terminal driver: auto-builds the compiler once, then
                        runs it (this is what makes the g++-like workflow)
 Makefile               repo-root convenience targets (see above)

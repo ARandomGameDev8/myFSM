@@ -3,7 +3,9 @@ State A {
     Actions {
         temp int x = 1;
         {
-        } // ERROR: unexpected block
+        } // ERROR: unexpected block (directly in the Actions body)
+        Start { }
+        Update { }
     }
     Traversals {
         goto A;

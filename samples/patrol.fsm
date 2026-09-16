@@ -1,8 +1,9 @@
 // samples/patrol.fsm — a patrol AI: walks A -> B -> A forever,
 // pausing a few ticks at each waypoint.
 //
-// Shows: state-level temps (tick counter), Tier 3 navigation claims,
-// a 4-state cycle, goto to states declared later in the file.
+// Shows: the mandatory Start{}/Update{} phase blocks (issue the move order
+// once on entry, then poll), state-level temps (tick counter), Tier 3
+// navigation calls, a 4-state cycle, and goto to states declared later.
 
 const int pauseTicks = 3;
 
@@ -12,19 +13,26 @@ var Object3D     waypointB;
 
 State GoToA {
     Actions {
-        goTo(agent, waypointA);   // Tier 3: CLAIM position+velocity -> call -> RELEASE
+        Start {
+            goTo(agent, waypointA);   // Tier 3: one CALL; 'agent' must be a variable
+        }
+        Update { }                    // nothing per tick: Traversals polls arrival
     }
     Traversals {
         if (hasReachedDestination(agent, waypointA)) { goto PauseAtA; }
-        goto GoToA;               // self-loop until the destination is reached
+        goto GoToA;                   // self-loop until the destination is reached
     }
 }
 
 State PauseAtA {
-    temp int ticks = 0;           // created when PauseAtA is entered, dies on exit
+    temp int ticks = 0;               // created when PauseAtA is entered, dies on exit
     Actions {
-        stopMovement(agent);
-        ticks = ticks + 1;
+        Start {
+            stopMovement(agent);      // halt once, on entry
+        }
+        Update {
+            ticks = ticks + 1;        // count the pause ticks
+        }
     }
     Traversals {
         if (ticks >= pauseTicks) { goto GoToB; }
@@ -34,7 +42,10 @@ State PauseAtA {
 
 State GoToB {
     Actions {
-        goTo(agent, waypointB);
+        Start {
+            goTo(agent, waypointB);
+        }
+        Update { }
     }
     Traversals {
         if (hasReachedDestination(agent, waypointB)) { goto PauseAtB; }
@@ -45,8 +56,12 @@ State GoToB {
 State PauseAtB {
     temp int ticks = 0;
     Actions {
-        stopMovement(agent);
-        ticks = ticks + 1;
+        Start {
+            stopMovement(agent);
+        }
+        Update {
+            ticks = ticks + 1;
+        }
     }
     Traversals {
         if (ticks >= pauseTicks) { goto GoToA; }   // back to the start

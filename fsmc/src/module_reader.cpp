@@ -1,5 +1,6 @@
 #include "module_reader.hpp"
 
+#include <cstdio>
 #include <unordered_set>
 #include <utility>
 
@@ -62,6 +63,16 @@ uint32_t typeSizeByTag(uint8_t tag, bool& known) {
     return 0;
 }
 
+// True for tags whose values are `[4] byte length` + payload instead of a fixed
+// width (only `string`, tag 0x05, as of module v0.4). Unknown tags are not
+// variable-size — they are rejected by the caller.
+bool isVariableSizeTag(uint8_t tag) {
+    for (const TypeDefinition& t : BuiltinTypes::instance().all()) {
+        if (t.typeTag == tag) return t.isVariableSize;
+    }
+    return false;
+}
+
 bool isExprTok(uint8_t t) {
     return t == uint8_t(fmt::AstTok::FunctionCall) || t == uint8_t(fmt::AstTok::BinaryOp) ||
            t == uint8_t(fmt::AstTok::UnaryOp) || t == uint8_t(fmt::AstTok::Literal) ||
@@ -74,6 +85,8 @@ std::size_t astDataSize(uint8_t type, const std::vector<uint8_t>& head, bool& kn
         case uint8_t(fmt::AstTok::State): return 1;
         case uint8_t(fmt::AstTok::Actions):
         case uint8_t(fmt::AstTok::Traversals):
+        case uint8_t(fmt::AstTok::Start):
+        case uint8_t(fmt::AstTok::Update):
         case uint8_t(fmt::AstTok::Else): return 0;
         case uint8_t(fmt::AstTok::If):
         case uint8_t(fmt::AstTok::ElseIf): return 4;
@@ -96,6 +109,14 @@ std::size_t astDataSize(uint8_t type, const std::vector<uint8_t>& head, bool& kn
         }
         default: return 0;
     }
+}
+
+// Index of the AST token whose entry starts at `entryOffset`, or -1.
+int astIndexAtOffset(const ReadModule& m, uint32_t entryOffset) {
+    for (std::size_t k = 0; k < m.astEntryOffsets.size(); ++k) {
+        if (m.astEntryOffsets[k] == entryOffset) return int(k);
+    }
+    return -1;
 }
 
 } // namespace
@@ -124,6 +145,16 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     if (!c.u32(magic)) { err = "truncated header"; return false; }
     if (magic != fmt::kMagic) { err = "bad magic number"; return false; }
     if (!c.u16(out.major) || !c.u16(out.minor)) { err = "truncated header"; return false; }
+    // The entry layouts are version-specific (v0.2 dropped the scope-depth
+    // bytes, v0.3 the owner/dirty bytes and the CLAIM/RELEASE opcodes), so
+    // refuse anything else instead of misparsing it.
+    if (out.major != fmt::kVersionMajor || out.minor != fmt::kVersionMinor) {
+        err = "unsupported module version " + std::to_string(out.major) + "." +
+              std::to_string(out.minor) + " (this fsmc reads v" +
+              std::to_string(fmt::kVersionMajor) + "." +
+              std::to_string(fmt::kVersionMinor) + ")";
+        return false;
+    }
     for (int i = 1; i <= 7; ++i) {
         if (!c.u32(out.sectionOffsets[uint8_t(i)])) { err = "truncated header"; return false; }
     }
@@ -148,7 +179,18 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
         bool known = false;
         uint32_t sz = typeSizeByTag(g.tag, known);
         if (!known) { err = "global entry has unknown type tag"; return false; }
-        if (!c.bytes(g.value, sz)) { err = "truncated global value"; return false; }
+        if (isVariableSizeTag(g.tag)) {
+            // `string`: keep the on-disk form ([4] length + bytes) in g.value so
+            // the decoder can read it exactly like a literal token's payload.
+            uint32_t len = 0;
+            if (!c.u32(len)) { err = "truncated global value"; return false; }
+            if (len > c.b.size()) { err = "global string length out of range"; return false; }
+            for (int k = 0; k < 4; ++k) g.value.push_back(uint8_t((len >> (8 * k)) & 0xFF));
+            if (!c.bytes(g.value, len)) { err = "truncated global value"; return false; }
+        } else if (!c.bytes(g.value, sz)) {
+            err = "truncated global value";
+            return false;
+        }
         if (!c.str(g.name)) { err = "truncated global name"; return false; }
         out.globalEntryOffsets.push_back(start - off[0]);
         out.globals.push_back(std::move(g));
@@ -159,8 +201,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[2]) {
         uint32_t start = c.p;
         ReadRuntime r;
-        if (!c.u32(r.addr) || !c.u8(r.tag) || !c.u8(r.owner) || !c.u8(r.dirty) ||
-            !c.u32(r.bindingSlot)) {
+        if (!c.u32(r.addr) || !c.u8(r.tag) || !c.u32(r.bindingSlot)) {
             err = "truncated runtime entry";
             return false;
         }
@@ -177,7 +218,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[3]) {
         uint32_t start = c.p;
         ReadTemp t;
-        if (!c.u32(t.addr) || !c.u8(t.tag) || !c.u8(t.depth)) {
+        if (!c.u32(t.addr) || !c.u8(t.tag)) {
             err = "truncated temp entry";
             return false;
         }
@@ -229,7 +270,7 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
     while (c.p < off[6]) {
         uint32_t start = c.p;
         ReadAstToken t;
-        if (!c.u8(t.type) || !c.u8(t.depth)) { err = "truncated ast entry"; return false; }
+        if (!c.u8(t.type)) { err = "truncated ast entry"; return false; }
         uint16_t childCount = 0;
         if (!c.u16(childCount)) { err = "truncated ast entry"; return false; }
         for (uint16_t k = 0; k < childCount; ++k) {
@@ -265,7 +306,18 @@ bool readModule(const std::vector<uint8_t>& bytes, ReadModule& out, std::string&
                 {
                     uint32_t sz = typeSizeByTag(first, knownTag);
                     if (!knownTag) { err = "ast literal has unknown type tag"; return false; }
-                    if (!c.bytes(t.data, sz)) { err = "truncated ast literal"; return false; }
+                    if (isVariableSizeTag(first)) {
+                        // `string` literal: [4] byte length + UTF-8 bytes.
+                        uint32_t len = 0;
+                        if (!c.u32(len)) { err = "truncated ast literal"; return false; }
+                        if (len > c.b.size()) { err = "ast string literal length out of range"; return false; }
+                        for (int k = 0; k < 4; ++k)
+                            t.data.push_back(uint8_t((len >> (8 * k)) & 0xFF));
+                        if (!c.bytes(t.data, len)) { err = "truncated ast literal"; return false; }
+                    } else if (!c.bytes(t.data, sz)) {
+                        err = "truncated ast literal";
+                        return false;
+                    }
                     t.data.insert(t.data.begin(), first);
                 }
                 break;
@@ -312,6 +364,30 @@ bool validateModule(const ReadModule& m, std::string& err) {
         if (fmt::addressSection(m.globals[i].addr) != fmt::SecGlobal ||
             !inSet(m.globalEntryOffsets, fmt::addressOffset(m.globals[i].addr))) {
             err = "global entry " + std::to_string(i) + " has a malformed self-address";
+            return false;
+        }
+        // the stored value must be exactly as wide as its type says
+        bool known = false;
+        const uint32_t sz = typeSizeByTag(m.globals[i].tag, known);
+        if (!known) {
+            err = "global entry " + std::to_string(i) + " has an unknown type tag";
+            return false;
+        }
+        if (isVariableSizeTag(m.globals[i].tag)) {
+            const auto& v = m.globals[i].value;
+            if (v.size() < 4) {
+                err = "global entry " + std::to_string(i) + " has a truncated string value";
+                return false;
+            }
+            const uint32_t len = uint32_t(v[0]) | (uint32_t(v[1]) << 8) |
+                                 (uint32_t(v[2]) << 16) | (uint32_t(v[3]) << 24);
+            if (v.size() != std::size_t(4) + len) {
+                err = "global entry " + std::to_string(i) +
+                      " has a string length that does not match its payload";
+                return false;
+            }
+        } else if (m.globals[i].value.size() != sz) {
+            err = "global entry " + std::to_string(i) + " has a value of the wrong width";
             return false;
         }
     }
@@ -522,14 +598,56 @@ bool validateModule(const ReadModule& m, std::string& err) {
                 if (t.data.size() < 1) { err = "LITERAL token has malformed data"; return false; }
                 bool known = false;
                 uint32_t sz = typeSizeByTag(t.data[0], known);
-                if (!known || t.data.size() != 1 + sz) {
+                if (!known) { err = "LITERAL has an unknown type tag"; return false; }
+                if (isVariableSizeTag(t.data[0])) {
+                    // [4] byte length + payload must agree with the token's size
+                    if (t.data.size() < 5) { err = "LITERAL string is truncated"; return false; }
+                    const uint32_t len = uint32_t(t.data[1]) | (uint32_t(t.data[2]) << 8) |
+                                         (uint32_t(t.data[3]) << 16) | (uint32_t(t.data[4]) << 24);
+                    if (t.data.size() != std::size_t(5) + len) {
+                        err = "LITERAL string length does not match its payload";
+                        return false;
+                    }
+                } else if (t.data.size() != 1 + sz) {
                     err = "LITERAL size does not match its type";
                     return false;
                 }
                 break;
             }
-            case uint8_t(fmt::AstTok::Actions):
+            case uint8_t(fmt::AstTok::Actions): {
+                if (!t.data.empty()) { err = "container token has unexpected data"; return false; }
+                // v0.5: an Actions block always carries exactly one START and
+                // one UPDATE phase container among its children, START first
+                // (pre-order emission keeps them in source order).
+                int startIdx = -1;
+                int updateIdx = -1;
+                for (uint32_t c : t.children) {
+                    uint32_t off = 0;
+                    if (!m.astIndexByAddress(c, off)) continue; // reported by the child check
+                    const int idx = astIndexAtOffset(m, off);
+                    if (idx < 0) continue;
+                    const uint8_t ct = m.ast[std::size_t(idx)].type;
+                    if (ct == uint8_t(fmt::AstTok::Start)) {
+                        if (startIdx >= 0) { err = "ACTIONS has more than one START child"; return false; }
+                        startIdx = idx;
+                    } else if (ct == uint8_t(fmt::AstTok::Update)) {
+                        if (updateIdx >= 0) { err = "ACTIONS has more than one UPDATE child"; return false; }
+                        updateIdx = idx;
+                    }
+                }
+                if (startIdx < 0 || updateIdx < 0) {
+                    err = "ACTIONS token is missing its START/UPDATE phase blocks";
+                    return false;
+                }
+                if (startIdx > updateIdx) {
+                    err = "START phase block does not precede UPDATE under ACTIONS";
+                    return false;
+                }
+                break;
+            }
             case uint8_t(fmt::AstTok::Traversals):
+            case uint8_t(fmt::AstTok::Start):
+            case uint8_t(fmt::AstTok::Update):
             case uint8_t(fmt::AstTok::Else):
                 if (!t.data.empty()) { err = "container token has unexpected data"; return false; }
                 break;
@@ -587,23 +705,6 @@ bool validateModule(const ReadModule& m, std::string& err) {
                     }
                     break;
                 }
-                case fmt::OpClaim:
-                case fmt::OpRelease: {
-                    if (in.operands.size() != 2) {
-                        err = "CLAIM/RELEASE must have two operands";
-                        return false;
-                    }
-                    if (!varRefOk(in.operands[0])) {
-                        err = std::string(in.opcode == fmt::OpClaim ? "CLAIM" : "RELEASE") +
-                              " variable operand does not resolve";
-                        return false;
-                    }
-                    if (in.operands[1] > 2) {
-                        err = "CLAIM/RELEASE field index out of range";
-                        return false;
-                    }
-                    break;
-                }
                 case fmt::OpEval: {
                     if (in.operands.size() != 1) { err = "EVAL must have one operand"; return false; }
                     uint32_t off = 0;
@@ -619,9 +720,15 @@ bool validateModule(const ReadModule& m, std::string& err) {
                 case fmt::OpGreater: case fmt::OpLte: case fmt::OpGte:
                     if (in.operands.size() > 3) { err = "too many arithmetic operands"; return false; }
                     break;
-                default:
-                    err = "unknown opcode 0x" + std::to_string(in.opcode);
+                default: {
+                    // Includes the retired opcodes (0x14 CLAIM / 0x15 RELEASE,
+                    // removed in v0.3): they are never reused, so a module that
+                    // still contains one is invalid.
+                    char hex[3] = {};
+                    std::snprintf(hex, sizeof(hex), "%02X", unsigned(in.opcode));
+                    err = std::string("unknown or retired opcode 0x") + hex;
                     return false;
+                }
             }
         }
     }

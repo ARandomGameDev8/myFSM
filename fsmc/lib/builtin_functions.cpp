@@ -9,10 +9,14 @@ namespace {
 // Parameters are written as (name, type) pairs, in signature order.
 using Param = std::pair<const char*, const char*>;
 
+// The trailing `drivesTarget` flag marks the Tier 3 overloads whose first
+// argument is the object being driven (see FunctionDefinition). It replaces the
+// old per-field claim lists, which are gone from both the language and the
+// binary format; only the "first argument must be a variable" rule remains.
 FunctionDefinition mk(const char* category, const char* name, uint8_t tier,
                       uint16_t functionId, const char* returnType,
                       std::initializer_list<Param> params,
-                      std::vector<std::string> claims = {}) {
+                      bool drivesTarget = false) {
     FunctionDefinition f;
     f.category = category;
     f.name = name;
@@ -20,21 +24,12 @@ FunctionDefinition mk(const char* category, const char* name, uint8_t tier,
     f.functionId = functionId;
     f.returnType = returnType;
     for (const auto& p : params) f.params.push_back({p.first, p.second});
-    f.claims = std::move(claims);
+    f.requiresVariableTarget = drivesTarget;
     return f;
 }
 
-template <std::size_t N>
-FunctionDefinition mk(const char* category, const char* name, uint8_t tier,
-                      uint16_t functionId, const char* returnType,
-                      std::initializer_list<Param> params, const char* (&claims)[N]) {
-    return mk(category, name, tier, functionId, returnType, params,
-              std::vector<std::string>(claims, claims + N));
-}
-
-const char* kAgentPosVel[] = {"agent.position", "agent.velocity"};
-const char* kAgentPosVelRot[] = {"agent.position", "agent.velocity", "agent.rotation"};
-const char* kSrcRot[] = {"src.rotation"};
+// Tier 3 overloads that drive their first argument.
+constexpr bool kDrivesTarget = true;
 
 } // namespace
 
@@ -184,47 +179,47 @@ BuiltinFunctions::BuiltinFunctions() {
     f.push_back(mk("Navigation", "hasReachedDestination", 1, 0x0607, "bool", {{"agent", "Object3D"}, {"tgt", "Object3D"}}));
     f.push_back(mk("Navigation", "hasReachedDestination", 1, 0x0608, "bool", {{"agent", "Object2D"}, {"tgt", "Vector2"}}));
     f.push_back(mk("Navigation", "hasReachedDestination", 1, 0x0609, "bool", {{"agent", "Object2D"}, {"tgt", "Object2D"}}));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060A, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060B, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060C, "void", {{"agent", "Object3D"},   {"dest", "Vector3"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060D, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060E, "void", {{"agent", "Object2D"},   {"dest", "Vector2"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "goTo", 3, 0x060F, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "followTarget", 3, 0x0610, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "followTarget", 3, 0x0611, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object2D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "followTarget", 3, 0x0612, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "followTarget", 3, 0x0613, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0614, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Vector3"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0615, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0616, "void", {{"agent", "Object3D"},   {"tgt", "Vector3"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0617, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0618, "void", {{"agent", "Object2D"},   {"tgt", "Vector2"}},  kAgentPosVel));
-    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0619, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "follow", 3, 0x061A, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "follow", 3, 0x061B, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object2D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "follow", 3, 0x061C, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "follow", 3, 0x061D, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kAgentPosVelRot));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x061E, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"},  {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x061F, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}, {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0620, "void", {{"agent", "Object3D"},   {"dest", "Vector3"},  {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0621, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}, {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0622, "void", {{"agent", "Object2D"},   {"dest", "Vector2"},  {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0623, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}, {"speedMult", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0624, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"},  {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0625, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}, {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0626, "void", {{"agent", "Object3D"},   {"dest", "Vector3"},  {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0627, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}, {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0628, "void", {{"agent", "Object2D"},   {"dest", "Vector2"},  {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "moveTowards", 3, 0x0629, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}, {"speed", "float"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "stopMovement", 3, 0x062A, "void", {{"agent", "NavMeshAgent"}}, kAgentPosVel));
-    f.push_back(mk("Navigation", "stopMovement", 3, 0x062B, "void", {{"agent", "Object3D"}},   kAgentPosVel));
-    f.push_back(mk("Navigation", "stopMovement", 3, 0x062C, "void", {{"agent", "Object2D"}},   kAgentPosVel));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060A, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060B, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060C, "void", {{"agent", "Object3D"},   {"dest", "Vector3"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060D, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060E, "void", {{"agent", "Object2D"},   {"dest", "Vector2"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "goTo", 3, 0x060F, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "followTarget", 3, 0x0610, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "followTarget", 3, 0x0611, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "followTarget", 3, 0x0612, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "followTarget", 3, 0x0613, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0614, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Vector3"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0615, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0616, "void", {{"agent", "Object3D"},   {"tgt", "Vector3"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0617, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0618, "void", {{"agent", "Object2D"},   {"tgt", "Vector2"}},  kDrivesTarget));
+    f.push_back(mk("Navigation", "findShortestPathAndMove", 3, 0x0619, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "follow", 3, 0x061A, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "follow", 3, 0x061B, "void", {{"agent", "NavMeshAgent"}, {"tgt", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "follow", 3, 0x061C, "void", {{"agent", "Object3D"},   {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "follow", 3, 0x061D, "void", {{"agent", "Object2D"},   {"tgt", "Object2D"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x061E, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"},  {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x061F, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}, {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0620, "void", {{"agent", "Object3D"},   {"dest", "Vector3"},  {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0621, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}, {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0622, "void", {{"agent", "Object2D"},   {"dest", "Vector2"},  {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "sprintTowards", 3, 0x0623, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}, {"speedMult", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0624, "void", {{"agent", "NavMeshAgent"}, {"dest", "Vector3"},  {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0625, "void", {{"agent", "NavMeshAgent"}, {"dest", "Object3D"}, {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0626, "void", {{"agent", "Object3D"},   {"dest", "Vector3"},  {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0627, "void", {{"agent", "Object3D"},   {"dest", "Object3D"}, {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0628, "void", {{"agent", "Object2D"},   {"dest", "Vector2"},  {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "moveTowards", 3, 0x0629, "void", {{"agent", "Object2D"},   {"dest", "Object2D"}, {"speed", "float"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "stopMovement", 3, 0x062A, "void", {{"agent", "NavMeshAgent"}}, kDrivesTarget));
+    f.push_back(mk("Navigation", "stopMovement", 3, 0x062B, "void", {{"agent", "Object3D"}},   kDrivesTarget));
+    f.push_back(mk("Navigation", "stopMovement", 3, 0x062C, "void", {{"agent", "Object2D"}},   kDrivesTarget));
 
     // ------------------------------------------------------------------
     // Perception — IDs 0x0700..0x07FF
     // ------------------------------------------------------------------
-    f.push_back(mk("Perception", "lookAt", 3, 0x0700, "void", {{"src", "Object3D"}, {"tgt", "Object3D"}}, kSrcRot));
-    f.push_back(mk("Perception", "lookAt", 3, 0x0701, "void", {{"src", "Object2D"}, {"tgt", "Object2D"}}, kSrcRot));
+    f.push_back(mk("Perception", "lookAt", 3, 0x0700, "void", {{"src", "Object3D"}, {"tgt", "Object3D"}}, kDrivesTarget));
+    f.push_back(mk("Perception", "lookAt", 3, 0x0701, "void", {{"src", "Object2D"}, {"tgt", "Object2D"}}, kDrivesTarget));
     f.push_back(mk("Perception", "isInLineOfSight", 1, 0x0702, "bool", {{"src", "Object3D"}, {"tgt", "Object3D"}}));
     f.push_back(mk("Perception", "isInLineOfSight", 1, 0x0703, "bool", {{"src", "Object2D"}, {"tgt", "Object2D"}}));
     f.push_back(mk("Perception", "isInRange", 1, 0x0704, "bool", {{"src", "Object3D"}, {"tgt", "Object3D"}, {"radius", "float"}}));

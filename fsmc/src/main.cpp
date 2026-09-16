@@ -5,8 +5,8 @@
 //   fsmc -d input.fsmb [-o output.fsmd]    disassemble .fsmb -> human-readable text
 //
 // Exit codes: 0 = success (warnings allowed), 1 = usage or I/O error,
-// 2 = compile error (parse/semantic/link) or an invalid/corrupt .fsmb in
-// disassemble mode. Never emits a partial binary.
+// 2 = compile error (parse/semantic/link) or an invalid/corrupt/wrong-version
+// .fsmb in disassemble mode. Never emits a partial binary.
 
 #include <cstdio>
 #include <fstream>

@@ -36,23 +36,24 @@ link   = pass6_link(bytes)               -- reads bytes back, validates (src/mod
 ```
 
 The six passes are six distinct named functions with a visible boundary; none
-are merged. Parser-level validations (C scoping, no nested conditionals, no
-bare blocks, Traversals structure, overload resolution, operator type rules,
-Tier-2/Tier-3 semantics) run during parsing so the passes operate on a
-well-formed forest.
+are merged. Parser-level validations (C block scoping through the scope stack,
+the mandatory `Start{}` / `Update{}` phase blocks inside every `Actions`, no
+nested conditionals, no bare blocks, Traversals structure, overload resolution,
+operator type rules, Tier-2/Tier-3 semantics) run during parsing, so the passes
+operate on a well-formed forest.
 
 | Pass | Name | Boundary |
 |---|---|---|
 | 1 | `pass1_symbolTable` | names + entry state → global/state tables, resolved `isEntry` |
-| 2 | `pass2_buildAstForest` | forest + tables → temp canonical order, runtime ownership, reference integrity |
+| 2 | `pass2_buildAstForest` | forest + tables → temp canonical order, reference integrity |
 | 3 | `pass3_collectGotos` | forest → per-state ordered goto lists |
 | 4 | `pass4_buildFsmAdjacency` | goto lists + state table → adjacency matrix |
 | 5 | `pass5_serialize` | everything → bytes (two sub-passes: layout, then emit) |
-| 6 | `pass6_link` | bytes → read-back module; every address, child pointer, function id and operand must resolve |
+| 6 | `pass6_link` | bytes → read-back module; every address, child pointer, function id and operand must resolve, and every `ACTIONS` token must carry its `START`/`UPDATE` phase containers (§2.4) |
 
 ### Determinism
 
-* Single source of truth for names/IDs: `BuiltinTypes` (21 types) and
+* Single source of truth for names/IDs: `BuiltinTypes` (22 types) and
   `BuiltinFunctions` (179 overloads) — `lib/`. Every type name is resolved via
   `BuiltinTypes::find`, every function via `BuiltinFunctions::find`; no list is
   duplicated elsewhere.
@@ -60,7 +61,7 @@ well-formed forest.
   order. No timestamps, no environment input, no hash-map iteration on the
   output path (the only `unordered_map` is a name→index lookup table).
 * Output is byte-identical across runs and machines; verified by
-  `golden_bytes.minimal_module_exact_bytes` (401 pinned bytes) and
+  `golden_bytes.minimal_module_exact_bytes` (378 pinned bytes) and
   `golden_bytes.byte_identical_across_runs`.
 
 ---
@@ -76,29 +77,73 @@ memcpy, no undefined behavior). `std::vector<uint8_t>` buffers throughout.
 |---|---|---|
 | 0 | 4 | magic `0x46534D44` ("FSMD") |
 | 4 | 2 | version major `0` |
-| 6 | 2 | version minor `1` |
+| 6 | 2 | version minor `5` |
 | 8..35 | 8×4 | section start offsets: Global, Runtime, Temporary, State, Token, AST, FSM |
 
 Section offsets are absolute file offsets and always tile the file exactly:
 `36 ≤ global ≤ runtime ≤ temp ≤ state ≤ token ≤ ast ≤ fsm ≤ filesize`, with the
 FSM section ending at EOF.
 
+**v0.1 → v0.2**: the scope-depth bytes were removed — one from every Temporary
+Variable entry and one from every AST token (deviation 8).
+
+**v0.2 → v0.3**: claim/ownership encoding was removed — the `owner` and
+`dirty` bytes of every Runtime Variable entry (2 bytes × entry count) and the
+`CLAIM`/`RELEASE` instructions bracketing Tier 3 calls (deviation 4).
+
+**v0.3 → v0.4**: the `string` type (tag `0x05`) was added, and with it the
+format's first **variable-width** value. No entry layout changed shape; a
+string value simply occupies `[4] byte length` + UTF-8 bytes wherever a value
+of that type is stored (§2.2).
+
+**v0.4 → v0.5**: `Actions` gained the two mandatory phase blocks, encoded as
+two new AST **container** tokens — `START` (`0x07`) and `UPDATE` (`0x08`) —
+that hang off the state's `ACTIONS` token alongside its `TEMP_VAR_DECL`
+children (§2.4). No existing entry changed shape: the tokens carry no data, so
+each costs `[1] type [2] child-count` plus `[4]` per child, and `ACTIONS`
+simply grew by two child addresses. The Temporary, Token and instruction
+layouts are untouched, and the instruction stream stays flat and in source
+order (§2.8).
+
+The entry layouts are version-specific, so `readModule` rejects any other
+major/minor pair (`unsupported module version X.Y (this fsmc reads v0.5)`)
+instead of misparsing an older module.
+
 ### 2.2 Section IDs and entry formats
 
 | ID | Name | Contents | Entry |
 |---|---|---|---|
 | 0 | null | (unused) | — |
-| 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` |
-| 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [1] owner [1] dirty [4] binding slot [2] len [·] name` |
-| 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [1] scope depth [2] len [·] name` |
+| 1 | Global Variable | static constants | `[4] self-addr [1] type tag [N] value bytes [2] len [·] name` (`N` = the type's `sizeBytes`, or `4 + byte length` for `string`) |
+| 2 | Runtime Variable | runtime variables | `[4] self-addr [1] type tag [4] binding slot [2] len [·] name` |
+| 3 | Temporary Variable | temps (canonical order) | `[4] self-addr [1] type tag [2] len [·] name` |
 | 4 | State | state directory | `[4] count` then `[4] AST-root addr [2] len [·] name` |
 | 5 | Token / Instruction | per-state instruction frames | `[4] state-addr [2] instr-count`, then `[1] opcode [1] operand-count [4]×operand` |
-| 6 | AST Adjacency | flat token array (pre-order DFS order) | `[1] type [1] depth [2] child-count [4]×child` + type-specific data |
+| 6 | AST Adjacency | flat token array (pre-order DFS order) | `[1] type [2] child-count [4]×child` + type-specific data |
 | 7 | FSM Adjacency | adjacency list | `[4] count` then `[4] src-state-addr [2] target-count [4]×target-state-addr` |
+
+Neither the Temporary entry nor the AST token carries a scope depth: the block
+that owns a temporary is **structural** — its `TEMP_VAR_DECL` token is a child
+of the AST token of the `{ … }` body that declared it (see §6).
 
 Self-addresses are packed addresses that point back at the entry itself; the
 State entry's address field points at the state's AST root token instead (the
 state is *defined by* its AST root).
+
+**Value width.** Every type stores its value in exactly `sizeBytes` bytes —
+except `string` (tag `0x05`, added in v0.4), whose width is per value:
+
+```
+[4] byte length (little-endian, UTF-8 bytes, no terminator)  then  [length] payload
+```
+
+That encoding is used in both places a value is stored: a Global Variable
+entry's `[N] value bytes` and a `LITERAL` AST token's data after the tag byte.
+`TypeDefinition::isVariableSize` marks the type, and a reader must branch on it
+before trusting `sizeBytes` (which is `0` for `string`); `validateModule`
+additionally requires the stored length to agree with the payload it is
+followed by, in both places. Runtime and Temporary entries store no value at
+all, so a `string` variable or temp is unaffected — only its tag byte differs.
 
 ### 2.3 32-bit address packing
 
@@ -121,6 +166,8 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 | 0x04 | IF | `[4] condition expr address` |
 | 0x05 | ELSE_IF | `[4] condition expr address` |
 | 0x06 | ELSE | (none) |
+| 0x07 | START | (none) — container for the `Start{}` phase block (v0.5) |
+| 0x08 | UPDATE | (none) — container for the `Update{}` phase block (v0.5) |
 | 0x10 | FUNCTION_CALL | `[2] function id [1] arg-count [4]×arg-expr-addr` |
 | 0x11 | GOTO | `[4] state entry address` |
 | 0x12 | TEMP_VAR_DECL | `[1] type tag [4] temp entry address` |
@@ -128,14 +175,29 @@ silently wraps to section 0). With 3 bits all 8 sections fit, at the cost of a
 | 0x14 | RETURN | `[4] value expr address` — **reserved**: no source construct emits it |
 | 0x20 | BINARY_OP | `[1] op id [4] left [4] right` |
 | 0x21 | UNARY_OP | `[1] op id [4] operand` |
-| 0x22 | LITERAL | `[1] type tag [N] value bytes` (N = type size) |
+| 0x22 | LITERAL | `[1] type tag [N] value bytes` (N = type size; for `string`, `[4] byte length` + UTF-8 bytes) |
 | 0x23 | VAR_REF | `[4] variable entry address` |
 
 AST emission order is pre-order DFS: a container/statement entry comes first,
-then its condition, then its children in source order. The Token section is
-framed per state: `[4] state-addr [2] instr-count` — **documented deviation**
-from the flat-instruction-list sketch, chosen so each state's stream is
-self-locating.
+then its condition, then its children in source order. The child edges are the
+only nesting information in the module: a container token (`STATE`, `ACTIONS`,
+`START`, `UPDATE`, `TRAVERSALS`, `IF`, `ELSE_IF`, `ELSE`) *is* a `{ … }` body,
+so it is exactly one scope for temporaries.
+
+`START` and `UPDATE` are always both present, in that order, among the
+children of `ACTIONS` — the parser rejects a source that omits, reorders or
+duplicates either one (§3.2, deviation 9). An `ACTIONS` child list therefore
+reads: the body's own `TEMP_VAR_DECL` (and its initialising `ASSIGN`) tokens in
+source order, then `START`, then `UPDATE`. A phase block with no statements is
+a container with `child-count 0`; it still occupies its token, so a reader can
+tell "empty phase" from "older module" without looking at the version.
+`validateModule` (Pass 6) enforces the invariant: an `ACTIONS` token with no
+`START` child, no `UPDATE` child, two of either, or `UPDATE` before `START` is
+rejected (`ACTIONS token is missing its START/UPDATE phase blocks`, `ACTIONS has
+more than one START child`, `START phase block does not precede UPDATE under
+ACTIONS`), so a runtime can rely on the structure without re-deriving it. The Token section is framed per state:
+`[4] state-addr [2] instr-count` — **documented deviation** from the
+flat-instruction-list sketch, chosen so each state's stream is self-locating.
 
 Variable-reference addresses may point into any of the Global (section 1),
 Runtime (2) or Temporary (3) sections — the section bits identify the kind.
@@ -149,40 +211,63 @@ Runtime (2) or Temporary (3) sections — the section bits identify the kind.
 | 0x03 | OpGoto | `[state entry address]` | |
 | 0x04 | OpEval | `[AST address]` | **reserved** (evaluate, discard); never emitted |
 | 0x05–0x13 | arithmetic/comparison | 0–3 operands | reserved runtime opcodes; never emitted by the current compiler (all arithmetic lives in the AST) |
-| 0x14 | OpClaim | `[var address, field index]` | Tier 3 ownership handoff, before the call |
-| 0x15 | OpRelease | `[var address, field index]` | restores, after the call |
+| 0x14 | *(retired — was OpClaim)* | — | removed in v0.3; never reused, invalid in a module |
+| 0x15 | *(retired — was OpRelease)* | — | removed in v0.3; never reused, invalid in a module |
 
-A Tier 3 call with claims compiles to `CLAIM…; CALL; RELEASE…` — one
-CLAIM/RELEASE pair per claimed field, in claim order.
+**Every call compiles to exactly one `OpCall` at every tier.** Tier 3 used to
+be bracketed by `CLAIM…; CALL; RELEASE…`; that is gone (§2.6).
 
-### 2.6 CLAIM / RELEASE operand encoding
+### 2.6 Retired encodings (never reused)
 
-* **Operand 0** — 32-bit address of the variable bound to the call's **first
-  parameter** (the "agent"). It must be a runtime or temporary variable; the
-  parser rejects static constants, literals and call results here.
-* **Operand 1** — field index, packed as a u32:
-  `position = 0`, `velocity = 1`, `rotation = 2`.
+Removed in module v0.3 — the format no longer says anything about who owns a
+runtime variable or which of its fields a function drives:
 
-The binding is structural: every claim declared for an overload binds to the
-same first parameter, so one operand pair per field is complete.
+* `OpClaim` (0x14) / `OpRelease` (0x15), with operands
+  `[var address, field index]` where `position = 0`, `velocity = 1`,
+  `rotation = 2`.
+* The Runtime Variable entry's `owner` byte (`0x00` external / `0x01` DSL,
+  compiler-derived in Pass 2) and its `dirty` byte (always `0x00` at compile
+  time).
+
+Per the ID policy these opcode values stay retired: `readModule`/
+`validateModule` reject them as unknown opcodes, so a v0.2 module fails
+cleanly instead of being misread.
+
+What survives of the claim system is a **source-level rule only**: a Tier 3
+call that drives an object takes it as its first argument, and that argument
+must be a runtime or temporary variable — the parser rejects static constants,
+literals and call results there (§3.7). Nothing about the choice is recorded in
+the module.
 
 ### 2.7 Runtime-variable fields
 
-* `owner` — `0x00` external / `0x01` DSL. **Derived at compile time (Pass 2)**:
-  a runtime variable that is the bound argument of any Tier 3 call becomes
-  `owner = DSL` (the Controller hands the field over); everything else stays
-  `0x00`.
-* `dirty` — always `0x00` at compile time (clean).
+* `type tag` — the variable's type (§4).
 * `binding slot` — declaration order among runtime variables (0-based). This is
   the slot the Controller uses to push external values in.
 
 ### 2.8 Execution-order conventions (encoded in the streams)
 
 1. **Entry phase** — state-level temp initializers (declaration order).
-2. **Actions** — in source order.
+2. **Actions** — the `Actions` body's children **in source order**: each
+   `temp` initializer exactly where it is written, the `Start{}` statements
+   (**once, when the state is entered**) and the `Update{}` statements (**every
+   tick**). With the conventional layout — temps before the phase blocks — that
+   is: temp initializers (declaration order), then `Start{}`, then `Update{}`.
+   A `temp` written between or after the phase blocks is initialized at that
+   point in the stream instead, and is visible only from its declaration onward,
+   so a temp both phases share belongs before `Start{}`.
 3. **Traversals** — in source order; the runtime evaluates ifs in order and
    takes the first goto that fires (a trailing bare goto is the default
    transition).
+
+The per-state instruction frame is one flat list in exactly that order and
+carries no phase marker of its own: which phase an instruction belongs to is
+**structural**, recovered the same way a temp's owning block is. `OpCall`
+points at its `FUNCTION_CALL` token and `OpAssign` at its value-expression
+token; walking that token's parent edges leads to `START` or `UPDATE` (or to
+`ACTIONS` / `STATE` for a temp initializer, `TRAVERSALS` for a goto). A runtime therefore
+executes the `START` subtree on entry only, the `UPDATE` subtree every tick,
+and the temp initializers per the frame they belong to.
 
 State-level temps are legal and **user-confirmed**: initialized once on state
 entry (before Actions), destroyed on state exit, visible across the whole
@@ -203,12 +288,30 @@ State body (Actions and Traversals), *not* visible in other states.
 
 ### 3.2 Temp variables and scope (C block scoping)
 
-* `temp <T> name [= <expr>];` may appear at **depth 1** (State body), **depth 2**
-  (Actions/Traversals body) or **depth 3** (if / else-if / else body).
-* Scope stack: push frame on `{`, pop on `}`, declarations write to the top
-  frame, lookup walks top-to-bottom, shadowing allowed, redeclaration in the
-  *same* block is an error.
-* Depth is recorded in the Temporary Variable Section.
+* `temp <T> name [= <expr>];` may appear in any `{ … }` body that accepts
+  statements: the State body, the Actions body, a `Start{}` / `Update{}` phase
+  body, or an if / else-if / else body.
+* **`Actions` is split into two mandatory phase blocks** (module v0.5):
+  `Start{}` — runs once when the state is entered — and `Update{}` — runs every
+  tick. Both must be present, exactly once each, `Start{}` first, and they hold
+  *all* action statements; the only thing allowed directly in the `Actions` body
+  is a `temp` declaration, which both phases then share. The parser enforces
+  each half of that rule with its own diagnostic (`Actions must contain a
+  Start{} block …`, `Start{} must come before Update{} in the Actions body`,
+  `duplicate Update{} block in the Actions body`, `action logic must be inside
+  Start{} or Update{} …`); see LANGUAGE.md §8.
+* **Scope stack, no fixed depth levels**: push a frame on every `{`, pop it on
+  the matching `}`; declarations write to the top frame (the declaration's
+  *direct parent block*), lookup walks the open frames top-to-bottom
+  (innermost first), shadowing is allowed, redeclaration in the *same* block is
+  an error, and a name is visible only **from its declaration onward**.
+* Nothing is serialized about the scope: no depth byte in the Temporary
+  Variable Section, none on AST tokens. Ownership is the parent edge of the
+  temp's `TEMP_VAR_DECL` token (§6).
+* The two phase bodies are **sibling frames**, not nested ones: a temp declared
+  in `Start{}` is invisible in `Update{}` and vice versa, and — since `Start{}`
+  is compiled first — an `Update{}` temp cannot be referenced from `Start{}`
+  either.
 * Traversals cannot declare temps (only `if`/`goto` statements are allowed
   there).
 
@@ -240,7 +343,7 @@ Type rules (no implicit conversions anywhere):
 | Op | Rule |
 |---|---|
 | `&&` `||` | bool + bool → bool |
-| `==` `!=` | exact same type (numeric or bool) → bool; handles rejected |
+| `==` `!=` | exact same type (numeric, bool or string) → bool; handles rejected |
 | `<` `>` `<=` `>=` | numeric scalars, either promoted (int→float→double); vectors **rejected** (even same-type); bool rejected |
 | `+` `-` | same-type vectors component-wise; same-type scalars promoted; scalar `*` vector is the only mixed case |
 | `*` | same-type vectors rejected (`vector * vector` — use `dot()`); scalar × vector both orders OK; scalars promoted |
@@ -249,6 +352,8 @@ Type rules (no implicit conversions anywhere):
 | `**` | scalar numeric only; same-type stays, mixed promotes |
 | unary `!` | bool → bool |
 | unary `-` | numeric (scalars and vectors, component-wise) |
+| `+` on strings | `string` + `string` → `string` (concatenation) — the **only** arithmetic-shaped operator defined for strings; mixing a string with a number is an error, there is no conversion |
+| other ops on strings | `<` `>` `<=` `>=` `-` `*` `/` `//` `**` `&&` `||` `!` unary `-` all rejected: `'<' is not defined for strings` |
 
 * **Literals**: decimal/exponent literals default to **double**; the `f`
   suffix makes them **float**. Integers are 32-bit (out-of-range is an error).
@@ -256,8 +361,11 @@ Type rules (no implicit conversions anywhere):
   `Vector3(1.0f, 2.0f, 3.0f)` — components must be constant float expressions
   (earlier `const` values allowed). Wrong arity or non-constant components are
   errors. Vectors have no runtime constructor.
-* **String literals** are lexed (so they can be diagnosed precisely) but are a
-  compile error: `string literals are not supported`.
+* **String literals** (`"…"`, escapes `\n \t \r \" \\`) are full
+  expressions of type `string`: they may initialize a `const` or a `temp`, be
+  assigned to a runtime `var`, appear in conditions, and be concatenated.
+  Constant concatenation is folded at compile time (`"he" + "llo"` emits one
+  literal); a runtime operand emits a `BINARY_OP` with `OpPlus`.
 
 ### 3.6 Overload resolution (spec 0.4)
 
@@ -274,7 +382,7 @@ Type rules (no implicit conversions anywhere):
    error, same candidate list.
 
 Tier 2: the mutating argument (first parameter) cannot be a static constant.
-Tier 3: see claims above.
+Tier 3: the driven object (first parameter) must be a variable — see §3.7.
 
 ### 3.7 Tiers
 
@@ -282,12 +390,16 @@ Tier 3: see claims above.
 * **Tier 2** — mutation of engine state; statement level; first argument is
   the mutated handle (must be a runtime variable or temp).
 * **Tier 3** — Controller-driven (navigation/steering/control). Statement
-  level only; first argument must be a variable; claims emit
-  CLAIM/CALL/RELEASE. `wait` / `waitUntil` are Tier 3 with no claims.
+  level only; compiles to one `OpCall` like every other call. The overloads
+  that drive an object (`goTo`, `followTarget`, `findShortestPathAndMove`,
+  `follow`, `sprintTowards`, `moveTowards`, `stopMovement`, `lookAt`) take it
+  as their first argument, which must therefore be a runtime variable or a
+  temp (`requiresVariableTarget` in the registry). `wait` / `waitUntil` are
+  Tier 3 but drive no object, so any expression is accepted.
 
 ---
 
-## 4. Type registry (`BuiltinTypes`, 21 entries)
+## 4. Type registry (`BuiltinTypes`, 22 entries)
 
 | Name | Tag | Bytes | Kind |
 |---|---|---|---|
@@ -296,6 +408,7 @@ Tier 3: see claims above.
 | float | 0x02 | 4 | primitive, numeric |
 | double | 0x03 | 8 | primitive, numeric |
 | bool | 0x04 | 1 | primitive |
+| string | 0x05 | variable | primitive, **variable width**: `[4] byte length` + UTF-8 bytes |
 | Vector2 | 0x10 | 8 | vector, numeric |
 | Vector3 | 0x11 | 12 | vector, numeric |
 | Quaternion | 0x12 | 16 | vector, numeric |
@@ -303,8 +416,8 @@ Tier 3: see claims above.
 | Transform2D / Transform3D | 0x22 / 0x23 | 4 | object (handle) |
 | Camera2D / Camera3D | 0x30 / 0x31 | 4 | camera (handle) |
 | Sprite2D / Sprite3D | 0x40 / 0x41 | 4 | sprite (handle) |
-| AnimationController2D / 3D | 0x50 / 0x51 | 4 | animation (handle) |
-| PhysicsObject2D / 3D | 0x60 / 0x61 | 4 | physics (handle) |
+| AnimationController2D / AnimationController3D | 0x50 / 0x51 | 4 | animation (handle) |
+| PhysicsObject2D / PhysicsObject3D | 0x60 / 0x61 | 4 | physics (handle) |
 | NavMeshAgent | 0x70 | 4 | navigation (handle) |
 
 Every type reference in the compiler goes through
@@ -454,43 +567,43 @@ Full ID table (name, id, tier, signature → return):
 | 0x0607 | hasReachedDestination | 1 | (Object3D agent, Object3D tgt) → bool |
 | 0x0608 | hasReachedDestination | 1 | (Object2D agent, Vector2 tgt) → bool |
 | 0x0609 | hasReachedDestination | 1 | (Object2D agent, Object2D tgt) → bool |
-| 0x060A | goTo | 3 | (NavMeshAgent agent, Vector3 dest) → void — claims agent.position, agent.velocity |
-| 0x060B | goTo | 3 | (NavMeshAgent agent, Object3D dest) → void — claims agent.position, agent.velocity |
-| 0x060C | goTo | 3 | (Object3D agent, Vector3 dest) → void — claims agent.position, agent.velocity |
-| 0x060D | goTo | 3 | (Object3D agent, Object3D dest) → void — claims agent.position, agent.velocity |
-| 0x060E | goTo | 3 | (Object2D agent, Vector2 dest) → void — claims agent.position, agent.velocity |
-| 0x060F | goTo | 3 | (Object2D agent, Object2D dest) → void — claims agent.position, agent.velocity |
-| 0x0610 | followTarget | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0611 | followTarget | 3 | (NavMeshAgent agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0612 | followTarget | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0613 | followTarget | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x0614 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Vector3 tgt) → void — claims agent.position, agent.velocity |
-| 0x0615 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity |
-| 0x0616 | findShortestPathAndMove | 3 | (Object3D agent, Vector3 tgt) → void — claims agent.position, agent.velocity |
-| 0x0617 | findShortestPathAndMove | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity |
-| 0x0618 | findShortestPathAndMove | 3 | (Object2D agent, Vector2 tgt) → void — claims agent.position, agent.velocity |
-| 0x0619 | findShortestPathAndMove | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity |
-| 0x061A | follow | 3 | (NavMeshAgent agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061B | follow | 3 | (NavMeshAgent agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061C | follow | 3 | (Object3D agent, Object3D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061D | follow | 3 | (Object2D agent, Object2D tgt) → void — claims agent.position, agent.velocity, agent.rotation |
-| 0x061E | sprintTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x061F | sprintTowards | 3 | (NavMeshAgent agent, Object3D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0620 | sprintTowards | 3 | (Object3D agent, Vector3 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0621 | sprintTowards | 3 | (Object3D agent, Object3D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0622 | sprintTowards | 3 | (Object2D agent, Vector2 dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0623 | sprintTowards | 3 | (Object2D agent, Object2D dest, float speedMult) → void — claims agent.position, agent.velocity |
-| 0x0624 | moveTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0625 | moveTowards | 3 | (NavMeshAgent agent, Object3D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0626 | moveTowards | 3 | (Object3D agent, Vector3 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0627 | moveTowards | 3 | (Object3D agent, Object3D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0628 | moveTowards | 3 | (Object2D agent, Vector2 dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x0629 | moveTowards | 3 | (Object2D agent, Object2D dest, float speed) → void — claims agent.position, agent.velocity |
-| 0x062A | stopMovement | 3 | (NavMeshAgent agent) → void — claims agent.position, agent.velocity |
-| 0x062B | stopMovement | 3 | (Object3D agent) → void — claims agent.position, agent.velocity |
-| 0x062C | stopMovement | 3 | (Object2D agent) → void — claims agent.position, agent.velocity |
-| 0x0700 | lookAt | 3 | (Object3D src, Object3D tgt) → void — claims src.rotation |
-| 0x0701 | lookAt | 3 | (Object2D src, Object2D tgt) → void — claims src.rotation |
+| 0x060A | goTo | 3 | (NavMeshAgent agent, Vector3 dest) → void — drives `agent` |
+| 0x060B | goTo | 3 | (NavMeshAgent agent, Object3D dest) → void — drives `agent` |
+| 0x060C | goTo | 3 | (Object3D agent, Vector3 dest) → void — drives `agent` |
+| 0x060D | goTo | 3 | (Object3D agent, Object3D dest) → void — drives `agent` |
+| 0x060E | goTo | 3 | (Object2D agent, Vector2 dest) → void — drives `agent` |
+| 0x060F | goTo | 3 | (Object2D agent, Object2D dest) → void — drives `agent` |
+| 0x0610 | followTarget | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x0611 | followTarget | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
+| 0x0612 | followTarget | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x0613 | followTarget | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x0614 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Vector3 tgt) → void — drives `agent` |
+| 0x0615 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x0616 | findShortestPathAndMove | 3 | (Object3D agent, Vector3 tgt) → void — drives `agent` |
+| 0x0617 | findShortestPathAndMove | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x0618 | findShortestPathAndMove | 3 | (Object2D agent, Vector2 tgt) → void — drives `agent` |
+| 0x0619 | findShortestPathAndMove | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x061A | follow | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
+| 0x061B | follow | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
+| 0x061C | follow | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
+| 0x061D | follow | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
+| 0x061E | sprintTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speedMult) → void — drives `agent` |
+| 0x061F | sprintTowards | 3 | (NavMeshAgent agent, Object3D dest, float speedMult) → void — drives `agent` |
+| 0x0620 | sprintTowards | 3 | (Object3D agent, Vector3 dest, float speedMult) → void — drives `agent` |
+| 0x0621 | sprintTowards | 3 | (Object3D agent, Object3D dest, float speedMult) → void — drives `agent` |
+| 0x0622 | sprintTowards | 3 | (Object2D agent, Vector2 dest, float speedMult) → void — drives `agent` |
+| 0x0623 | sprintTowards | 3 | (Object2D agent, Object2D dest, float speedMult) → void — drives `agent` |
+| 0x0624 | moveTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speed) → void — drives `agent` |
+| 0x0625 | moveTowards | 3 | (NavMeshAgent agent, Object3D dest, float speed) → void — drives `agent` |
+| 0x0626 | moveTowards | 3 | (Object3D agent, Vector3 dest, float speed) → void — drives `agent` |
+| 0x0627 | moveTowards | 3 | (Object3D agent, Object3D dest, float speed) → void — drives `agent` |
+| 0x0628 | moveTowards | 3 | (Object2D agent, Vector2 dest, float speed) → void — drives `agent` |
+| 0x0629 | moveTowards | 3 | (Object2D agent, Object2D dest, float speed) → void — drives `agent` |
+| 0x062A | stopMovement | 3 | (NavMeshAgent agent) → void — drives `agent` |
+| 0x062B | stopMovement | 3 | (Object3D agent) → void — drives `agent` |
+| 0x062C | stopMovement | 3 | (Object2D agent) → void — drives `agent` |
+| 0x0700 | lookAt | 3 | (Object3D src, Object3D tgt) → void — drives `src` |
+| 0x0701 | lookAt | 3 | (Object2D src, Object2D tgt) → void — drives `src` |
 | 0x0702 | isInLineOfSight | 1 | (Object3D src, Object3D tgt) → bool |
 | 0x0703 | isInLineOfSight | 1 | (Object2D src, Object2D tgt) → bool |
 | 0x0704 | isInRange | 1 | (Object3D src, Object3D tgt, float radius) → bool |
@@ -515,8 +628,8 @@ Full ID table (name, id, tier, signature → return):
 | 0x0809 | getWanderVector | 1 | (Vector2 pos, float radius) → Vector2 |
 | 0x0900 | getRaycastHit | 1 | (Vector3 origin, Vector3 dir, float dist) → Object3D |
 | 0x0901 | getRaycastHit | 1 | (Vector2 origin, Vector2 dir, float dist) → Object2D |
-| 0x0A00 | wait | 3 | (float seconds) → void — no claims |
-| 0x0A01 | waitUntil | 3 | (bool condition) → void — no claims |
+| 0x0A00 | wait | 3 | (float seconds) → void |
+| 0x0A01 | waitUntil | 3 | (bool condition) → void |
 | 0x0A02 | emit | 2 | (int eventId) → void |
 
 ### ID stability policy
@@ -527,25 +640,50 @@ Full ID table (name, id, tier, signature → return):
 * The category base + range bounds above are part of the module ABI: readers
   may reject out-of-range IDs.
 * `lib_functions` tests enforce: 179 overloads, unique IDs, reachability by
-  name, per-category sequential layout, and claim tables.
+  name, per-category sequential layout, and the per-overload
+  `requiresVariableTarget` flags (37 Tier 3 overloads set, `wait`/`waitUntil`
+  and every Tier 1/2 clear).
+
+In the table above, "drives `X`" marks a Tier 3 overload whose first parameter
+is the object it drives: the source must pass a runtime variable or a temp
+there. It is a parse-time rule; no byte of the module records it.
 
 ---
 
-## 6. Scope-depth convention
+## 6. Scope model (scope stack, no depth levels)
 
-Depth is recorded per temp in the Temporary Variable Section and on AST
-tokens:
+Scoping is C block scoping implemented as a pure scope stack (`include/scope.hpp`):
+one frame per `{ … }` body, pushed on `{` and popped — with all of its
+declarations discarded — on the matching `}`. A frame has an id (handed out on
+push, never reused); a `temp` records the id of the frame it was declared in
+(`TempVar::scopeId`) as internal bookkeeping, and lookup resolves innermost
+frame first. There is **no cap on the number of open frames and no numbered
+depth level anywhere** — not in the AST (`Stmt` / `TempVar` have no depth
+field), not in the binary (§2.2).
 
-| Depth | Block | Lifetime |
-|---|---|---|
-| 1 | State body (direct `temp` in `State { … }`) | created once on state entry, destroyed on state exit, visible in Actions **and** Traversals |
-| 2 | Actions / Traversals body | created when the block runs each tick, destroyed at block end |
-| 3 | if / else-if / else body | created while the branch is active, destroyed at branch end |
+Block lifetimes at runtime:
 
-Rules: temps only inside `{ … }` bodies (file-level `temp` is an error); C
-scope stack (push `{`, pop `}`, top-frame lookup, shadowing allowed,
-same-block redeclaration is an error); a temp declared in an inner block is
-not visible after the block closes (compile error).
+| Block (AST token) | Lifetime of the temps declared in it |
+|---|---|
+| State body (`STATE`) | created once on state entry, destroyed on state exit; visible in Actions **and** Traversals, and in every block nested inside the state body |
+| Actions body (`ACTIONS`) | created when the block runs each tick, destroyed at block end; visible in **both** phase blocks |
+| `Start{}` body (`START`) | created when the entry phase runs, destroyed when it finishes; not visible in `Update{}` or in Traversals |
+| `Update{}` body (`UPDATE`) | created when that tick's phase runs, destroyed when it finishes; not visible in `Start{}` (which already ran) or in Traversals |
+| Traversals body (`TRAVERSALS`) | (no temps are allowed here) |
+| if / else-if / else body (`IF` / `ELSE_IF` / `ELSE`) | created while that branch is active, destroyed at branch end; each branch of a chain is its own frame |
+
+Rules: temps only inside `{ … }` bodies (file-level `temp` is an error); a name
+is visible from its declaration to the end of its block, including in nested
+blocks (where it may be shadowed); same-block redeclaration is an error; a use
+outside the declaring block — after it closed, in a sibling branch, or before
+the declaration — is `unknown variable 'x'`.
+
+**Ownership is structural.** Because a temp's scope is exactly the block whose
+child its declaration is, a reader recovers the scope of any temporary from the
+AST alone: walk a state's tree and remember the nearest enclosing container
+token (`STATE` / `ACTIONS` / `START` / `UPDATE` / `TRAVERSALS` / `IF` /
+`ELSE_IF` / `ELSE`) of each `TEMP_VAR_DECL`. `fsmc -d` does exactly that and prints it as the temp's
+`scope` (the disassembler's `tempScope` map).
 
 ---
 
@@ -574,21 +712,56 @@ signature; >1 match → ambiguous error, same list.
    i.e. `NavMeshAgent` (a 3D-only type) is not paired with `Object2D`. This
    keeps Navigation at 45 overloads (0x0600–0x062C) and mirrors the
    `hasReachedDestination`/`followTarget`/`follow` overload shapes.
-4. **Runtime `owner` byte is compiler-derived** (Pass 2) instead of
-   hand-set: any runtime variable that is the bound argument of a Tier 3
-   call is emitted with `owner = 0x01` (DSL); all others `0x00`.
+4. **Runtime-variable ownership is not encoded at all** (module v0.3). The
+   spec's handoff — an `owner` byte per runtime variable plus `CLAIM`/
+   `RELEASE` instructions around Tier 3 calls — was dropped: the DSL makes no
+   statement about who owns a variable or which fields a function touches, so
+   Pass 2 has nothing to derive and a call is a single `OpCall`. What remains
+   is the source-level rule that a Tier 3 call's driven first argument must be
+   a variable (§2.6, §3.7).
 5. **`//` (floor division) vs `//` (line comment)** are disambiguated by
-   lexer context, as in C-like languages needing both: `//` is floor
-   division only when it directly follows a value token (digit, letter, `)`,
-   `]`, `"` — no intervening whitespace or newline); otherwise it starts a
-   line comment. `x; // c` is a comment; `7 // 2` is floor division.
-6. **String literals** are lexed and diagnosed precisely ("string literals
-   are not supported") rather than failing as generic unexpected tokens, so
-   `setAnimation(ctrl, "run")` produces an actionable message. The `String`
-   type is reserved (no registry entry).
-7. **State-level temps are legal** (depth 1) — initialized once on state
-   entry, destroyed on state exit — per the user-confirmed correction to the
-   draft's "no temp vars at State level" wording.
+   lexer context, as in C-like languages needing both: `//` is floor division
+   when the **last significant character** is a value character (digit, letter,
+   `)`, `]`, closing `"`) — intervening whitespace does *not* break the value
+   run, only a newline or a non-value token does; otherwise it starts a line
+   comment. So `x; // c` is a comment and `7 // 2` is floor division, while
+   `@ENTRY Idle // the start` is *not* a comment (`Idle` is a value character
+   run and `@ENTRY` takes no `;`): the parser reports the unexpected `'//'` and
+   appends the rule as a hint (`Parser::slashSlashHint`).
+6. **`string` is a first-class but deliberately narrow type** (module v0.4).
+   The draft reserved it and rejected every literal; it is now registered as
+   tag `0x05` and usable in constants, runtime variables, temps, conditions
+   and assignments, with `+` (concatenation) and `==` / `!=` as its only
+   operators. Two things the draft did not settle are decided here: (a) the
+   spelling is lowercase `string`, matching the other primitives — `String`
+   remains an unknown type name; (b) **no built-in function takes a string**,
+   so the 179-entry registry is untouched and a string can only reach the
+   engine through a runtime variable's binding slot. Because a string's width
+   is per value, `TypeDefinition` gained an `isVariableSize` flag and every
+   reader branches on it before trusting `sizeBytes` (§2.2).
+7. **State-level temps are legal** (declared in the State body's own scope
+   frame) — initialized once on state entry, destroyed on state exit — per the
+   user-confirmed correction to the draft's "no temp vars at State level"
+   wording.
+8. **No scope-depth field** (module v0.2). The draft's `[1] scope depth` byte
+   in the Temporary Variable Section and the `[1] depth` byte on every AST
+   token assumed three fixed depth levels (State body / block body / if body).
+   Temporaries are C block-scoped through a scope stack instead: a temp lives
+   in its direct parent `{ … }` and dies at that block's `}`, at any nesting
+   level, so a fixed level cannot describe it — and the nesting is already
+   encoded by the AST child edges. Both bytes were dropped (the format minor
+   version was bumped 1 → 2); the owning block of a temp is recovered from the
+   AST parent edge (§6).
+9. **`Actions` requires a `Start{}` and an `Update{}` block** (module v0.5).
+   The draft put all action statements directly in the `Actions` body and left
+   the entry-once / every-tick split to the runtime's discretion. Per the
+   user-confirmed change, the split is now part of the language: both blocks are
+   mandatory, `Start{}` comes first, each appears exactly once, and only `temp`
+   declarations may sit directly in the `Actions` body (shared by both phases).
+   Encoded as two new AST container tokens, `START` (`0x07`) and `UPDATE`
+   (`0x08`), under `ACTIONS` — the instruction frame layout and every other
+   entry are unchanged, so the format minor version was bumped 4 → 5 (§2.1,
+   §2.4, §2.8).
 
 ---
 
@@ -598,18 +771,25 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 
 | Suite | Covers |
 |---|---|
-| `lib_types` | 21 types, name reachability, tag uniqueness, spec table |
-| `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, claim tables |
-| `lexer` | keywords (case-sensitive), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
+| `lib_types` | 22 types, name reachability, tag uniqueness, spec table (incl. `string` at 0x05 and `String` still unknown) |
+| `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, Tier-3 `requiresVariableTarget` flags |
+| `lexer` | keywords (case-sensitive, `Start`/`Update` included — and `Startx`/`xUpdate` staying identifiers), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
-| `scope` | in/out of scope, shadowing, same-block redeclaration, state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection |
-| `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 first-argument-must-be-variable, nested-call type propagation |
+| `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
+| `phases` | the `Start{}`/`Update{}` rule set end to end: both blocks mandatory (and the two diagnostics when neither is present), each exactly once, `Start{}` first, empty phases allowed, every non-`temp` statement rejected directly in the `Actions` body (call / assignment / `if` / `goto`), `temp` declarations allowed there and visible in both phases, phase bodies as sibling frames (a `Start{}` temp unknown in `Update{}` and vice versa, one name reusable in both), `Start`/`Update` reserved as identifiers, `START`/`UPDATE` as `ACTIONS` children in the AST with no data and per-phase child lists, instruction order `Start` before `Update` (including a `temp` written between the phases, which keeps its source position in both the AST and the instruction stream), nested phase blocks rejected, a temp declared after a phase block invisible inside it, disassembly phase labels, the two `errors/` phase fixtures, validation rejecting a module that lost a phase container, and every fixture declaring both blocks |
+| `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
-| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, Tier-3 owner promotion, round-trip read-back & compare, corruption rejection, determinism |
-| `golden_bytes` | **pinned 401-byte module** for `tests/fixtures/minimal.fsm` (hand-verified), header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
-| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), claim field names, decoded literals (scalars + vectors), corrupted/truncated module rejection, deterministic dump output |
+| `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token — `STATE`, `ACTIONS` or `IF`), round-trip read-back & compare, corruption rejection, determinism |
+| `golden_bytes` | **pinned 392-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.5 adds the `START`/`UPDATE` container tokens to v0.4's 378 bytes), module version pinned to v0.5 + rejection of v0.1–v0.4 by name, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |
+| `strings` | the `string` type end to end: registry entry, literals as expressions, lexer escape decoding, folded constant concatenation, runtime `BINARY_OP` concatenation, `==`/`!=` yielding bool, every rejected operator, type mismatches, `String` still unknown, length-prefixed bytes in the Global section and in LITERAL tokens, fixture round-trip + validation, quoted/re-escaped disassembly, corrupt-length rejection |
+| `disassemble` | `-d` path: read+validate fixtures, name resolution (states/vars/functions), absence of the claim/ownership vocabulary, decoded literals (scalars + vectors), the temps' owning-block column (recovered from the AST parent edge), the `START (runs once, on state entry)` / `UPDATE (runs every tick)` phase labels, corrupted/truncated/wrong-version module rejection, deterministic dump output |
 
-Fixtures: `tests/fixtures/minimal.fsm`, `tests/fixtures/two_state.fsm`
-(if/else-if/else, temps at all three depths, Traversals with two ifs + bare
-default goto, Tier 3 claims), and `tests/fixtures/errors/*.fsm` (one file per
-major error class).
+Every fixture and every `samples/*.fsm` file declares both phase blocks.
+
+Fixtures: `tests/fixtures/minimal.fsm` (one state, a self-loop, an `Actions`-body
+temp and an empty `Start{}`), `tests/fixtures/two_state.fsm` (if/else-if/else,
+temps in the state body / Actions body / if body, a seeding `Start{}`, Traversals
+with two ifs + bare default goto, Tier 3 driving calls),
+`tests/fixtures/strings.fsm` (string constants + folding, a runtime string,
+string temps, escapes, comparisons driving transitions), and
+`tests/fixtures/errors/*.fsm` (one file per major error class).

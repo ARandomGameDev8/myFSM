@@ -12,8 +12,8 @@ namespace fsmc::lex {
 enum class Tok {
     End,
     // keywords (case-sensitive)
-    KwState, KwActions, KwTraversals, KwIf, KwElse, KwGoto, KwTemp, KwConst,
-    KwVar, KwReturn, KwTrue, KwFalse,
+    KwState, KwActions, KwStart, KwUpdate, KwTraversals, KwIf, KwElse, KwGoto,
+    KwTemp, KwConst, KwVar, KwReturn, KwTrue, KwFalse,
     Entry, // @ENTRY
     // literals / identifiers
     Ident, IntLit, FloatLit, DoubleLit, StringLit,

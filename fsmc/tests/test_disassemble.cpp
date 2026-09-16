@@ -37,7 +37,7 @@ TEST(disassemble, minimal_module_resolves_names_and_decodes_values) {
     ASSERT_TRUE(t.find("FSM ADJACENCY") != std::string::npos);
 }
 
-TEST(disassemble, two_state_shows_claims_calls_and_literals) {
+TEST(disassemble, two_state_shows_calls_without_claims_or_ownership) {
     auto r = compileFixture("two_state.fsm");
     ASSERT_TRUE(r.ok);
     ReadModule mod;
@@ -45,25 +45,38 @@ TEST(disassemble, two_state_shows_claims_calls_and_literals) {
     ASSERT_TRUE(parseAndValidate(r, mod, err));
 
     const std::string t = disassemble(mod, "two_state.fsmb", true);
-    ASSERT_TRUE(t.find("CLAIM") != std::string::npos);
-    ASSERT_TRUE(t.find("RELEASE") != std::string::npos);
-    ASSERT_TRUE(t.find("position") != std::string::npos);  // claim field names
-    ASSERT_TRUE(t.find("velocity") != std::string::npos);
-    ASSERT_TRUE(t.find("rotation") != std::string::npos);  // followTarget claims rotation
+    ASSERT_TRUE(t.find("fsmb v0.5") != std::string::npos); // banner shows the format version
+    // calls survive, with their resolved function ids
+    ASSERT_TRUE(t.find("CALL") != std::string::npos);
     ASSERT_TRUE(t.find("moveTowards") != std::string::npos);
     ASSERT_TRUE(t.find("followTarget") != std::string::npos);
     ASSERT_TRUE(t.find("stopMovement") != std::string::npos);
-    // call arguments must be resolved to variable names
-    ASSERT_TRUE(t.find("moveTowards(agent, dir, 5f)") != std::string::npos);
-    ASSERT_TRUE(t.find("followTarget(agent, enemy)") != std::string::npos);
-    ASSERT_TRUE(t.find("Chase") != std::string::npos);
-    ASSERT_TRUE(t.find("Flee") != std::string::npos);
-    ASSERT_TRUE(t.find("99") != std::string::npos);   // decoded literal 99.0f
-    ASSERT_TRUE(t.find("Vector3") != std::string::npos); // temp type name decoded
-    // runtime vars are listed with binding slots
-    ASSERT_TRUE(t.find("RUNTIME VARIABLES") != std::string::npos);
-    ASSERT_TRUE(t.find("player") != std::string::npos);
-    ASSERT_TRUE(t.find("slot") != std::string::npos);
+    // ... but the claim/ownership vocabulary is gone from the dump entirely
+    ASSERT_TRUE(t.find("CLAIM") == std::string::npos);
+    ASSERT_TRUE(t.find("RELEASE") == std::string::npos);
+    ASSERT_TRUE(t.find("owner=") == std::string::npos);
+    ASSERT_TRUE(t.find("DIRTY") == std::string::npos);
+    // runtime variables are listed as type + binding slot only
+    ASSERT_TRUE(t.find("SECTION [2] RUNTIME VARIABLES (4)") != std::string::npos);
+    ASSERT_TRUE(t.find("slot 2") != std::string::npos); // agent
+}
+
+// The Temporary section has no depth column any more: each temp is listed with
+// the block that owns it, recovered from the AST parent edge of its
+// TEMP_VAR_DECL token.
+TEST(disassemble, temps_are_listed_with_their_owning_block) {
+    auto r = compileFixture("two_state.fsm");
+    ASSERT_TRUE(r.ok);
+    ReadModule mod;
+    std::string err;
+    ASSERT_TRUE(parseAndValidate(r, mod, err));
+
+    const std::string t = disassemble(mod, "two_state.fsmb", true);
+    ASSERT_TRUE(t.find("scope state body") != std::string::npos); // lastDist
+    ASSERT_TRUE(t.find("scope Actions") != std::string::npos);    // dist, away
+    ASSERT_TRUE(t.find("scope if body") != std::string::npos);    // dir
+    ASSERT_TRUE(t.find("depth") == std::string::npos);            // no depth anywhere
+    ASSERT_TRUE(t.find("state: Chase") != std::string::npos);
 }
 
 TEST(disassemble, vector_literals_are_decoded_to_values) {
@@ -71,7 +84,7 @@ TEST(disassemble, vector_literals_are_decoded_to_values) {
         "const Vector3 origin = Vector3(1.5f, -2.5f, 0.0f);\n"
         "var Vector3 pos;\n"
         "State A {\n"
-        "    Actions { pos = origin; }\n"
+        "    Actions { Start { } Update { pos = origin; } }\n"
         "    Traversals { goto A; }\n"
         "}\n"
         "@ENTRY A\n",

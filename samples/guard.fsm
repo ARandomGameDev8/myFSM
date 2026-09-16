@@ -3,8 +3,8 @@
 // range and in line of sight.
 //
 // Shows: bool temps, && / !, an else-if chain, Tier 2 mutation functions
-// (setAnimation / setVisible / emit / setVelocity-adjacent), and a
-// degenerate state (Deregistered) that only has Actions.
+// (setAnimation / setVisible / emit), a Start{} that resets the guard's visuals
+// on entry, and a teardown state whose whole job is one Start{} block.
 
 const float fireRange = 10.0f;
 
@@ -20,18 +20,24 @@ State Guard {
         temp float dist   = getDistanceTo(guard, intruder);
         temp bool canFire = isInLineOfSight(guard, intruder) && dist <= fireRange;
 
-        if (canFire) {
-            lookAt(guard, intruder);
-            emit(shotEventId);           // Tier 2: raise an engine event
-            setVisible(guardLight, true);
-            setAnimation(guardAnim, 1);  // clip 1 = 'fire'
-            wasFiring = true;
-        } else if (dist <= fireRange * 2.0f) {
-            lookAt(guard, intruder);
-            play(guardAnim);             // back to idle loop
-            wasFiring = false;
-        } else {
-            wasFiring = false;
+        Start {
+            play(guardAnim);             // idle loop on entry
+            setVisible(guardLight, false);
+        }
+        Update {
+            if (canFire) {
+                lookAt(guard, intruder);
+                emit(shotEventId);           // Tier 2: raise an engine event
+                setVisible(guardLight, true);
+                setAnimation(guardAnim, 1);  // clip 1 = 'fire'
+                wasFiring = true;
+            } else if (dist <= fireRange * 2.0f) {
+                lookAt(guard, intruder);
+                play(guardAnim);             // back to idle loop
+                wasFiring = false;
+            } else {
+                wasFiring = false;
+            }
         }
     }
     Traversals {
@@ -42,8 +48,11 @@ State Guard {
 
 State Deregistered {
     Actions {
-        stop(guardAnim);
-        setVisible(guardLight, false);
+        Start {
+            stop(guardAnim);             // teardown once, on entry
+            setVisible(guardLight, false);
+        }
+        Update { }                       // nothing to do until the intruder returns
     }
     Traversals {
         if (isActive(intruder)) { goto Guard; }
