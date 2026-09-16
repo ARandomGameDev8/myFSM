@@ -30,6 +30,74 @@ while (cli.TryTakeResponse(out r))
 `ResponseCount`, and `TryTakeResponse`. Every response echoes the request's
 `Sequence`/`ClientId` so you can match them.
 
+## Request pipeline: what a request goes through
+
+Three structures, three caps. Requests always live *inside their client* —
+the server queues only move client IDs around.
+
+| Structure | Holds | Cap | Grows/shrinks |
+|---|---|---|---|
+| `QueryClient` (id + name) | `_internal` FIFO + `_pending` buffer (inbound), `_responses` (outbound) | **15** inbound (`internal + pending` combined); responses uncapped | No — fixed per client |
+| Ready scheduler (`_ready`) | Client IDs currently being served | **N**, adaptive **8–20** (starts 15) | Yes — ±2 per tick |
+| Long-term queue (`_longTerm`) | Unique waiting client IDs (+ a wait-start stamp each) | **64** clients | Yes — heads leave on refill, tails join on enqueue |
+
+Client IDs are ints assigned 1, 2, 3… at `RegisterClient`; registration is
+permanent (there is no unregister — a client object lives as long as the
+server). A client sits in at most one place: it joins the long-term tail
+only if it is in neither queue, and refill moves (not copies) it to ready.
+
+### Submit: `Enqueue(clientId, req)` runs five gates
+
+0. **Unknown id** → returns `false` silently (nothing queued, no response).
+1. **New client + long-term full (64)** → stamps the request, pushes an
+   immediate `server congested: long-term queue is full` failure, returns
+   `false`. The request is never half-queued.
+2. **Stamp** — the server fills `Sequence` (global 1, 2, 3…), `ClientId`,
+   `EnqueuedTick`. You never set those.
+3. **Near/far split** — if the sender *is* the client being served right now,
+   the request lands in `_pending` and waits a tick (slices can never
+   recurse); otherwise it joins `_internal` immediately and may run later in
+   the *same* tick if your slice hasn't run yet.
+4. **Client cap** — `internal + pending ≥ 15` → immediate
+   `client queue is capped at 15; retry when drained` failure, `false`.
+5. **Track** — if the client wasn't already ready or waiting, its id joins
+   the long-term tail (uniqueness enforced).
+
+Accepted (`true`) means: queued, and a response *will* come — success,
+backend failure, or starvation eviction.
+
+### Serve: one `Tick()` per frame, six phases
+
+Short version (`Scheduling, step by step` below has the details):
+
+1. **Flush** every client's `_pending` into its `_internal`.
+2. **Adapt N**: congested (`waiting > N`) → N += 2 (max 20); idle (nobody
+   waiting, ready < 15) → N −= 2 (min 8).
+3. **Mark** the shrink tail: ready entries past N get at most M this round.
+4. **Serve** each ready client once, round-robin from a rotating cursor, up
+   to M (`RequestsPerClient`, 1–3, default 2) dequeues → `backend.Execute`
+   → response pushed to that client. Empty clients pop; shrink-tail pops
+   with work left rejoin the long-term tail with a fresh stamp.
+5. **Refill** ready up to N from the long-term head (skipping gone/empty).
+6. **Evict**: while congested, back-half waiters older than 300 ticks fail
+   *all* their requests and leave the queue.
+
+```
+you ──Enqueue──▶ [gates 0–5] ──▶ client._internal ──▶ long-term tail (if new)
+                                                          │ Tick: refill
+                                                          ▼
+                                              ready set (≤ N, round-robin, ≤ M each)
+                                                          │ Tick: serve → backend.Execute
+                                                          ▼
+                                              client._responses ──TryTakeResponse──▶ you
+```
+
+### Collect: `TryTakeResponse`
+
+Responses are pushed in the order requests are *served*, which is FIFO per
+client — except the near/far split can let a later "far" request overtake
+an earlier deferred "near" one. Always match responses with `Sequence`.
+
 ## Request / response fields
 
 `ServerRequest`: `IsCommand`, `Code`, `TargetInstanceId` (default -1, and
