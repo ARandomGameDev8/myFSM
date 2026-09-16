@@ -8,6 +8,8 @@
   "description": "Pure C# Unity runtime for myFSM: .fsmb loader, AI stepper (Start/Update/Traversals), variable tables with C-like temp lifetimes, query + broadcast servers, and Unity implementations of all 179 built-in function overloads.",
   "files": [
     "Runtime/",
+    "Editor/",
+    "Plugins/",
     "Samples/",
     "README.md",
     "myfsm-package.json"

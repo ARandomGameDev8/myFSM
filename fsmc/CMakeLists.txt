@@ -41,6 +41,21 @@ add_executable(fsmc src/main.cpp)
 target_link_libraries(fsmc PRIVATE fsmc_lib)
 
 # ---------------------------------------------------------------------------
+# Shared library for hosts (Unity C# wrapper via P/Invoke): the same pipeline
+# as the CLI, exposed through include/myfsm_c_api.h. No main(), no I/O.
+# Build: cmake --build build --target myfsmc  ->  myfsmc.dll / libmyfsmc.so|dylib
+# ---------------------------------------------------------------------------
+set_target_properties(fsmc_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(myfsmc SHARED src/c_api.cpp)
+target_link_libraries(myfsmc PRIVATE fsmc_lib)
+target_compile_definitions(myfsmc PRIVATE MYFSM_BUILDING_LIB)
+set_target_properties(myfsmc PROPERTIES
+  OUTPUT_NAME myfsmc
+  VERSION 0.5.0
+  SOVERSION 0
+)
+
+# ---------------------------------------------------------------------------
 # Tests (hand-rolled framework, no external dependencies) via CTest
 # ---------------------------------------------------------------------------
 enable_testing()
