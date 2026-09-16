@@ -49,3 +49,5 @@ python3 install.py --list-editors --list-projects   # diagnostics only
 
 `--yes` still requires `--project` (there is no safe default project).
 Exit code is 0 on success, 1 with an `error:` line otherwise.
+At any `[default]:` prompt, Enter (or bare `y`) accepts the default;
+invalid input explains itself and asks again instead of crashing.

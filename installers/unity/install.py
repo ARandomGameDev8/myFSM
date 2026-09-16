@@ -77,8 +77,25 @@ def prompt(text, default=None):
     try:
         answer = input(text + suffix).strip()
     except EOFError:
-        answer = ""
+        raise ValueError("input closed; rerun non-interactively (--yes with explicit flags)")
     return answer if answer else (default or "")
+
+
+def prompt_value(text, default):
+    """Prompt for a value with a default. Bare y/yes accepts the default
+    (users read '[...]:' as a confirmation); bare n/no re-asks for real input."""
+    first = prompt(text, default)
+    if first.strip().lower() in ("y", "yes"):
+        return default
+    if first.strip().lower() in ("n", "no"):
+        second = prompt("Enter the value to use", "")
+        return second if second else default
+    return first
+
+
+def looks_like_url(value):
+    low = (value or "").strip().lower()
+    return low.startswith(("http://", "https://", "file://", "ftp://"))
 
 
 def confirm(text, default_yes=True, auto_yes=False):
@@ -590,8 +607,8 @@ def choose_project(discovered, preset, auto_yes):
 
 def choose_location(project, manifest, preset, auto_yes):
     default = manifest.get("defaultInstallDir") or "Assets/MyFSM"
-    location = preset if preset else (default if auto_yes else prompt(
-        "Install location inside the project", default))
+    location = preset if preset else (default if auto_yes else prompt_value(
+        "Install location inside the project (Enter = default)", default))
     dest = os.path.abspath(os.path.join(project, location.replace("\\", "/")))
     if not is_within(dest, project):
         raise ValueError("location escapes the project folder; it must stay inside:\n  %s" % project)
@@ -750,29 +767,43 @@ def main(argv=None):
 
     # --- Stage 2: payload
     print("\n[2/6] Fetching the payload...")
-    source = args.source
-    if source is None:
-        if auto_yes:
-            source = "internet"
-        else:
-            print("  1) internet (download the tool)")
-            print("  2) local folder or archive (already downloaded)")
-            print("  3) git clone (repo + branch)")
-            choice = prompt("Payload source", "1")
-            source = {"1": "internet", "2": "local", "3": "git"}.get(choice, "internet")
     workdir = tempfile.TemporaryDirectory(prefix="myfsm-install-")
     try:
+        source = args.source
+        if source is None:
+            if auto_yes:
+                source = "internet"
+            else:
+                print("  1) internet (download the tool)")
+                print("  2) local folder or archive (already downloaded)")
+                print("  3) git clone (repo + branch)")
+                while True:
+                    choice = prompt("Payload source", "1")
+                    if choice in ("1", "2", "3"):
+                        break
+                    print("Please enter 1, 2, or 3.")
+                source = {"1": "internet", "2": "local", "3": "git"}[choice]
         if source == "internet":
             url = args.url or (None if not auto_yes else DEFAULT_URL)
             if url is None:
-                url = prompt("Archive URL", DEFAULT_URL)
+                while True:
+                    url = prompt_value("Archive URL (Enter = default)", DEFAULT_URL)
+                    if looks_like_url(url):
+                        break
+                    print("That doesn't look like a URL (want http(s):// or file://). Try again.")
+            elif not looks_like_url(url):
+                return fail("bad --url (want http(s):// or file://): %s" % url)
             payload = acquire_internet(url, workdir.name)
         elif source == "local":
             local_path = args.local_path
             if local_path is None:
                 if auto_yes:
                     return fail("--yes needs --local-path with --source local")
-                local_path = prompt("Folder or archive path")
+                while True:
+                    local_path = prompt("Folder or archive path")
+                    if local_path and os.path.exists(expand(local_path)):
+                        break
+                    print("No such file or folder. Try again.")
             payload = acquire_local(local_path, workdir.name)
         else:
             git_url = args.git_url
@@ -780,8 +811,8 @@ def main(argv=None):
             if git_url is None:
                 if auto_yes:
                     return fail("--yes needs --git-url with --source git")
-                git_url = prompt("Repo URL", DEFAULT_GIT_URL)
-                branch = prompt("Branch", branch or DEFAULT_GIT_BRANCH)
+                git_url = prompt_value("Repo URL (Enter = default)", DEFAULT_GIT_URL)
+                branch = prompt_value("Branch (Enter = default)", branch or DEFAULT_GIT_BRANCH)
             elif branch is None:
                 branch = DEFAULT_GIT_BRANCH
             payload = acquire_git(git_url, branch, workdir.name)
@@ -835,6 +866,14 @@ def main(argv=None):
         if copied == 0:
             return fail("nothing was copied; refusing to write a receipt")
         receipt = write_receipt(dest, manifest, payload.label, copied)
+    except (ValueError, OSError) as ex:
+        # Expected failures (bad input, network/dns, git, permissions):
+        # clean one-line error, no traceback. (Bug-class exceptions still
+        # propagate with a traceback so they get reported.)
+        return fail(str(ex))
+    except KeyboardInterrupt:
+        print()
+        return fail("interrupted by user")
     finally:
         try:
             workdir.cleanup()
