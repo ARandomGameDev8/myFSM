@@ -2,7 +2,8 @@
 """myFSM Unity-runtime installer (Python 3.8+, stdlib only, single file).
 
 Traditional UX: the installer detects Unity, fetches the myFSM-UnityRuntime
-payload from one of three sources, discovers your Unity projects, lets you
+payload from one of three sources, installs the host compiler when missing,
+  discovers your Unity projects, lets you
 pick one, lets you pick an in-project install location (default from the
 payload manifest), and copies the files in. Nothing is installed outside the
 project folder you choose.
@@ -37,6 +38,8 @@ RECEIPT_NAME = ".myfsm-install.json"
 DEFAULT_URL = "https://github.com/ARandomGameDev8/MyFSM-UnityRuntime/archive/refs/heads/test.zip"
 DEFAULT_GIT_URL = "https://github.com/ARandomGameDev8/MyFSM-UnityRuntime.git"
 DEFAULT_GIT_BRANCH = "test"
+COMPANY_DIR = "myFSM"
+TOOLS_SUBDIR = "Tools"  # payload layout: Tools/<rid>/{fsmc,fsmc.exe,lib...}, Tools/include/
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +393,176 @@ def load_manifest(payload_root):
 
 
 # --------------------------------------------------------------------------
+# Host compiler toolchain: detect fsmc, install prebuilts when missing
+# --------------------------------------------------------------------------
+
+def host_rid():
+    """Runtime id matching the payload Tools/ layout."""
+    machine = platform.machine().lower()
+    if host_os() == "windows":
+        return "win-x64"
+    if host_os() == "macos":
+        return "osx-arm64" if machine in ("arm64", "aarch64") else "osx-x64"
+    return "linux-arm64" if machine in ("arm64", "aarch64") else "linux-x64"
+
+
+def compiler_homes():
+    """(system_home, user_home): the device's usual compiler locations.
+
+    Unix uses prefix layout (/usr/local, ~/.local) so bin/ is already on
+    PATH; Windows uses a company dir (Program Files, else LocalAppData).
+    """
+    if host_os() == "windows":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        local = os.environ.get("LOCALAPPDATA",
+                               os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+        return (os.path.join(pf, COMPANY_DIR), os.path.join(local, COMPANY_DIR))
+    return ("/usr/local", os.path.join(os.path.expanduser("~"), ".local"))
+
+
+def fsmc_exe_name():
+    return "fsmc.exe" if host_os() == "windows" else "fsmc"
+
+
+def toolchain_lib_name():
+    if host_os() == "windows":
+        return "myfsmc.dll"
+    if host_os() == "macos":
+        return "libmyfsmc.dylib"
+    return "libmyfsmc.so"
+
+
+def find_fsmc(extra_home=None):
+    """Returns an existing fsmc executable path, or None."""
+    cands = []
+    on_path = shutil.which("fsmc")
+    if on_path:
+        cands.append(on_path)
+    homes = list(compiler_homes())
+    if extra_home:
+        homes.append(extra_home)
+    for home in homes:
+        cands.append(os.path.join(home, "bin", fsmc_exe_name()))
+    for cand in cands:
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return os.path.abspath(cand)
+    return None
+
+
+def toolchain_files(payload_root, rid):
+    """Prebuilt toolchain files for this rid inside the payload (may be {})."""
+    plat = os.path.join(payload_root, TOOLS_SUBDIR, rid)
+    files = {}
+    exe = os.path.join(plat, fsmc_exe_name())
+    lib = os.path.join(plat, toolchain_lib_name())
+    inc = os.path.join(payload_root, TOOLS_SUBDIR, "include", "myfsm_c_api.h")
+    if os.path.isfile(exe):
+        files["exe"] = exe
+    if os.path.isfile(lib):
+        files["lib"] = lib
+    if os.path.isfile(inc):
+        files["header"] = inc
+    return files
+
+
+def writable_dir(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(path, os.W_OK)
+
+
+def install_toolchain(files, home):
+    """Copies exe->bin, lib->lib, header->include under home. Returns paths."""
+    mapping = {"exe": ("bin", fsmc_exe_name()),
+               "lib": ("lib", toolchain_lib_name()),
+               "header": ("include", "myfsm_c_api.h")}
+    installed = {}
+    for key, (subdir, name) in mapping.items():
+        if key not in files:
+            continue
+        target_dir = os.path.join(home, subdir)
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, name)
+        shutil.copy2(files[key], target)
+        if key in ("exe", "lib") and host_os() != "windows":
+            try:
+                os.chmod(target, 0o755)
+            except OSError:
+                pass
+        installed[key] = target
+    return installed
+
+
+def fetch_toolchain_files(url, workdir, rid):
+    """Downloads a toolchain archive (Tools/<rid>/ layout at its root)."""
+    archive = os.path.join(workdir, "toolchain.zip")
+    download_file(url, archive)
+    tdir = os.path.join(workdir, "toolchain")
+    os.makedirs(tdir, exist_ok=True)
+    return toolchain_files(extract_archive(archive, tdir), rid)
+
+
+def ensure_compiler(payload_root, args, auto_yes, workdir):
+    """Detect-or-install the host fsmc toolchain. Never raises: problems
+    become warnings, because a missing host toolchain must not block the
+    runtime install. Returns True when a working fsmc exists afterwards."""
+    override = expand(args.compiler_home) if args.compiler_home else None
+    found = find_fsmc(override)
+    if found:
+        info("Compiler already installed: %s" % found)
+        return True
+    rid = host_rid()
+    files = toolchain_files(payload_root, rid)
+    if "exe" not in files and args.compiler_url:
+        try:
+            info("Fetching toolchain for %s..." % rid)
+            files = fetch_toolchain_files(args.compiler_url, workdir, rid)
+        except Exception as ex:
+            warn("toolchain download failed: %s" % ex)
+            files = {}
+    if "exe" not in files:
+        warn("no prebuilt compiler for %s (payload has no %s/%s/%s)." % (
+            rid, TOOLS_SUBDIR, rid, fsmc_exe_name()))
+        warn("Build one (fsmc/: cmake --build build --target fsmc) and rerun, "
+             "or pass --compiler-url. Continuing with the runtime only.")
+        return False
+    system_home, user_home = compiler_homes()
+    if override:
+        home = override
+        if not writable_dir(os.path.join(home, "bin")):
+            warn("cannot write %s; continuing runtime-only." % home)
+            return False
+    elif writable_dir(os.path.join(system_home, "bin")):
+        home = system_home
+    else:
+        home = user_home
+        info("System location is not writable; installing for the current user.")
+    try:
+        installed = install_toolchain(files, home)
+    except OSError as ex:
+        warn("could not install the compiler to %s (%s); continuing runtime-only."
+             % (home, ex))
+        return False
+    info("Compiler installed: %s" % installed["exe"])
+    if "lib" in installed:
+        info("  library: %s" % installed["lib"])
+    if "header" in installed:
+        info("  header:  %s" % installed["header"])
+    bindir = os.path.join(home, "bin")
+    on_path = any(os.path.abspath(p) == os.path.abspath(bindir)
+                  for p in os.environ.get("PATH", "").split(os.pathsep) if p)
+    if not on_path:
+        if host_os() == "windows":
+            warn("Add to PATH to run fsmc anywhere: Settings > Environment "
+                 "variables > Path > New > %s" % bindir)
+        else:
+            warn("Add to PATH to run fsmc anywhere: export PATH=\"%s:$PATH\"" % bindir)
+    return True
+
+
+# --------------------------------------------------------------------------
 # Stages 3-5: project + location + install
 # --------------------------------------------------------------------------
 
@@ -534,6 +707,12 @@ def parse_args(argv):
     ap.add_argument("--branch", default=None, help="git branch (git source)")
     ap.add_argument("--project", default=None, help="Unity project folder")
     ap.add_argument("--dest", default=None, help="in-project install location")
+    ap.add_argument("--no-compiler", action="store_true",
+                    help="skip the host compiler-toolchain stage entirely")
+    ap.add_argument("--compiler-url", default=None,
+                    help="toolchain archive URL (used when the payload has no prebuilt for this platform)")
+    ap.add_argument("--compiler-home", default=None,
+                    help="override the compiler install home (default: platform-standard location)")
     ap.add_argument("--yes", action="store_true", help="accept defaults (needs --project)")
     ap.add_argument("--list-editors", action="store_true", help="print Unity installs and exit")
     ap.add_argument("--list-projects", action="store_true", help="print Hub projects and exit")
@@ -560,7 +739,7 @@ def main(argv=None):
     print("== %s installer ==" % APP_NAME)
 
     # --- Stage 1: Unity detection (informational; install is just file copy)
-    print("\n[1/5] Detecting Unity (%s)..." % host_os())
+    print("\n[1/6] Detecting Unity (%s)..." % host_os())
     editors = find_unity_editors()
     if editors:
         for path, version in editors:
@@ -570,7 +749,7 @@ def main(argv=None):
              "but open the project in Unity afterwards to compile.")
 
     # --- Stage 2: payload
-    print("\n[2/5] Fetching the payload...")
+    print("\n[2/6] Fetching the payload...")
     source = args.source
     if source is None:
         if auto_yes:
@@ -613,8 +792,15 @@ def main(argv=None):
         info("Payload: %s v%s (%s)" % (manifest.get("name"), manifest.get("version"),
                                        payload.label))
 
-        # --- Stage 3: project
-        print("\n[3/5] Finding your Unity project...")
+        # --- Stage 3: host compiler toolchain (detect, install when missing)
+        print("\n[3/6] Checking the host compiler...")
+        if args.no_compiler:
+            info("Skipped (--no-compiler).")
+        else:
+            ensure_compiler(payload.root, args, auto_yes, workdir.name)
+
+        # --- Stage 4: project
+        print("\n[4/6] Finding your Unity project...")
         discovered = hub_recent_projects()
         try:
             project = choose_project(discovered, args.project, auto_yes)
@@ -622,8 +808,8 @@ def main(argv=None):
             return fail(str(ex))
         info("Project: %s" % project)
 
-        # --- Stage 4: location
-        print("\n[4/5] Install location...")
+        # --- Stage 5: location
+        print("\n[5/6] Install location...")
         try:
             dest = choose_location(project, manifest, args.dest, auto_yes)
         except ValueError as ex:
@@ -638,8 +824,8 @@ def main(argv=None):
             if mode == "clean":
                 shutil.rmtree(dest)
 
-        # --- Stage 5: install
-        print("\n[5/5] Installing (%s)..." % ("overwrite-merge" if mode == "merge"
+        # --- Stage 6: install
+        print("\n[6/6] Installing (%s)..." % ("overwrite-merge" if mode == "merge"
                                              else "fresh" if mode == "fresh" else "clean"))
         if not auto_yes:
             print("  %s v%s  ->  %s" % (manifest.get("name"), manifest.get("version"), dest))

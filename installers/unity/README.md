@@ -8,7 +8,7 @@ python3 install.py                  # fully interactive (recommended)
 python3 install.py --help           # all flags
 ```
 
-## What it does (5 stages)
+## What it does (6 stages)
 
 1. **Detects Unity** installs (Hub dirs, well-known paths, PATH) per OS.
    Informational only — installing is file copy, so it proceeds with a
@@ -17,14 +17,23 @@ python3 install.py --help           # all flags
    the tool archive; or point it at a local folder/zip, or a git URL +
    branch). Reads `myfsm-package.json` to learn what to copy and the
    default location.
-3. **Discovers Unity projects** via Unity Hub recents (tolerant of Hub
+3. **Installs the host compiler toolchain when missing.** Detects `fsmc`
+   on PATH and in the platform-standard homes; if absent, installs the
+   payload's `Tools/<rid>/` prebuilts (CLI + native lib + C header) to
+   `%ProgramFiles%\myFSM\` (Windows) or `/usr/local` (macOS/Linux),
+   falling back to the per-user home (`%LOCALAPPDATA%\myFSM\` / `~/.local`)
+   when the system location isn't writable. Override with
+   `--compiler-home`, supply prebuilts with `--compiler-url`, skip with
+   `--no-compiler`. Never blocks the runtime install: problems here warn
+   and continue.
+4. **Discovers Unity projects** via Unity Hub recents (tolerant of Hub
    schema drift) or a path you type. The folder must contain `Assets/`.
-4. **Picks the in-project location** (default `Assets/MyFSM` from the
+5. **Picks the in-project location** (default `Assets/MyFSM` from the
    manifest). Hard rule: the destination must stay **inside the project
    folder** — escapes are rejected. Outside `Assets/` needs explicit
    confirmation. Existing installs offer overwrite-merge / clean / abort
    (clean refuses protected roots like the project or `Assets/` itself).
-5. **Installs**: copies the manifest's `files` minus `exclude`, writes a
+6. **Installs**: copies the manifest's `files` minus `exclude`, writes a
    `.myfsm-install.json` receipt (source, version, date, file count),
    prints next steps.
 
