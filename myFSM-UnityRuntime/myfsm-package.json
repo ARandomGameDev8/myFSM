@@ -1,0 +1,18 @@
+{
+  "name": "myFSM-UnityRuntime",
+  "engine": "unity",
+  "version": "0.1.0",
+  "minCompilerVersion": "0.5",
+  "maxCompilerVersion": "0.5",
+  "defaultInstallDir": "Assets/MyFSM",
+  "description": "Pure C# Unity runtime for myFSM: .fsmb loader, AI stepper (Start/Update/Traversals), variable tables with C-like temp lifetimes, query + broadcast servers, and Unity implementations of all 179 built-in function overloads.",
+  "files": [
+    "Runtime/",
+    "Samples/",
+    "README.md",
+    "myfsm-package.json"
+  ],
+  "exclude": [
+    "Sandbox/"
+  ]
+}

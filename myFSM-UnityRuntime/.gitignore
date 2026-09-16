@@ -1,0 +1,18 @@
+# .NET sandbox harness build outputs
+[Ss]andbox/bin/
+[Ss]andbox/obj/
+.vs/
+.idea/
+*.user
+
+# Unity project cruft (when embedded in a project during development)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+.DS_Store
+*.pidb.meta
