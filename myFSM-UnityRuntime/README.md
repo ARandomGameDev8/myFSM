@@ -29,6 +29,8 @@ Unity 2019+ and in the sandbox harness (`Sandbox/`).
 | [`Docs/MainServer.md`](Docs/MainServer.md) | Registry, frame tick, DB ownership, query-backend routing, public API, driving it from game code |
 | [`Docs/QueryServer.md`](Docs/QueryServer.md) | Client lifecycle, all 8 queries + 6 commands, scheduling algorithm, caps & tuning, full error catalog |
 | [`Docs/BroadcastServers.md`](Docs/BroadcastServers.md) | Subscribing, ordered vs priority delivery, verdicts A/B/C, re-entrancy rules, pitfalls |
+| [`Docs/AIInstance.md`](Docs/AIInstance.md) | Base class part-by-part, generated child anatomy, where/how to bind manually, precedence |
+| [`Docs/Compiler.md`](Docs/Compiler.md) | Native lib + wrapper, manual/dynamic/burst compile, inspector workflow, failure modes |
 
 ## Layout
 
@@ -57,7 +59,7 @@ Runtime/
     ClassGenerator.cs     .fsmb -> named C# class source (editor-time)
     Functions/            Math Object Sprite Animation Physics Camera
                           Navigation Perception Steering Sensing Control
-Docs/      Setup, MainServer, QueryServer, BroadcastServers guides
+Docs/      Setup, MainServer, QueryServer, BroadcastServers, AIInstance, Compiler guides
 Samples/   generated-class examples (what ClassGenerator emits)
 Sandbox/   compile/run harness WITHOUT Unity (stubs + headless smoke test);
            NEVER installed into a Unity project (excluded in the manifest)
