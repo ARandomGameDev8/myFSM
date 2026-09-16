@@ -187,6 +187,33 @@ Backend contract (`IQueryBackend.Execute`): runs synchronously inside the
 tick; return a response (null becomes `backend returned nothing`);
 exceptions are caught and fail just that request (`backend error: …`).
 
+## Complexity (per `Tick()`)
+
+| Phase | Bound | Notes |
+|---|---|---|
+| Flush all clients' pending buffers | O(C) | C = every client ever registered (no unregister exists); idle clients cost one dictionary visit each |
+| Adapt N, mark drain tail | O(1) | Plain arithmetic + a tail loop over ≤ 20 ids |
+| Serve: R clients × M requests | ≤ 60 `backend.Execute` calls | R ≤ 20 ready ids, M ≤ 3 — the *count* is constant, the cost *per call* varies (below) |
+| Pop finished clients | O(R²) ≤ 400 ops | Up to R order-preserving `List.Remove`s at O(R) each — one pop is a find-scan plus a shift of its followers; the shift keeps round-robin order fair |
+| Refill from long-term | O(N + L) ≤ 84 | ≤ 20 admissions + ≤ 64 skips |
+| Starvation guard (congested only) | O(L·E), a few thousand ops + FailAll | L ≤ 64 waiters, E ≤ 32 evicted |
+
+`Enqueue`, `TryTakeResponse`, and `RegisterClient` are all O(1).
+
+Per-request backend cost (`MainServer.Execute`) depends on the code, not on
+client count: O(1)-ish for `GetInstanceState` / `GetVariable` /
+`SetVariable` / `PauseAI` / `ResumeAI` / `Emit`; O(states) for
+`TransitionTo` (linear name scan); O(instances) for `ListInstances` /
+`GetStats` (snapshot + one row per AI); bounded ring scan + ≤ 200 output
+rows for `GetStateHistory` / `GetEmits`; and `ReloadModule` re-parses,
+validates, and reboots every instance of the asset — a single call can dwarf
+the whole rest of the tick.
+
+Bottom line: scheduler mechanics are O(C) in *registered* clients (the flush
+loop — the serve set itself never exceeds 20), the serve quantum is capped
+at 60 backend calls/frame, and backend work scales with
+instances/rows/module size.
+
 ## Error catalog (all `Error` strings)
 
 - `unknown query code N` / `unknown command code N`
