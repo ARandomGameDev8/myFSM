@@ -59,7 +59,10 @@ System.IO.File.WriteAllText("Assets/MyFSM/PatrolAI.cs", src);
 Use `PatrolAI` like `FsmbAIInstance`, but with the module path pinned and
 `State_*` / `Slot_*` constants instead of magic strings/ints. Override
 `OnBindingsRequired()` to bind scene objects in code (runs after the
-inspector list, before boot) — see `Samples/PatrolAI.cs` for the pattern.
+inspector list, before boot) — see `Samples/PatrolAI.Manual.cs` for the
+durable pattern (a hand-written partial file implementing
+`OnBindingsManual()`; the generated file itself is rewritten on every
+recompile).
 
 ## Multiple AIs & scenes
 

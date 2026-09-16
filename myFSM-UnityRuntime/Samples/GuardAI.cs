@@ -3,7 +3,7 @@
 using UnityEngine;
 using MyFSM.Unity;
 
-public sealed class GuardAI : AIInstance
+public sealed partial class GuardAI : AIInstance
 {
     public const string AssetResourcePath = "MyFSM/Guard";
     protected override string ModuleResourcePath
@@ -23,4 +23,22 @@ public sealed class GuardAI : AIInstance
     public const int Slot_guardAnim = 2; // AnimationController3D
     public const int Slot_guardLight = 3; // Sprite3D
     public const int Slot_shotEventId = 4; // int
+
+    // Runtime-variable overrides: the base auto-binds every UNIQUE
+    // handle slot to this GameObject at boot (Object2D/3D -> gameObject,
+    // Transform2D/3D -> transform, component types -> GetComponent).
+    // Edits here are lost on recompile - durable overrides belong in a
+    // hand-written partial file implementing OnBindingsManual().
+    protected override void OnBindingsRequired()
+    {
+        base.OnBindingsRequired();
+        // Slot_intruder (Object3D): AMBIGUOUS (2x) - Bind(Slot_intruder, /* GameObject/Component */);
+        // Slot_guard (Object3D): AMBIGUOUS (2x) - Bind(Slot_guard, /* GameObject/Component */);
+        // Slot_guardAnim (AnimationController3D): auto-bound (unique type) - override with Bind(Slot_guardAnim, ...) if needed.
+        // Slot_guardLight (Sprite3D): auto-bound (unique type) - override with Bind(Slot_guardLight, ...) if needed.
+        // Slot_shotEventId (int): value - SetBoundValue(Slot_shotEventId, FsmValue.MakeInt(0));
+        OnBindingsManual();
+    }
+
+    partial void OnBindingsManual();
 }

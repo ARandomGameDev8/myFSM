@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.AI;
 using MyFSM.Core;
 
 namespace MyFSM.Unity
@@ -204,6 +205,12 @@ namespace MyFSM.Unity
                 return false;
             }
 
+            // Base binding layer, fresh every boot (fresh + reboot), never
+            // journaled: unique handle slots bind to this GameObject; the
+            // inspector list / replayed journal / OnBindingsRequired apply on
+            // top of it and win.
+            AutoBindUnambiguousHandles();
+
             if (replayOnly)
             {
                 for (int i = 0; i < _journal.Count; i++)
@@ -331,6 +338,95 @@ namespace MyFSM.Unity
             byte tag = Execution.Vars.GetRuntimeTag(entry);
             int id = Handles.Alloc(e.Obj, tag);
             Execution.Vars.SetRuntime(entry, FsmValue.MakeHandle(tag, id));
+        }
+
+        /// <summary>
+        /// Auto-bind kill switch. When true (default), every boot first binds
+        /// each UNIQUE handle-typed runtime slot to this GameObject (see
+        /// ResolveAutoBindTarget). Tags claimed by 2+ slots are ambiguous and
+        /// left for manual binding; value slots are never auto-bound.
+        /// </summary>
+        protected virtual bool AutoBindHandles { get { return true; } }
+
+        private void AutoBindUnambiguousHandles()
+        {
+            if (!AutoBindHandles || Execution == null) return;
+            VariableTable vars = Execution.Vars;
+            Dictionary<byte, int> perTag = new Dictionary<byte, int>();
+            for (int i = 0; i < vars.RuntimeCount; i++)
+            {
+                byte tag = vars.GetRuntimeTag(i);
+                int n;
+                perTag.TryGetValue(tag, out n);
+                perTag[tag] = n + 1;
+            }
+            HashSet<byte> warned = new HashSet<byte>();
+            for (int i = 0; i < vars.RuntimeCount; i++)
+            {
+                byte tag = vars.GetRuntimeTag(i);
+                DslTypeInfo info;
+                if (!DslTypes.TryFindByTag(tag, out info) || !info.IsHandle)
+                    continue; // value slots have no auto-bind rule
+                if (perTag[tag] != 1)
+                {
+                    if (!warned.Contains(tag))
+                    {
+                        warned.Add(tag);
+                        Execution.Log.Warn("slot type '" + info.Name + "' appears " +
+                            perTag[tag] + "x; ambiguous, bind manually " +
+                            "(inspector, OnBindingsRequired or OnBindingsManual)");
+                    }
+                    continue;
+                }
+                UnityEngine.Object target = ResolveAutoBindTarget(tag);
+                if (target == null)
+                {
+                    Execution.Log.Info("slot " + vars.GetRuntimeSlot(i) + " ('" +
+                        vars.GetRuntimeName(i) + "', " + info.Name +
+                        ") has no host component to auto-bind; bind manually");
+                    continue;
+                }
+                BindingEntry e = new BindingEntry();
+                e.Slot = vars.GetRuntimeSlot(i);
+                e.Obj = target;
+                e.HasValue = false;
+                ApplyBinding(e); // base layer: NOT journaled (see BootCore)
+                Execution.Log.Info("auto-bound slot " + e.Slot + " ('" +
+                    vars.GetRuntimeName(i) + "', " + info.Name + ")");
+            }
+        }
+
+        /// <summary>
+        /// Host-GameObject source per handle tag, or null when the host has
+        /// nothing suitable (the caller logs + skips, leaving a null handle).
+        /// </summary>
+        private UnityEngine.Object ResolveAutoBindTarget(byte tag)
+        {
+            if (tag == FsmbType.Object2D || tag == FsmbType.Object3D)
+                return gameObject;
+            if (tag == FsmbType.Transform2D || tag == FsmbType.Transform3D)
+                return transform;
+            if (tag == FsmbType.Camera2D || tag == FsmbType.Camera3D)
+                return GetComponent<Camera>();
+            if (tag == FsmbType.Sprite2D || tag == FsmbType.Sprite3D)
+                return GetComponent<SpriteRenderer>();
+            if (tag == FsmbType.AnimationController2D || tag == FsmbType.AnimationController3D)
+                return GetComponent<Animator>();
+            if (tag == FsmbType.PhysicsObject2D)
+            {
+                Rigidbody2D rb = GetComponent<Rigidbody2D>();
+                if (rb != null) return rb;
+                return GetComponent<Collider2D>();
+            }
+            if (tag == FsmbType.PhysicsObject3D)
+            {
+                Rigidbody rb = GetComponent<Rigidbody>();
+                if (rb != null) return rb;
+                return GetComponent<Collider>();
+            }
+            if (tag == FsmbType.NavMeshAgent)
+                return GetComponent<NavMeshAgent>();
+            return null;
         }
 
         // ----------------------------------------------------------

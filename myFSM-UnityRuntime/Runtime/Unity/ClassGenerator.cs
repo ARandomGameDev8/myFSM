@@ -1,10 +1,15 @@
 // myFSM Unity Runtime — .fsmb -> C# class generator (editor-time contract).
 //
-// Produces the source of a named class inheriting AIInstance for one module:
-// one generated class <=> one AI. The generator is plain string building (no
-// UnityEditor dependency): run it from an editor menu/script, save the .cs,
-// done. Besides pinning the module's Resources path it emits state-name and
-// binding-slot constants so game code never hardcodes strings or slot ints.
+// Produces the source of a named PARTIAL class inheriting AIInstance for one
+// module: one generated class <=> one AI. The generator is plain string
+// building (no UnityEditor dependency): run it from an editor menu/script,
+// save the .cs, done. Besides pinning the module's Resources path it emits
+// state-name and binding-slot constants so game code never hardcodes strings
+// or slot ints, plus an OnBindingsRequired override: per-slot comments mark
+// auto-bound (unique-type) vs AMBIGUOUS (shared-type, bind manually) vs
+// value slots, and a partial OnBindingsManual() hook gives hand-written
+// partial files a durable override point (inline edits are lost on
+// recompile; the partial file is never rewritten).
 
 using System;
 using System.Collections.Generic;
@@ -49,6 +54,24 @@ namespace MyFSM.Unity
             return ident;
         }
 
+        // FsmValue maker call (without the "FsmValue." prefix) rendering a
+        // zero example for a value-type name; used in slot comments only.
+        private static string MakerForValueType(string typeName)
+        {
+            switch (typeName)
+            {
+                case "int": return "MakeInt(0)";
+                case "float": return "MakeFloat(0f)";
+                case "double": return "MakeDouble(0.0)";
+                case "bool": return "MakeBool(false)";
+                case "string": return "MakeString(\"\")";
+                case "Vector2": return "MakeVec2(0f, 0f)";
+                case "Vector3": return "MakeVec3(0f, 0f, 0f)";
+                case "Quaternion": return "MakeQuat(0f, 0f, 0f, 1f)";
+                default: return "/* see FsmValue makers */";
+            }
+        }
+
         /// <summary>
         /// Builds the full .cs source for a module. moduleName is the asset
         /// stem (e.g. "Patrol"), className the desired class (e.g. "PatrolAI"),
@@ -65,7 +88,7 @@ namespace MyFSM.Unity
             sb.AppendLine("using UnityEngine;");
             sb.AppendLine("using MyFSM.Unity;");
             sb.AppendLine();
-            sb.AppendLine("public sealed class " + cls + " : AIInstance");
+            sb.AppendLine("public sealed partial class " + cls + " : AIInstance");
             sb.AppendLine("{");
             sb.AppendLine("    public const string AssetResourcePath = \"" + resourcePath + "\";");
             sb.AppendLine("    protected override string ModuleResourcePath");
@@ -91,6 +114,58 @@ namespace MyFSM.Unity
                               module.Runtime[i].BindingSlot + "; // " +
                               DslTypes.NameOf(module.Runtime[i].Tag));
             }
+            sb.AppendLine();
+            sb.AppendLine("    // Runtime-variable overrides: the base auto-binds every UNIQUE");
+            sb.AppendLine("    // handle slot to this GameObject at boot (Object2D/3D -> gameObject,");
+            sb.AppendLine("    // Transform2D/3D -> transform, component types -> GetComponent).");
+            sb.AppendLine("    // Edits here are lost on recompile - durable overrides belong in a");
+            sb.AppendLine("    // hand-written partial file implementing OnBindingsManual().");
+            sb.AppendLine("    protected override void OnBindingsRequired()");
+            sb.AppendLine("    {");
+            sb.AppendLine("        base.OnBindingsRequired();");
+            Dictionary<byte, int> perTag = new Dictionary<byte, int>();
+            for (int i = 0; i < module.Runtime.Count; i++)
+            {
+                byte tag = module.Runtime[i].Tag;
+                int n;
+                perTag.TryGetValue(tag, out n);
+                perTag[tag] = n + 1;
+            }
+            for (int i = 0; i < module.Runtime.Count; i++)
+            {
+                string slotConst = "Slot_" + SanitizeIdentifier(module.Runtime[i].Name);
+                byte tag = module.Runtime[i].Tag;
+                DslTypeInfo info;
+                bool known = DslTypes.TryFindByTag(tag, out info);
+                string typeName = known ? info.Name : "tag 0x" + tag.ToString("X2");
+                if (known && info.IsHandle && perTag[tag] == 1)
+                {
+                    sb.AppendLine("        // " + slotConst + " (" + typeName +
+                        "): auto-bound (unique type) - override with Bind(" +
+                        slotConst + ", ...) if needed.");
+                }
+                else if (known && info.IsHandle)
+                {
+                    sb.AppendLine("        // " + slotConst + " (" + typeName +
+                        "): AMBIGUOUS (" + perTag[tag] + "x) - Bind(" + slotConst +
+                        ", /* GameObject/Component */);");
+                }
+                else if (known)
+                {
+                    sb.AppendLine("        // " + slotConst + " (" + typeName +
+                        "): value - SetBoundValue(" + slotConst + ", FsmValue." +
+                        MakerForValueType(typeName) + ");");
+                }
+                else
+                {
+                    sb.AppendLine("        // " + slotConst + " (" + typeName +
+                        "): unknown type - bind manually.");
+                }
+            }
+            sb.AppendLine("        OnBindingsManual();");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    partial void OnBindingsManual();");
             sb.AppendLine("}");
             return sb.ToString();
         }
