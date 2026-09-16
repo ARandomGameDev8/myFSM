@@ -21,6 +21,15 @@ Pure C# Unity runtime for myFSM: loads compiler-produced `.fsmb` modules
 Language level is **C# 7.3**, UnityEngine only, no packages — compiles in
 Unity 2019+ and in the sandbox harness (`Sandbox/`).
 
+## Docs (start here)
+
+| Guide | Covers |
+|---|---|
+| [`Docs/Setup.md`](Docs/Setup.md) | Requirements, install, wiring an AI (inspector + generated class), multiple AIs, troubleshooting, uninstall |
+| [`Docs/MainServer.md`](Docs/MainServer.md) | Registry, frame tick, DB ownership, query-backend routing, public API, driving it from game code |
+| [`Docs/QueryServer.md`](Docs/QueryServer.md) | Client lifecycle, all 8 queries + 6 commands, scheduling algorithm, caps & tuning, full error catalog |
+| [`Docs/BroadcastServers.md`](Docs/BroadcastServers.md) | Subscribing, ordered vs priority delivery, verdicts A/B/C, re-entrancy rules, pitfalls |
+
 ## Layout
 
 ```
@@ -42,61 +51,100 @@ Runtime/
   Unity/   MonoBehaviour glue + function implementations
     AIInstance.cs         abstract base + FsmbAIInstance + bindings
     MainServer.cs         registry, DB, tick loop, query backend
-    HandleTable.cs        per-AI handle id -> Unity object
+    HandleTable.cs        per-AI handle-id -> Unity object
     FunctionDispatcher.cs ID router + resolution helpers
     MovementSystem.cs     incremental goals (NavMesh or manual) + look goals
     ClassGenerator.cs     .fsmb -> named C# class source (editor-time)
     Functions/            Math Object Sprite Animation Physics Camera
                           Navigation Perception Steering Sensing Control
-Samples/   generated-class example (what ClassGenerator emits)
+Docs/      Setup, MainServer, QueryServer, BroadcastServers guides
+Samples/   generated-class examples (what ClassGenerator emits)
 Sandbox/   compile/run harness WITHOUT Unity (stubs + headless smoke test);
            NEVER installed into a Unity project (excluded in the manifest)
+myfsm-package.json   package manifest (name, version, install dir, file map)
 ```
+
+## Concepts & tick flow
+
+One `.fsmb` module loaded onto one GameObject is one AI. The module's states,
+phases (`Start{}`/`Update{}`), transitions and variables all come from the
+compiled file; the Unity side supplies bound scene objects, time, and the
+engine services behind the 179 built-in functions.
+
+Every frame, `MainServer.Update()` does:
+
+1. For each registered AI in registration order (skipping unbooted/paused):
+   1. `MovementSystem.Advance` — in-flight motion/rotation goals step closer
+      (fresh positions for this tick's decisions; runs even while suspended).
+   2. `StateHandler.Tick` — suspension check (`wait`/`waitUntil`), then any
+      externally commanded transition, then the Update round, then the
+      Traversals round, then the requested transition (if any).
+   3. If the head state changed: record it in the DB timetable and publish
+      one `StateChangeEvent` to **both** broadcast servers.
+2. `Db.TotalTicks++`, then `Queries.Tick()` — the query scheduler serves
+   external clients.
+
+Errors during serving never throw inside the player loop: they log (with the
+AI's `[myFSM name]` prefix) and yield default values. Only boot/structural
+problems fail fast.
 
 ## Quickstart (Unity)
 
-1. Compile a model with the myFSM compiler: `fsmc patrol.fsm -o patrol.fsmb`.
-2. Copy this package's `Runtime/` into your project (default `Assets/MyFSM`;
-   the installer does this — see below).
-3. Drop the `.fsmb` anywhere (e.g. `Assets/MyFSM/Modules/patrol.fsmb`).
-4. Add `FsmbAIInstance` to a GameObject, assign the `.fsmb`, fill the binding
-   slots with scene objects (index = binding slot).
-5. Play. The main server boots automatically; the AI enters its `@ENTRY` state.
+1. Compile a model: `fsmc patrol.fsm -o patrol.fsmb`.
+2. Copy `Runtime/` into your project (default `Assets/MyFSM`).
+3. Add `FsmbAIInstance` to a GameObject, assign the `.fsmb`, fill the binding
+   slots (list index = slot).
+4. Play — the main server boots automatically; the AI enters `@ENTRY`.
 
-Generated classes (optional, nicer): run `ClassGenerator.GenerateSource`
-(in the editor) on the module bytes, save the file, use `PatrolAI` instead of
-`FsmbAIInstance` — same behavior plus `State_*` / `Slot_*` constants.
-
-## Queries, commands, broadcasts
+Full detail (generated classes, Resources paths, bindings, troubleshooting):
+[`Docs/Setup.md`](Docs/Setup.md).
 
 ```csharp
-MainServer main = MainServer.EnsureExists();
-
-// Use the AI system as a service:
-QueryClient cli = main.ConnectExternal("ui");
-main.Queries.Enqueue(cli.ClientId, new ServerRequest {
+// Queries/commands from any system:
+QueryClient cli = MainServer.EnsureExists().ConnectExternal("ui");
+MainServer.EnsureExists().Queries.Enqueue(cli.ClientId, new ServerRequest {
     IsCommand = false, Code = (int)QueryCode.GetStats });
-main.Queries.Enqueue(cli.ClientId, new ServerRequest {
-    IsCommand = true, Code = (int)CommandCode.TransitionTo,
-    TargetInstanceId = ai.InstanceId, StringArg = PatrolAI.State_Chase });
-// ...next frame(s)...
-ServerResponse r;
-while (cli.TryTakeResponse(out r)) Debug.Log(r.Ok + " " + r.Text);
 
 // Live state changes, no polling:
-main.OrderedBroadcast.Subscribe(new ActionWithStateSubscriber(
-    ai.InstanceId, state => Debug.Log("now in " + state)));
+MainServer.EnsureExists().OrderedBroadcast.Subscribe(
+    new ActionWithStateSubscriber(ai.InstanceId, s => Debug.Log("now in " + s)));
 ```
 
-Queries: `GetInstanceState ListInstances GetAssetInfo ListAssets
-GetStateHistory GetVariable GetStats GetEmits`.
-Commands: `TransitionTo SetVariable Emit PauseAI ResumeAI ReloadModule`
-(ReloadModule re-parses bytes, requires an identical state/slot schema, then
-reboots every instance of the asset with bindings replayed).
+## Variables & bindings
 
-Priority subscribers subclass `PriorityStateSubscriber` and set
-`NextVerdict` (`ServeRest` / `SkipRestThisTick` / `DeregisterLower`); plain
-`Action` subscribers always behave as `ServeRest`.
+- **Constants** (`const`): decoded once at boot, read-only.
+- **Runtime slots** (`var`): Controller-facing state. Handle slots hold bound
+  scene objects (`Bind`), value slots hold plain values (`SetBoundValue`,
+  tag-strict). Unbound slots read zero defaults; null handles fail soft.
+- **Temporaries** (`temp`): C-like block lifetimes — state-body temps live
+  for the visit, Actions-body temps re-initialize every round, branch temps
+  die at the branch end.
+
+Bindings are journaled, so hot reloads replay them. Bind before boot so
+`Start{}` sees values; late binds apply immediately. See
+[`Docs/Setup.md`](Docs/Setup.md) for the wiring walkthrough.
+
+## Internal DB
+
+`MainServer.Db` is the system's in-memory memory (scene-play lifetime, no
+persistence): per-module **asset records** (states, entry, slot schema,
+source hash), per-AI **instance records** (path, head state, counters,
+pause/suspend flags), a **timetable** of every transition (capped ring,
+1024) and an **emit log** (capped ring, 256), plus frame/transition totals.
+External systems never touch it directly — the query server answers from
+snapshots (copies) and applies commands with validation. See
+[`Docs/MainServer.md`](Docs/MainServer.md) (writers/tick) and
+[`Docs/QueryServer.md`](Docs/QueryServer.md) (snapshot readers).
+
+## Movement & functions
+
+Tier-3 calls post goals, never teleport: NavMesh agents steer via
+`SetDestination` (manual fallback when the path is invalid), everything else
+moves `position += direction * speed * dt`. Object destinations snapshot at
+call time for go/sprint/move; `follow`/`followTarget` re-target live;
+`lookAt` rotates gradually; movement never changes facing. The other 150+
+overloads are direct engine mappings; engine-state failures (null handles,
+missing components) log and yield defaults, never exceptions.
 
 ## Interpretation notes (spec decisions)
 
@@ -154,13 +202,6 @@ Ambiguities in the design brief, resolved as follows:
 Binding is forgiving: bind a GameObject and components are found with
 `GetComponent`; bind a component and siblings resolve through it.
 
-## Installer (next)
-
-The traditional installer (detect Unity, discover projects, pick project +
-in-project folder, payload = this repo) is specified and comes second, in
-this repo. Engine ports later follow the same package format
-(`myfsm-package.json` + manifest validation + file map).
-
 ## Sandbox harness
 
 `Sandbox/` holds UnityEngine stubs, `SmokeTest` (headless: parses real
@@ -175,3 +216,10 @@ dotnet run -- Vectors/
 `Sandbox/check.py` needs only Python + pip packages (`tree-sitter`,
 `tree-sitter-c-sharp`) and validates .cs syntax plus catalog/dispatcher
 ID consistency (179/179 both directions).
+
+## Installer (next)
+
+The traditional installer (detect Unity, discover projects, pick project +
+in-project folder, payload = this repo) is specified and comes second, in
+this repo. Engine ports later follow the same package format
+(`myfsm-package.json` + manifest validation + file map).
