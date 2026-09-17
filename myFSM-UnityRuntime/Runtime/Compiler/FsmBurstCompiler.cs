@@ -95,7 +95,8 @@ namespace MyFSM.Unity
         /// <summary>
         /// "Assets/X/Resources/MyFSM/Guard.fsmb" -> "MyFSM/Guard"; null when
         /// the path is not under a Resources folder (generated class then
-        /// needs the .fsmb assigned in the inspector instead).
+        /// needs the .fsmb assigned in the inspector instead). The ".bytes"
+        /// import twin of the same module maps to the same string.
         /// </summary>
         public static string ResourcePathOf(string assetPath)
         {
@@ -107,6 +108,8 @@ namespace MyFSM.Unity
             string rel = p.Substring(i + marker.Length);
             if (rel.EndsWith(".fsmb", StringComparison.OrdinalIgnoreCase))
                 rel = rel.Substring(0, rel.Length - ".fsmb".Length);
+            else if (rel.EndsWith(".bytes", StringComparison.OrdinalIgnoreCase))
+                rel = rel.Substring(0, rel.Length - ".bytes".Length);
             return rel;
         }
 
@@ -203,9 +206,28 @@ namespace MyFSM.Unity
                 e.LastStatus = "fresh .fsmb failed loader validation: " + readErr;
                 return false;
             }
+
+            // Unity has no importer for ".fsmb": the file lands as a
+            // DefaultAsset, which neither Resources.Load<TextAsset> nor an
+            // inspector TextAsset field can ever see. ".bytes" IS imported as a
+            // TextAsset (asset name = <stem>), so the exact same module bytes
+            // are written next to the canonical .fsmb as the Unity-loadable
+            // twin. Both files come from the one validated r.Module, so they
+            // cannot drift apart.
+            string bytesAsset = CombineAssetPath(outFolder, stem + ".bytes");
+            try
+            {
+                File.WriteAllBytes(ResolveProjectPath(bytesAsset), r.Module);
+            }
+            catch (Exception ex)
+            {
+                e.LastStatus = "cannot write Unity-loadable twin " + bytesAsset +
+                               ": " + ex.Message;
+                return false;
+            }
             string resourcePath = ResourcePathOf(fsmbAsset);
-            string src = ClassGenerator.GenerateSource(module, stem, className,
-                resourcePath != null ? resourcePath : string.Empty);
+            string src = ClassGenerator.GenerateSource(module, r.Module, stem,
+                className, resourcePath != null ? resourcePath : string.Empty);
             string csAsset = CombineAssetPath(scriptFolder, className + ".cs");
             try
             {
@@ -221,9 +243,14 @@ namespace MyFSM.Unity
             StringBuilder sb = new StringBuilder();
             sb.Append("ok: ").Append(r.Module.Length).Append(" bytes, ")
               .Append(module.States.Count).Append(" states -> ")
-              .Append(fsmbAsset).Append(" + ").Append(csAsset);
-            if (resourcePath == null)
-                sb.Append(" [NOT under Resources/ - assign the .fsmb in the inspector]");
+              .Append(csAsset)
+              .Append(" (self-contained: the module bytes are embedded, so the ")
+              .Append("component needs nothing assigned - just attach it and Play)")
+              .Append(".  Also written: ").Append(fsmbAsset)
+              .Append(" and ").Append(bytesAsset)
+              .Append(" (the .bytes twin is for assigning to a plain ")
+              .Append("FsmbAIInstance).");
+            if (!string.IsNullOrEmpty(r.Diagnostics)) sb.Append(" [warnings]");
             if (!string.IsNullOrEmpty(r.Diagnostics)) sb.Append(" [warnings]");
             e.LastStatus = sb.ToString();
             e.LastOk = true;

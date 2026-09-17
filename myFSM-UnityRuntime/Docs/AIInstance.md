@@ -25,9 +25,13 @@ ticks AIs (see `MainServer.md`).
 across hot reloads), `Booted`, `Paused` (soft pause — still records DB
 samples, idles), `ModuleName`, `BootError` (set when boot fails).
 
-**Generated-class pins** (virtuals, `null` by default): `ModuleResourcePath`
-(Resources path fallback when no inspector asset) and
-`GeneratedModuleName` (module-name fallback). `CurrentStateName`
+**Generated-class pins** (virtuals, `null` by default): `EmbeddedModule`
+(the module bytes compiled into the class — a generated class is
+self-contained and needs no asset at all), `ModuleResourcePath` (legacy
+Resources path fallback) and `GeneratedModuleName` (module-name fallback).
+Module resolution order at boot: inspector-assigned asset (explicit
+override) → `EmbeddedModule` → `Resources.Load<TextAsset>(ModuleResourcePath)`
+→ fail with a message naming which of the three was missing. `CurrentStateName`
 (`"<none>"` before the first tick) and `DisplayName` (`Module@GameObject`).
 
 **Journal + count.** `BindingEntry` (`Slot` + object-or-value) and `_journal`

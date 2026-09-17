@@ -68,6 +68,15 @@ namespace MyFSM.Unity
         /// (used when no override/asset name is available).</summary>
         protected virtual string GeneratedModuleName { get { return null; } }
 
+        /// <summary>
+        /// The module bytes compiled INTO the generated class (see
+        /// ClassGenerator). When this is non-null the AI is self-contained:
+        /// no .fsmb asset, no Resources folder, nothing to assign in the
+        /// inspector. Assigning a module asset in the inspector overrides it,
+        /// which is the only way to swap the brain without regenerating.
+        /// </summary>
+        protected virtual byte[] EmbeddedModule { get { return null; } }
+
         public string CurrentStateName
         {
             get { return Execution != null ? Execution.States.CurrentStateName : "<none>"; }
@@ -128,18 +137,52 @@ namespace MyFSM.Unity
 
         public bool BootFromAsset()
         {
-            TextAsset asset = _moduleAsset;
-            if (asset == null && ModuleResourcePath != null)
-                asset = Resources.Load<TextAsset>(ModuleResourcePath);
-            if (asset == null)
-            {
-                FailBoot("no .fsmb module asset assigned");
-                return false;
-            }
             string name = !string.IsNullOrEmpty(_moduleNameOverride)
                 ? _moduleNameOverride
-                : (GeneratedModuleName ?? asset.name);
-            return BootWithBytes(asset.bytes, name);
+                : (GeneratedModuleName ?? "module");
+
+            // 1. An inspector-assigned module asset is an explicit override.
+            if (_moduleAsset != null)
+            {
+                string assetName = !string.IsNullOrEmpty(_moduleNameOverride)
+                    ? _moduleNameOverride
+                    : (GeneratedModuleName ?? _moduleAsset.name);
+                return BootWithBytes(_moduleAsset.bytes, assetName);
+            }
+
+            // 2. Bytes compiled into the class itself: the generated script is
+            //    the only thing this AI needs.
+            byte[] embedded = EmbeddedModule;
+            if (embedded != null && embedded.Length > 0)
+                return BootWithBytes(embedded, name);
+
+            // 3. Legacy fallback: a TextAsset under a Resources/ folder.
+            string resourcePath = ModuleResourcePath;
+            if (!string.IsNullOrEmpty(resourcePath))
+            {
+                TextAsset res = Resources.Load<TextAsset>(resourcePath);
+                if (res != null)
+                {
+                    string resName = !string.IsNullOrEmpty(_moduleNameOverride)
+                        ? _moduleNameOverride
+                        : (GeneratedModuleName ?? res.name);
+                    return BootWithBytes(res.bytes, resName);
+                }
+                FailBoot("no module at Resources path '" + resourcePath +
+                         "': Resources.Load<TextAsset> found nothing. The file must " +
+                         "be under a Resources/ folder AND import as a TextAsset - " +
+                         "Unity has no importer for '.fsmb' (it lands as a " +
+                         "DefaultAsset), so use the '.bytes' twin the burst compiler " +
+                         "writes, or assign a TextAsset in the inspector, or " +
+                         "regenerate the class so it carries its own bytes");
+                return false;
+            }
+
+            FailBoot("no module: nothing assigned and nothing embedded. Assign a " +
+                     "module TextAsset to 'Module Asset' (use the .bytes file - " +
+                     "Unity cannot import .fsmb as a TextAsset), or use a " +
+                     "generated class, which carries its own module bytes");
+            return false;
         }
 
         public bool BootWithBytes(byte[] bytes, string moduleName)

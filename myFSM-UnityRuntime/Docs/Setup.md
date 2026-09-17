@@ -26,14 +26,25 @@ installs the payload there. Same files, less dragging.
 
 ## Adding a brain (.fsmb)
 
-1. Compile: `fsmc patrol.fsm -o patrol.fsmb`.
-2. If you use the inspector-driven component, put the `.fsmb` anywhere and
-   assign it directly — no Resources folder needed.
-3. If you use a **generated class**, the `.fsmb` must live under a
-   `Resources/` folder, because the class loads it with
-   `Resources.Load<TextAsset>(ModuleResourcePath)`. Example:
-   `Assets/Resources/MyFSM/Patrol.fsmb` <=> path `"MyFSM/Patrol"`
-   (extension dropped, exactly as `ClassGenerator` emits it).
+1. Compile: `fsmc patrol.fsm -o patrol.fsmb`, or let the burst compiler do
+   it in-editor (see `Compiler.md`).
+2. If you use the **generated class**, you need nothing else: the class has
+   the module bytes embedded at generation time, so dropping the component on
+   a GameObject and pressing Play is the whole setup. No `.fsmb` asset to
+   assign, no `Resources/` folder, no path to get right. Assigning a module
+   asset in the inspector overrides the embedded bytes — that is the only way
+   to swap the brain without regenerating.
+3. If you use the inspector-driven `FsmbAIInstance`, put a module file
+   anywhere and assign it to the module slot. It must import as a
+   `TextAsset`: Unity has no importer for `.fsmb` (it becomes a
+   `DefaultAsset`), so assign the `.bytes` twin the burst compiler writes
+   next to the `.fsmb` (they are always the same bytes).
+
+> Older generated classes (emitted before modules were embedded) still work
+> the old way: the `.fsmb` must sit under a `Resources/` folder because the
+> class loads it with `Resources.Load<TextAsset>(ModuleResourcePath)`, e.g.
+> `Assets/Resources/MyFSM/Patrol.fsmb` <=> path `"MyFSM/Patrol"`. Regenerate
+> the class to make it self-contained.
 
 ## Wiring an AI (inspector path)
 
@@ -81,7 +92,8 @@ recompile).
 
 | Symptom | Cause / fix |
 |---|---|
-| `no .fsmb module asset assigned` | No TextAsset assigned and (for generated classes) no module at the Resources path. |
+| `no module: this class was generated before myFSM embedded module bytes` | The class predates embedded modules (or it is a bare `AIInstance`). Regenerate it with the burst compiler, or assign a module asset in the inspector. |
+| `no module at Resources path 'X'` | The class expects a `Resources/` TextAsset that is not there. Regenerate so the class carries its own bytes, or put the `.bytes` (not the `.fsmb`) under `Resources/`. |
 | `boot failed: …` (reader/validator message) | The `.fsmb` is corrupt or not v0.5 — recompile with a matching `fsmc`. |
 | `module must declare exactly one entry state` | Module has zero (or several) `@ENTRY` states — fix the source. |
 | `…: null handle` spam in the log | A handle slot is unbound (or was destroyed). Bind it; calls fail soft with defaults until you do. |

@@ -292,12 +292,47 @@ public static class SmokeTest
         string err;
         FsmbModule m;
         FsmbReader.Read(bytes, out m, out err);
-        string src = ClassGenerator.GenerateSource(m, "Minimal", "MinimalAI", "MyFSM/Minimal");
+        string src = ClassGenerator.GenerateSource(m, bytes, "Minimal", "MinimalAI",
+                                                   "MyFSM/Minimal");
         Console.WriteLine("---- generated ----");
         Console.WriteLine(src);
         Console.WriteLine("-------------------");
         Check(src.Contains("class MinimalAI : AIInstance") && src.Contains("State_"),
             "generator emits named subclass + state constants");
+        Check(src.Contains("FromBase64String") && src.Contains("EmbeddedModule"),
+            "generated class embeds its own module bytes");
+        // The embedded blob must decode back to the exact module: the class is
+        // the whole AI, so a wrong round trip means a silently different brain.
+        string blob = ExtractBase64(src);
+        byte[] back = Convert.FromBase64String(blob);
+        Check(back.Length == bytes.Length, "embedded blob decodes to the same length");
+        bool same = back.Length == bytes.Length;
+        for (int i = 0; same && i < back.Length; i++)
+            if (back[i] != bytes[i]) same = false;
+        Check(same, "embedded blob is byte-identical to the compiled module");
+    }
+
+    /// <summary>Pulls the base64 payload out of generated source (test only).</summary>
+    private static string ExtractBase64(string src)
+    {
+        int at = src.IndexOf("FromBase64String(", StringComparison.Ordinal);
+        if (at < 0) return "";
+        at += "FromBase64String(".Length;
+        int end = src.IndexOf(");", at, StringComparison.Ordinal);
+        if (end < 0) return "";
+        string body = src.Substring(at, end - at);
+        StringBuilder sb = new StringBuilder();
+        string[] lines = body.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+            if (line.Length == 0) continue;
+            if (line.EndsWith("+", StringComparison.Ordinal))
+                line = line.Substring(0, line.Length - 1).Trim();
+            line = line.Trim('"');
+            sb.Append(line);
+        }
+        return sb.ToString();
     }
 
     // -- 6. end to end: FsmbAIInstance on the REAL dispatcher (stub engine).

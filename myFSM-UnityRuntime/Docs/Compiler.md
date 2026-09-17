@@ -80,18 +80,37 @@ Component fields:
 
 Per entry, `CompileEntry` does: read `.fsm` → `FsmCompiler` → write `.fsmb`
 → **re-validate the fresh bytes through the real `FsmbReader`** (loader and
-compiler must agree, or it fails loudly) → `ClassGenerator` → write
-`XxxAI.cs`. `ClassName` defaults to `<FileStem>AI`. Every entry reports
-`LastOk` / `LastStatus` (byte count, state count, output paths, warnings,
-"NOT under Resources" flag). `CompileAll()` compiles entries in order and
-returns tallies.
+compiler must agree, or it fails loudly) → write the `.bytes` import twin →
+`ClassGenerator` → write `XxxAI.cs`. `ClassName` defaults to `<FileStem>AI`.
+Every entry reports `LastOk` / `LastStatus` (byte count, state count, output
+paths, warnings). `CompileAll()` compiles entries in order and returns
+tallies.
+
+Three files per entry, one validated byte array:
+
+| File | Why |
+|---|---|
+| `Xxx.fsmb` | The module, as the CLI/other tools know it |
+| `XxxAI.cs` | The class, with those bytes embedded (base64): attach and Play, nothing to assign |
+| `Xxx.bytes` | Unity's importer only makes a `TextAsset` out of `.bytes`; assign this twin to a plain `FsmbAIInstance` (a `.fsmb` lands as a `DefaultAsset` and cannot be assigned) |
 
 ## 5. The inspector workflow (edit mode)
 
 Add `FsmBurstCompiler` to a GameObject (conventionally the burst object next
 to your AI work). Top row: **Sweep Folder** (folder → entries), **Compile
-All** (entries → `.fsmb` + scripts), **Sweep + Compile** (both). Per entry:
-file/folder pickers, fields, **Compile**, status line.
+All** (entries → `.fsmb` + `.bytes` + scripts), **Sweep + Compile** (both).
+Per entry: file/folder pickers, fields, **Compile**, status line.
+
+**Compile attaches.** With a `Target` set, Compile adds the generated
+component to it: immediately when the class already exists (a recompile), or
+automatically as soon as Unity finishes importing the freshly written script
+on the first compile — the first pass cannot attach because the type does not
+exist until Unity reimports, so the request is parked in `SessionState` and
+picked up by an `[InitializeOnLoadMethod]` hook after the domain reload. If
+two objects in the scene share the target's name, the deferred pass refuses
+to guess and leaves you the **Attach** button. **Generate** (no target set)
+creates a new GameObject at the scene pivot with the component on it.
+Attaching is edit-mode only.
 
 Linking scripts to GameObjects:
 
@@ -116,7 +135,9 @@ This is Unity's pipeline, not a bug in the burst flow.
 |---|---|
 | `ok: 392 bytes, 2 states -> ... + ...` | Compiled, validated, script written |
 | `[warnings]` suffix | Compiled fine; check the `.fsm` (bare gotos etc.) |
-| `NOT under Resources/` | `.fsmb` written, but the generated class can't load by path — assign the `.fsmb` in the inspector instead (or move output under `Resources/`) |
+| `self-contained: the module bytes are embedded` | Compile wrote a class that carries its own module: attach it and Play, nothing to assign |
+| `does not exist yet - Unity is still importing it` | Normal on the FIRST compile: the type only exists after Unity reimports the new `.cs`. The entry attaches itself automatically once that finishes |
+| `Cannot attach while in play mode` | Exit play mode, then press **Attach** |
 | `file:line:col: error: …` | Compiler rejected the source; nothing written — fix the `.fsm` |
 | `missing .fsm: Assets/… (looked for /abs/path)` | The entry's `FsmPath` does not resolve to a real file. The status prints the absolute path it checked: compare it with the Project window (a project-relative path resolves against the project root, so `Assets/MyFSM/Fsm/Test.fsm` must map to `<project>/Assets/MyFSM/Fsm/Test.fsm`) |
 | `native compiler library 'myfsmc' not found…` | Plugin missing for this platform — add it (see table) or precompile via CLI |

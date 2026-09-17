@@ -4,6 +4,10 @@
 // Sweep, and the Generate/Attach workflow. Generate creates a GameObject in
 // the scene at the SceneView pivot with the entry's generated script
 // attached — edit mode only, never in play mode.
+//
+// Compile ATTACHES: to the entry's Target right away when the class already
+// exists, or automatically once Unity has imported the freshly written script
+// (see the deferred-attach block at the bottom) on the first compile.
 
 using System;
 using System.IO;
@@ -124,8 +128,33 @@ namespace MyFSM.Editor
             if (GUILayout.Button("Compile", GUILayout.Width(90)))
             {
                 serializedObject.ApplyModifiedProperties();
-                if (c.Entries != null && i < c.Entries.Count)
-                    c.CompileEntry(c.Entries[i]);
+                FsmBurstEntry toCompile = (c.Entries != null && i < c.Entries.Count)
+                    ? c.Entries[i] : null;
+                if (toCompile != null && c.CompileEntry(toCompile) &&
+                    !Application.isPlaying)
+                {
+                    // Attach straight away when the class already exists (a
+                    // recompile). On the FIRST compile Unity has not imported
+                    // the new .cs yet, so no type exists to add: queue it and
+                    // the post-reload hook attaches it automatically.
+                    GameObject target = targetP.objectReferenceValue as GameObject;
+                    if (target != null)
+                    {
+                        if (TryAttach(toCompile, target))
+                        {
+                            Debug.Log("[myFSM] compiled + attached " +
+                                      EffectiveClassName(toCompile) + " to '" +
+                                      target.name + "'.");
+                        }
+                        else if (FindComponentType(EffectiveClassName(toCompile)) == null)
+                        {
+                            QueuePendingAttach(toCompile, target);
+                            Debug.Log("[myFSM] compiled " + EffectiveClassName(toCompile) +
+                                      " - attaching to '" + target.name +
+                                      "' as soon as Unity finishes importing the script.");
+                        }
+                    }
+                }
                 AssetDatabase.Refresh();
             }
             bool playing = Application.isPlaying;
@@ -149,12 +178,7 @@ namespace MyFSM.Editor
                         serializedObject.ApplyModifiedProperties();
                         FsmBurstEntry fresh = (c.Entries != null && i < c.Entries.Count)
                             ? c.Entries[i] : null;
-                        Type t2 = FindComponentType(EffectiveClassName(fresh));
-                        if (t2 != null && go.GetComponent(t2) == null)
-                        {
-                            Undo.AddComponent(go, t2);
-                            EditorSceneManager.MarkSceneDirty(go.scene);
-                        }
+                        TryAttach(fresh, go);
                     }
                 }
             }
@@ -174,8 +198,162 @@ namespace MyFSM.Editor
             {
                 EditorGUILayout.HelpBox(cur.LastStatus,
                     cur.LastOk ? MessageType.Info : MessageType.None);
+
+                // Compile -> script written -> Unity must import + compile it
+                // before the component type exists. Say so, instead of leaving
+                // the author wondering why nothing was attached.
+                GameObject targetGo = targetP.objectReferenceValue as GameObject;
+                if (cur.LastOk && !playing && targetGo != null &&
+                    FindComponentType(EffectiveClassName(cur)) == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Script written, but '" + EffectiveClassName(cur) +
+                        "' does not exist yet - Unity is still importing it. It " +
+                        "will be attached to '" + targetGo.name +
+                        "' automatically as soon as it compiles.",
+                        MessageType.Warning);
+                }
+                else if (playing && targetGo != null &&
+                         FindComponentType(EffectiveClassName(cur)) != null &&
+                         targetGo.GetComponent(FindComponentType(EffectiveClassName(cur))) == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Cannot attach while in play mode - exit play mode, then " +
+                        "press Attach.", MessageType.Warning);
+                }
             }
             EditorGUILayout.EndVertical();
+        }
+
+        // ----------------------------------------------------------
+        // Deferred attach
+        //
+        // The first Compile writes the .cs, and Unity only creates the type
+        // after it reimports -- which reloads the domain and wipes statics.
+        // So the request is parked in SessionState (survives a reload, dies
+        // with the editor session) as "scenePath\u001fgameObjectName\u001fClass",
+        // then acted on once the new type exists.
+        // ----------------------------------------------------------
+
+        private const string PendingAttachKey = "myFSM.pendingAttach";
+        private const char PendingSep = '\u001f';
+
+        [InitializeOnLoadMethod]
+        private static void FlushPendingAttachesOnLoad()
+        {
+            // Runs after every domain reload; a pending attach may now resolve.
+            EditorApplication.delayCall += FlushPendingAttaches;
+        }
+
+        private static void QueuePendingAttach(FsmBurstEntry e, GameObject go)
+        {
+            if (e == null || go == null) return;
+            string scenePath = go.scene.IsValid() ? go.scene.path : "";
+            string row = scenePath + PendingSep + go.name + PendingSep +
+                         EffectiveClassName(e);
+            string raw = SessionState.GetString(PendingAttachKey, "");
+            if (raw.IndexOf(row, StringComparison.Ordinal) >= 0) return;
+            SessionState.SetString(PendingAttachKey, raw + row + "\n");
+        }
+
+        private static void FlushPendingAttaches()
+        {
+            string raw = SessionState.GetString(PendingAttachKey, "");
+            if (string.IsNullOrEmpty(raw)) return;
+            try
+            {
+                string[] rows = raw.Split('\n');
+                string keep = "";
+                for (int i = 0; i < rows.Length; i++)
+                {
+                    if (rows[i].Length == 0) continue;
+                    string[] parts = rows[i].Split(new char[] { PendingSep });
+                    if (parts.Length < 3) continue;
+                    Type t = FindComponentType(parts[2]);
+                    if (t == null)
+                    {
+                        keep += rows[i] + "\n"; // not imported yet - try next reload
+                        continue;
+                    }
+                    GameObject go = FindSceneObject(parts[0], parts[1]);
+                    if (go == null)
+                    {
+                        // Gone, renamed, or two objects share the name: never
+                        // guess (see FindSceneObject). Drop it and say so.
+                        Debug.LogWarning("[myFSM] cannot resolve '" + parts[1] +
+                                         "' in the scene to attach " + parts[2] +
+                                         " - use the Attach button.");
+                        continue;
+                    }
+                    if (go.GetComponent(t) == null)
+                    {
+                        Undo.AddComponent(go, t);
+                        EditorSceneManager.MarkSceneDirty(go.scene);
+                        Debug.Log("[myFSM] attached " + parts[2] + " to '" +
+                                  go.name + "'.");
+                    }
+                }
+                SessionState.SetString(PendingAttachKey, keep);
+            }
+            catch (Exception ex)
+            {
+                // Never let a stale pending row wedge the editor.
+                SessionState.EraseString(PendingAttachKey);
+                Debug.LogWarning("[myFSM] pending attach dropped: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Finds a GameObject by name in the given scene. Returns null when it
+        /// is absent or ambiguous (two objects with that name): guessing which
+        /// one the author meant is worse than leaving it to the Attach button.
+        /// </summary>
+        private static GameObject FindSceneObject(string scenePath, string goName)
+        {
+            GameObject found = null;
+            int scenes = UnityEngine.SceneManagement.SceneManager.sceneCount;
+            for (int s = 0; s < scenes; s++)
+            {
+                UnityEngine.SceneManagement.Scene scene =
+                    UnityEngine.SceneManagement.SceneManager.GetSceneAt(s);
+                if (!scene.IsValid() || !scene.isLoaded) continue;
+                if (!string.IsNullOrEmpty(scenePath) && scene.path != scenePath) continue;
+                GameObject[] roots = scene.GetRootGameObjects();
+                for (int r = 0; r < roots.Length; r++)
+                {
+                    GameObject m = FindByName(roots[r].transform, goName);
+                    if (m == null) continue;
+                    if (found != null) return null; // ambiguous
+                    found = m;
+                }
+            }
+            return found;
+        }
+
+        private static GameObject FindByName(Transform t, string goName)
+        {
+            if (t.name == goName) return t.gameObject;
+            for (int i = 0; i < t.childCount; i++)
+            {
+                GameObject m = FindByName(t.GetChild(i), goName);
+                if (m != null) return m;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Adds the entry's generated component to <paramref name="go"/> when
+        /// the type exists and the object does not already have it. Returns
+        /// true when something was attached.
+        /// </summary>
+        private static bool TryAttach(FsmBurstEntry e, GameObject go)
+        {
+            if (e == null || go == null) return false;
+            Type t = FindComponentType(EffectiveClassName(e));
+            if (t == null || go.GetComponent(t) != null) return false;
+            Undo.AddComponent(go, t);
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return true;
         }
 
         private void DrawFileRow(SerializedProperty ep)
