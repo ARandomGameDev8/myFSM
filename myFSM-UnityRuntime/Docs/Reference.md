@@ -26,7 +26,9 @@ runtime `var`/`temp` (see §2). Everything else is call-site free.
 Overloads of one name are grouped so the note is written once, on the first
 row of that name: the difference between them is normally 2D vs 3D
 (`Object3D`/`Vector3` vs `Object2D`/`Vector2`), a point vs an object
-argument, or a fixed vs a caller-supplied speed.
+argument, or a fixed vs a caller-supplied speed. `getPosition` is the one
+name that appears in two categories (Object and Camera), so it carries a
+note in each.
 
 ## 2. Tiers — where a call may appear
 
