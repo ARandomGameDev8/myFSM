@@ -119,6 +119,7 @@ public static class SmokeTest
         TestAIInstance(dir);
         TestPathMapping();
         TestDuplicateClassGuard();
+        TestCollisionMovement(dir);
 
         Console.WriteLine(_fails == 0 ? "SMOKE OK" : "SMOKE FAILED (" + _fails + ")");
         return _fails == 0 ? 0 : 1;
@@ -495,5 +496,122 @@ public static class SmokeTest
 
         Application.dataPath = saved;
         try { Directory.Delete(root, true); } catch { }
+    }
+
+    // -- 9. collision-aware movement. The manual (non-NavMesh) path used to be
+    // a bare position += direction * speed * dt, which walked through walls.
+    // These cases drive the slide math with a fake probe, and one of them runs
+    // a real AI off real compiled bytes all the way to the wall.
+    private static void TestCollisionMovement(string dir)
+    {
+        const float wall = 2.0f;   // plane z = 2, top at y = 1
+        const float radius = 0.5f;
+
+        // open space: the step is not touched
+        bool blocked;
+        Vector3 p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
+            new Vector3(0f, 0f, 1f), radius, false, new NoObstacleProbe(), out blocked);
+        Check(!blocked && Math.Abs(p.z - 1f) < 1e-5f, "open step is unhindered");
+
+        // head-on: stops with the body clear of the plane (centre <= wall - radius)
+        p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
+            new Vector3(0f, 0f, 3f), radius, false, new WallProbe(wall), out blocked);
+        Check(blocked && p.z + radius <= wall + 1e-4f, "head-on: body never overlaps the wall");
+        Check(p.z > wall - radius - 0.1f, "head-on: stops AT the wall, not far from it");
+
+        // already touching: no creep forward over many ticks
+        Vector3 touching = new Vector3(0f, 0f, wall - radius);
+        for (int i = 0; i < 200; i++)
+            touching = MovementSystem.SlideStep(touching, new Vector3(0f, 0f, 0.033f),
+                                                radius, false, new WallProbe(wall), out blocked);
+        Check(touching.z + radius <= wall + 1e-4f, "pressed against the wall: no creep");
+
+        // diagonal: slides along the wall instead of stopping dead
+        p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
+            new Vector3(2f, 0f, 2f), radius, false, new WallProbe(wall), out blocked);
+        Check(blocked && p.x > 1f && p.z + radius <= wall + 1e-4f,
+            "diagonal: slides along the wall without overlapping it");
+
+        // obstacle only exists below y = 1: a body above it passes freely
+        p = MovementSystem.SlideStep(new Vector3(0f, 3f, 0f),
+            new Vector3(0f, 0f, 3f), radius, false, new WallProbe(wall, 1f), out blocked);
+        Check(!blocked && Math.Abs(p.z - 3f) < 1e-5f, "clear above the obstacle");
+
+        // end to end: a real AI moving towards a wall stops short of it
+        string path = Path.Combine(dir, "straightline.fsmb");
+        if (File.Exists(path))
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            GameObject go = new GameObject("Mover");
+            FsmbAIInstance ai = go.AddComponent<FsmbAIInstance>();
+            Check(ai.BootWithBytes(bytes, "Smoke_mover"), "mover boots");
+            // straightline marches along +Z at 2 units/s; fence it off at z=5.
+            ai.Movement.Probe = new WallProbe(5f);
+            Time.deltaTime = 1f / 60f;
+            for (int t = 0; t < 180; t++)
+            {
+                Time.time += Time.deltaTime;
+                ai.TickInternal();
+            }
+            Vector3 end = go.transform.position;
+            Console.WriteLine("    mover ended at z=" + end.z.ToString("0.###"));
+            Check(end.z > 1f, "mover actually travelled (movement still works)");
+            Check(end.z + radius <= 5f + 1e-3f, "mover never passed through the wall");
+
+            // with collision off the same run walks straight on through
+            GameObject go2 = new GameObject("MoverNoCollide");
+            FsmbAIInstance ai2 = go2.AddComponent<FsmbAIInstance>();
+            go2.transform.position = new Vector3(0f, 0f, 0f);
+            ai2.BootWithBytes(bytes, "Smoke_mover2");
+            ai2.Movement.CollisionAware = false;
+            ai2.Movement.Probe = new WallProbe(5f);
+            for (int t = 0; t < 180; t++)
+            {
+                Time.time += Time.deltaTime;
+                ai2.TickInternal();
+            }
+            Check(go2.transform.position.z > 5f, "collision off: still walks through (opt-out works)");
+        }
+    }
+}
+
+/// <summary>Test probe: nothing to hit (mirrors a stub engine's null result).</summary>
+public sealed class NoObstacleProbe : MyFSM.Unity.IMotionProbe
+{
+    public bool Ray(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
+                    out float distance, out Vector3 normal)
+    {
+        distance = 0f;
+        normal = Vector3.zero;
+        return false;
+    }
+}
+
+/// <summary>
+/// Test probe: an infinite plane at z = <c>planeZ</c> whose normal faces -Z.
+/// When <c>topY</c> is given the plane only exists below that height, so a body
+/// above it passes freely.
+/// </summary>
+public sealed class WallProbe : MyFSM.Unity.IMotionProbe
+{
+    private readonly float _z;
+    private readonly float _topY;
+    private readonly bool _limited;
+
+    public WallProbe(float planeZ) { _z = planeZ; }
+    public WallProbe(float planeZ, float topY) { _z = planeZ; _topY = topY; _limited = true; }
+
+    public bool Ray(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
+                    out float distance, out Vector3 normal)
+    {
+        distance = 0f;
+        normal = Vector3.zero;
+        if (_limited && origin.y >= _topY) return false;
+        if (direction.z <= 1e-9f) return false;
+        float t = (_z - origin.z) / direction.z;
+        if (t < 0f || t > maxDistance) return false;
+        distance = t;
+        normal = new Vector3(0f, 0f, -1f);
+        return true;
     }
 }

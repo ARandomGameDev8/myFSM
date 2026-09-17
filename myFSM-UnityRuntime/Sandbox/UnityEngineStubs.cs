@@ -24,7 +24,8 @@ namespace UnityEngine
         public Transform transform { get; set; }
         public T GetComponent<T>()
         {
-            return default(T);
+            if (gameObject == null) return default(T);
+            return gameObject.GetComponent<T>();
         }
     }
 
@@ -73,9 +74,32 @@ namespace UnityEngine
 
         public void SetActive(bool value) { activeSelf = value; }
 
+        // Components live on the GameObject, like the real thing: a component
+        // added here is found by GetComponent (movement reads colliders and
+        // rigidbodies off the agent, so the harness needs this to be real).
+        private readonly System.Collections.Generic.List<Component> _components =
+            new System.Collections.Generic.List<Component>();
+
         public T GetComponent<T>()
         {
+            for (int i = 0; i < _components.Count; i++)
+            {
+                if (_components[i] is T) return (T)(object)_components[i];
+            }
+            if (typeof(T) == typeof(Transform) && transform != null)
+                return (T)(object)transform;
             return default(T);
+        }
+
+        public T[] GetComponents<T>()
+        {
+            System.Collections.Generic.List<T> found =
+                new System.Collections.Generic.List<T>();
+            for (int i = 0; i < _components.Count; i++)
+            {
+                if (_components[i] is T) found.Add((T)(object)_components[i]);
+            }
+            return found.ToArray();
         }
 
         public T AddComponent<T>() where T : Component, new()
@@ -83,6 +107,7 @@ namespace UnityEngine
             T c = new T();
             c.gameObject = this;
             c.transform = transform;
+            _components.Add(c);
             // Mimic Unity: Awake runs synchronously at AddComponent time.
             System.Reflection.MethodInfo awake = typeof(T).GetMethod("Awake",
                 System.Reflection.BindingFlags.Instance |
@@ -476,18 +501,31 @@ namespace UnityEngine
     {
         public Vector3 velocity;
         public float mass = 1f;
+        public bool isKinematic = false;
 
         public void AddForce(Vector3 f) { }
         public void AddForce(Vector3 f, ForceMode mode) { }
+        public void MovePosition(Vector3 p)
+        {
+            if (transform != null) transform.position = p;
+        }
     }
 
     public class Rigidbody2D : Component
     {
         public Vector2 velocity;
         public float mass = 1f;
+        public bool isKinematic = false;
 
         public void AddForce(Vector2 f) { }
         public void AddForce(Vector2 f, ForceMode2D mode) { }
+        public void MovePosition(Vector2 p)
+        {
+            if (transform != null)
+            {
+                transform.position = new Vector3(p.x, p.y, transform.position.z);
+            }
+        }
     }
 
     public enum ForceMode
@@ -507,6 +545,8 @@ namespace UnityEngine
     public class Collider : Component
     {
         public Bounds bounds;
+        public bool enabled = true;
+        public bool isTrigger = false;
 
         public Vector3 ClosestPoint(Vector3 p) { return p; }
     }
@@ -514,6 +554,8 @@ namespace UnityEngine
     public class Collider2D : Component
     {
         public Bounds bounds;
+        public bool enabled = true;
+        public bool isTrigger = false;
 
         public Vector2 ClosestPoint(Vector2 p) { return p; }
     }
@@ -522,12 +564,18 @@ namespace UnityEngine
     {
         public Collider collider;
         public Transform transform;
+        public Vector3 point;
+        public Vector3 normal;
+        public float distance;
     }
 
     public struct RaycastHit2D
     {
         public Collider2D collider;
         public Transform transform;
+        public Vector2 point;
+        public Vector2 normal;
+        public float distance;
     }
 
     public static class Physics
@@ -550,6 +598,14 @@ namespace UnityEngine
     public static class Physics2D
     {
         public static RaycastHit2D Raycast(Vector2 o, Vector2 d, float dist)
+        {
+            return new RaycastHit2D();
+        }
+        public static RaycastHit2D Raycast(Vector2 o, Vector2 d, float dist, int mask)
+        {
+            return new RaycastHit2D();
+        }
+        public static RaycastHit2D CircleCast(Vector2 o, float r, Vector2 d, float dist)
         {
             return new RaycastHit2D();
         }

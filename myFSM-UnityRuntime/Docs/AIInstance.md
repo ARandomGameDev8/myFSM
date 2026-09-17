@@ -86,6 +86,17 @@ DB timetable row + publish to both broadcast servers → tick-sample. Returns
 the change (null when none). Overriding `Update()` without
 `base.Update()` silently stops the AI — prefer `Paused` / `enabled=false`.
 
+**Movement collision.** The `Collision Aware` inspector toggle (default on)
+is copied into `Movement.CollisionAware` at boot. With it on, manual
+(non-NavMesh) movement sweeps each step against colliders and slides along
+surfaces instead of passing through them: the body radius comes from the
+agent's `Collider`/`Collider2D` (horizontal half-extents; `0.5` when it has
+none), the sweep uses the collider centre as its origin, and the position is
+applied through `Rigidbody.MovePosition` when the object has one. Turn it off
+when something else owns the transform (a `CharacterController`, a
+hand-written controller, an animated rig). NavMeshAgent-driven movement is
+unaffected either way — the agent already pathfinds around obstacles.
+
 ## The generated child (what `ClassGenerator` emits)
 
 One module → one `public sealed partial class XxxAI : AIInstance`

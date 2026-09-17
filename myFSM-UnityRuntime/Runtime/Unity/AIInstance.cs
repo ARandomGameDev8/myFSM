@@ -47,6 +47,11 @@ namespace MyFSM.Unity
         [SerializeField] private List<UnityEngine.Object> _slotBindings =
             new List<UnityEngine.Object>();
         [SerializeField] private string _moduleNameOverride = string.Empty;
+        [Tooltip("Sweep manual movement against colliders so this object stops at " +
+                 "walls and slides along them instead of walking through. " +
+                 "NavMeshAgent-driven movement is unaffected (the agent already " +
+                 "pathfinds). Turn off only if something else owns the transform.")]
+        [SerializeField] private bool _collisionAware = true;
 
         public AiExecution Execution { get; private set; }
         public HandleTable Handles { get; private set; }
@@ -243,6 +248,7 @@ namespace MyFSM.Unity
             ModuleName = moduleName ?? "unnamed";
             Handles = new HandleTable();
             Movement = new MovementSystem();
+            Movement.CollisionAware = _collisionAware;
             Paths = new PathTable();
             Dispatcher = new FunctionDispatcher(this);
             UnityExecutionLog log = new UnityExecutionLog("[myFSM " + DisplayName + "] ");

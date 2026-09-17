@@ -16,7 +16,9 @@ Pure C# Unity runtime for myFSM: loads compiler-produced `.fsmb` modules
   live broadcast servers (ordered + priority) for state changes.
 - **Functions**: Unity implementations of all 179 built-in overloads.
   Motion/rotation calls are incremental across ticks (NavMesh when available,
-  manual `position += direction * speed * dt` otherwise) — never teleports.
+  manual `position += direction * speed * dt` otherwise) — never teleports,
+  and manual movement is swept against colliders so bodies stop at walls and
+  slide along them instead of passing through.
 
 Language level is **C# 7.3**, UnityEngine only, no packages — compiles in
 Unity 2019+ and in the sandbox harness (`Sandbox/`).
@@ -146,7 +148,14 @@ snapshots (copies) and applies commands with validation. See
 
 Tier-3 calls post goals, never teleport: NavMesh agents steer via
 `SetDestination` (manual fallback when the path is invalid), everything else
-moves `position += direction * speed * dt`. Object destinations snapshot at
+moves `position += direction * speed * dt` — **swept against colliders**: the
+step is tested with rays from the body's centre and from a ring around it, and
+whatever is left after the first contact is projected onto the surface, so a
+body stops at a wall and slides along it rather than passing through. The body
+radius comes from the agent's collider (0.5 when it has none), and movement is
+applied with `Rigidbody.MovePosition` when the object has a rigidbody.
+`AIInstance` exposes a **Collision Aware** inspector toggle for the rare case
+where something else owns the transform. Object destinations snapshot at
 call time for go/sprint/move; `follow`/`followTarget` re-target live;
 `lookAt` rotates gradually; movement never changes facing. The other 150+
 overloads are direct engine mappings; engine-state failures (null handles,

@@ -4,7 +4,8 @@
 // and goal-posting movement: goTo / followTarget / findShortestPathAndMove /
 // follow / sprintTowards / moveTowards never teleport — they set a goal the
 // MovementSystem advances incrementally (NavMeshAgent when on a mesh,
-// manual position += direction * speed * dt otherwise). Object destinations
+// manual position += direction * speed * dt otherwise, swept against
+// colliders so the body slides along walls). Object destinations
 // are snapshotted at call time (goTo/sprint/move); follow* re-target live.
 
 using System.Collections.Generic;
