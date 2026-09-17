@@ -33,6 +33,7 @@ Unity 2019+ and in the sandbox harness (`Sandbox/`).
 | [`Docs/BroadcastServers.md`](Docs/BroadcastServers.md) | Subscribing, ordered vs priority delivery, verdicts A/B/C, re-entrancy rules, pitfalls |
 | [`Docs/AIInstance.md`](Docs/AIInstance.md) | Base class part-by-part, generated child anatomy, where/how to bind manually, precedence |
 | [`Docs/Compiler.md`](Docs/Compiler.md) | Native lib + wrapper, manual/dynamic/burst compile, inspector workflow, failure modes |
+| [`Docs/Reference.md`](Docs/Reference.md) | **All 179 built-in functions** (ID, signature, tier, behaviour) + every override point and the host API |
 
 ## Layout
 
@@ -61,7 +62,8 @@ Runtime/
     ClassGenerator.cs     .fsmb -> named C# class source (editor-time)
     Functions/            Math Object Sprite Animation Physics Camera
                           Navigation Perception Steering Sensing Control
-Docs/      Setup, MainServer, QueryServer, BroadcastServers, AIInstance, Compiler guides
+Docs/      Setup, Reference (all functions + overrides), MainServer, QueryServer,
+           BroadcastServers, AIInstance, Compiler guides
 Samples/   generated-class examples (what ClassGenerator emits)
 Sandbox/   compile/run harness WITHOUT Unity (stubs + headless smoke test);
            NEVER installed into a Unity project (excluded in the manifest)
