@@ -138,6 +138,7 @@ This is Unity's pipeline, not a bug in the burst flow.
 | `self-contained: the module bytes are embedded` | Compile wrote a class that carries its own module: attach it and Play, nothing to assign |
 | `does not exist yet - Unity is still importing it` | Normal on the FIRST compile: the type only exists after Unity reimports the new `.cs`. The entry attaches itself automatically once that finishes |
 | `Cannot attach while in play mode` | Exit play mode, then press **Attach** |
+| `duplicate class: 'X' is already declared in Assets/...` | A previous Compile left a generated `X.cs` somewhere else (usually after changing `ScriptFolder`/`ClassName`), and two files declaring one class do not merge — every member collides (`CS0102`/`CS0111`/`CS0756`) and the project stops compiling. Delete the named file, or give the entry a different `ClassName`. Compile refuses to write a second one. |
 | `file:line:col: error: …` | Compiler rejected the source; nothing written — fix the `.fsm` |
 | `missing .fsm: Assets/… (looked for /abs/path)` | The entry's `FsmPath` does not resolve to a real file. The status prints the absolute path it checked: compare it with the Project window (a project-relative path resolves against the project root, so `Assets/MyFSM/Fsm/Test.fsm` must map to `<project>/Assets/MyFSM/Fsm/Test.fsm`) |
 | `native compiler library 'myfsmc' not found…` | Plugin missing for this platform — add it (see table) or precompile via CLI |
