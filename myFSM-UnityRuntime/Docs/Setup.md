@@ -48,8 +48,10 @@ installs the payload there. Same files, less dragging.
 
 ## Wiring an AI (inspector path)
 
-1. Select a GameObject, Add Component → `FsmbAIInstance`.
-2. Assign the `.fsmb` to the module slot.
+1. Select a GameObject, Add Component → `FsmbAIInstance`. (Only this
+   component has a module slot — a generated class has none, because it
+   carries its own module.)
+2. Assign the module: a `.bytes` file, not the `.fsmb`.
 3. Fill the slot list: **list index = binding slot**. Slot order/names come
    from the module's `var` declarations (see them via the `GetAssetInfo`
    query, or the generated `Slot_*` constants).
@@ -92,7 +94,8 @@ recompile).
 
 | Symptom | Cause / fix |
 |---|---|
-| `no module: this class was generated before myFSM embedded module bytes` | The class predates embedded modules (or it is a bare `AIInstance`). Regenerate it with the burst compiler, or assign a module asset in the inspector. |
+| `no module: this component has nothing to boot from` | A bare `AIInstance` with neither embedded bytes nor an assigned asset. Use a generated class (self-contained), or `FsmbAIInstance` with a module assigned. |
+| A generated class shows no module slot | Correct — it carries its own module. Only `FsmbAIInstance` has a module field. |
 | `no module at Resources path 'X'` | The class expects a `Resources/` TextAsset that is not there. Regenerate so the class carries its own bytes, or put the `.bytes` (not the `.fsmb`) under `Resources/`. |
 | `boot failed: …` (reader/validator message) | The `.fsmb` is corrupt or not v0.5 — recompile with a matching `fsmc`. |
 | `module must declare exactly one entry state` | Module has zero (or several) `@ENTRY` states — fix the source. |

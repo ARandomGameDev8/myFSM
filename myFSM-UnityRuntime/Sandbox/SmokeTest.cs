@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using MyFSM.Core;
 using MyFSM.Unity;
 using UnityEngine;
@@ -301,6 +302,20 @@ public static class SmokeTest
             "generator emits named subclass + state constants");
         Check(src.Contains("FromBase64String") && src.Contains("EmbeddedModule"),
             "generated class embeds its own module bytes");
+        // A self-contained class must not carry the legacy Resources plumbing:
+        // no module asset to assign, no path to get wrong.
+        Check(!src.Contains("ModuleResourcePath") && !src.Contains("AssetResourcePath"),
+            "embedded class carries no module-asset plumbing");
+        Check(src.IndexOf("EmbeddedModule", StringComparison.Ordinal) >
+              src.IndexOf("OnBindingsManual", StringComparison.Ordinal),
+            "the blob is emitted below the readable members, not at the top");
+        // The legacy overload (no bytes passed) must still emit the Resources
+        // path, since that is the only way such a class can boot.
+        string legacy = ClassGenerator.GenerateSource(m, "Minimal", "LegacyAI",
+                                                      "MyFSM/Minimal");
+        Check(legacy.Contains("ModuleResourcePath") &&
+              !legacy.Contains("EmbeddedModule"),
+            "generator without bytes still emits the legacy Resources path");
         // The embedded blob must decode back to the exact module: the class is
         // the whole AI, so a wrong round trip means a silently different brain.
         string blob = ExtractBase64(src);

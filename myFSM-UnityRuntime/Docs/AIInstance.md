@@ -25,13 +25,15 @@ ticks AIs (see `MainServer.md`).
 across hot reloads), `Booted`, `Paused` (soft pause — still records DB
 samples, idles), `ModuleName`, `BootError` (set when boot fails).
 
-**Generated-class pins** (virtuals, `null` by default): `EmbeddedModule`
-(the module bytes compiled into the class — a generated class is
-self-contained and needs no asset at all), `ModuleResourcePath` (legacy
+**Module source** (virtuals, `null` by default): `EmbeddedModule` (the module
+bytes compiled into the class — a generated class is self-contained and needs
+no asset at all), `AssignedModuleAsset` (a module picked in the inspector,
+overridden by `FsmbAIInstance` — generated classes deliberately have no such
+field, so their inspector shows no module slot), `ModuleResourcePath` (legacy
 Resources path fallback) and `GeneratedModuleName` (module-name fallback).
-Module resolution order at boot: inspector-assigned asset (explicit
-override) → `EmbeddedModule` → `Resources.Load<TextAsset>(ModuleResourcePath)`
-→ fail with a message naming which of the three was missing. `CurrentStateName`
+Resolution order at boot: `AssignedModuleAsset` (explicit override) →
+`EmbeddedModule` → `Resources.Load<TextAsset>(ModuleResourcePath)` → fail. The
+failure message says which source was missing, and what to do about it. `CurrentStateName`
 (`"<none>"` before the first tick) and `DisplayName` (`Module@GameObject`).
 
 **Journal + count.** `BindingEntry` (`Slot` + object-or-value) and `_journal`

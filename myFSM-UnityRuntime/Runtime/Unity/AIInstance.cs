@@ -44,7 +44,6 @@ namespace MyFSM.Unity
 
     public abstract class AIInstance : MonoBehaviour
     {
-        [SerializeField] private TextAsset _moduleAsset;
         [SerializeField] private List<UnityEngine.Object> _slotBindings =
             new List<UnityEngine.Object>();
         [SerializeField] private string _moduleNameOverride = string.Empty;
@@ -72,10 +71,17 @@ namespace MyFSM.Unity
         /// The module bytes compiled INTO the generated class (see
         /// ClassGenerator). When this is non-null the AI is self-contained:
         /// no .fsmb asset, no Resources folder, nothing to assign in the
-        /// inspector. Assigning a module asset in the inspector overrides it,
-        /// which is the only way to swap the brain without regenerating.
+        /// inspector. FsmbAIInstance overrides AssignedModuleAsset instead.
         /// </summary>
         protected virtual byte[] EmbeddedModule { get { return null; } }
+
+        /// <summary>
+        /// A module asset picked in the inspector. Only subclasses that expose
+        /// such a field override this (FsmbAIInstance does); generated classes
+        /// deliberately have no module field at all, since they carry their
+        /// own bytes.
+        /// </summary>
+        protected virtual TextAsset AssignedModuleAsset { get { return null; } }
 
         public string CurrentStateName
         {
@@ -142,12 +148,13 @@ namespace MyFSM.Unity
                 : (GeneratedModuleName ?? "module");
 
             // 1. An inspector-assigned module asset is an explicit override.
-            if (_moduleAsset != null)
+            TextAsset assigned = AssignedModuleAsset;
+            if (assigned != null)
             {
                 string assetName = !string.IsNullOrEmpty(_moduleNameOverride)
                     ? _moduleNameOverride
-                    : (GeneratedModuleName ?? _moduleAsset.name);
-                return BootWithBytes(_moduleAsset.bytes, assetName);
+                    : (GeneratedModuleName ?? assigned.name);
+                return BootWithBytes(assigned.bytes, assetName);
             }
 
             // 2. Bytes compiled into the class itself: the generated script is
@@ -178,10 +185,10 @@ namespace MyFSM.Unity
                 return false;
             }
 
-            FailBoot("no module: nothing assigned and nothing embedded. Assign a " +
-                     "module TextAsset to 'Module Asset' (use the .bytes file - " +
-                     "Unity cannot import .fsmb as a TextAsset), or use a " +
-                     "generated class, which carries its own module bytes");
+            FailBoot("no module: this component has nothing to boot from. Use a " +
+                     "generated class (it carries its own module bytes), or " +
+                     "FsmbAIInstance with a module asset assigned - a .bytes " +
+                     "file, since Unity cannot import .fsmb as a TextAsset");
             return false;
         }
 
@@ -610,5 +617,11 @@ namespace MyFSM.Unity
     /// </summary>
     public sealed class FsmbAIInstance : AIInstance
     {
+        [Tooltip("The module for this AI. Unity has no importer for .fsmb, so " +
+                 "assign the .bytes file the burst compiler writes next to it " +
+                 "(any TextAsset holding module bytes works).")]
+        [SerializeField] private TextAsset _moduleAsset;
+
+        protected override TextAsset AssignedModuleAsset { get { return _moduleAsset; } }
     }
 }

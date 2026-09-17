@@ -91,7 +91,7 @@ Three files per entry, one validated byte array:
 | File | Why |
 |---|---|
 | `Xxx.fsmb` | The module, as the CLI/other tools know it |
-| `XxxAI.cs` | The class, with those bytes embedded (base64): attach and Play, nothing to assign |
+| `XxxAI.cs` | The class, with those bytes embedded (base64, at the bottom of the file). Attach the component and Play: no module slot, no Resources folder, nothing to assign. The class emits no `ModuleResourcePath`/`AssetResourcePath` at all |
 | `Xxx.bytes` | Unity's importer only makes a `TextAsset` out of `.bytes`; assign this twin to a plain `FsmbAIInstance` (a `.fsmb` lands as a `DefaultAsset` and cannot be assigned) |
 
 ## 5. The inspector workflow (edit mode)
