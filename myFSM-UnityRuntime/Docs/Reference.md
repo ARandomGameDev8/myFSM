@@ -117,9 +117,9 @@ Sprite + renderer state: colour, visibility, bounds, sprite size.
 
 | ID | Signature | Tier | Notes |
 |---|---|---|---|
-| `0x0200` | `getColor(Sprite3D spr) -> Vector3` | 1 | SpriteRenderer.color (RGBA). |
+| `0x0200` | `getColor(Sprite3D spr) -> Vector3` | 1 | SpriteRenderer colour as (r, g, b) — **alpha is dropped**; the result is a Vector3, not a colour type. |
 | `0x0201` | `getColor(Sprite2D spr) -> Vector3` | 1 |  |
-| `0x0202` | `setColor(Sprite3D spr, Vector3 rgb) -> void` | 2 | Writes SpriteRenderer.color (Tier 2). |
+| `0x0202` | `setColor(Sprite3D spr, Vector3 rgb) -> void` | 2 | Writes r/g/b from a Vector3 and leaves **alpha untouched** (Tier 2) — the mirror of getColor. |
 | `0x0203` | `setColor(Sprite2D spr, Vector3 rgb) -> void` | 2 |  |
 | `0x0204` | `isVisible(Sprite3D spr) -> bool` | 1 | Whether the renderer is enabled/visible. |
 | `0x0205` | `isVisible(Sprite2D spr) -> bool` | 1 |  |
@@ -207,13 +207,13 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0601` | `findPath(Vector2 from, Vector2 to) -> int` | 1 |  |
 | `0x0602` | `getNextWaypoint(int path) -> Vector3` | 1 | Pops the next corner of a path id. Past the end it returns the last corner forever (no error). |
 | `0x0603` | `getPathLength(int path) -> float` | 1 | Total length of the stored polyline; 0 for an unknown path (logs an error). |
-| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the agent's stopping distance of a point/object (default 0.2 without a NavMeshAgent). |
+| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. |
 | `0x0605` | `hasReachedDestination(NavMeshAgent agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0606` | `hasReachedDestination(Object3D agent, Vector3 tgt) -> bool` | 1 |  |
 | `0x0607` | `hasReachedDestination(Object3D agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0608` | `hasReachedDestination(Object2D agent, Vector2 tgt) -> bool` | 1 |  |
 | `0x0609` | `hasReachedDestination(Object2D agent, Object2D tgt) -> bool` | 1 |  |
-| `0x060A` | `goTo(NavMeshAgent agent, Vector3 dest) -> void` | 3 | Posts a Point goal at the agent's navigation speed. The destination is **snapshotted** now. |
+| `0x060A` | `goTo(NavMeshAgent agent, Vector3 dest) -> void` | 3 | Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. |
 | `0x060B` | `goTo(NavMeshAgent agent, Object3D dest) -> void` | 3 |  |
 | `0x060C` | `goTo(Object3D agent, Vector3 dest) -> void` | 3 |  |
 | `0x060D` | `goTo(Object3D agent, Object3D dest) -> void` | 3 |  |
