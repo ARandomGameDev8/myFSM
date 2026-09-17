@@ -48,28 +48,30 @@ Tier 3 calls never do the work themselves: they post a **goal** onto the AI's
 round. That is why `waitUntil(hasReachedDestination(agent, point))` can come
 true, and why movement keeps advancing while the AI is suspended.
 
-The step is then applied through the components the agent actually carries —
-this is the environment check, and it is why walls stop an AI instead of
-letting it walk through:
+The step is then handed to Unity. The component the agent carries decides
+which Unity function moves it — this is the environment check, and there is no
+collision maths in the runtime at all:
 
-| On the agent | How the step is applied |
-|---|---|
-| `NavMeshAgent` (enabled, on a mesh) | `SetDestination` — the mesh pathfinds and steers |
-| `CharacterController` | `Move()` — the controller's own capsule sweep handles slopes, steps and walls |
-| `Rigidbody`/`Rigidbody2D`, dynamic | velocity is set each tick; the physics solver resolves the contacts (mass, drag, gravity keep working) |
-| `Rigidbody`/`Rigidbody2D`, kinematic | moved here (overlap resolution), then `MovePosition` — the solver does not collide kinematic bodies |
-| `Collider`/`Collider2D` only | substeps through `Physics.ComputePenetration` / `Collider2D.Distance`: the engine supplies the minimal translation that separates the body, and the leftover step slides along the contact |
-| no components | the same substep loop with `SphereCast`/`CircleCast` and a ray for the true surface normal, at the default body radius |
+| On the agent | Unity call | Stopped by walls? |
+|---|---|---|
+| `NavMeshAgent` (enabled, on a mesh) | `SetDestination` | yes, by the NavMesh |
+| `CharacterController` | `Move` | yes — the controller's own capsule sweep |
+| `Rigidbody`/`Rigidbody2D`, dynamic | `velocity` is set (or `AddForce`) | yes — the physics solver |
+| `Rigidbody`/`Rigidbody2D`, kinematic | `MovePosition` | **no** — Unity: "collisions won't affect the rigidbody itself" |
+| `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |
+| nothing at all | none | no — the step goes to the transform |
 
-Detection and resolution are Unity's — `ComputePenetration`/`Collider2D.Distance`
-for a body with a collider, `SphereCast`/`CircleCast` + a ray for one without,
-`Move()`, and the solver. Movement only chooses where to ask and what to do
-with the answer, and it logs the driver once per agent
-(`movement: <object> driven by collider sweep`) plus the first time something
-stops it (`movement: <object> stopped by Wall`). `Movement.CollisionAware = false`
-skips the environment entirely and writes to the transform (the escape hatch
-for objects whose movement something else owns); NavMeshAgent pathing is
-unaffected either way.
+Direct position changes are untouched: `setPosition`, `setRotation` and
+`setScale` still write the transform and teleport, exactly like
+`transform.position` does in Unity. Only goal-driven movement is routed
+through the calls above.
+
+Each agent logs the call it uses when that changes
+(`movement: Marcher -> Rigidbody.velocity (physics resolves collisions)`), and
+a collider with no body logs one warning naming the component to add.
+`Movement.CollisionAware = false` skips the environment and writes to the
+transform (the escape hatch for objects whose movement something else owns);
+a NavMeshAgent steers itself either way.
 
 ---
 
@@ -404,7 +406,6 @@ that shape still emits the Resources path, because it has nothing else.
 | `ITimeProvider` | Feed your own clock | `Time` + `DeltaTime`. Default `UnityTimeProvider` uses `UnityEngine.Time`. |
 | `IExecutionLog` | Route runtime logging | `Info` / `Warn` / `Error`. Default logs through `Debug` with a `[myFSM name@object]` prefix. |
 | `IFunctionDispatcher` | Serve calls yourself | `Dispatch(id, args, exec)`. Default resolves handles against the scene; the sandbox harness substitutes a stub. |
-| `IMotionProbe` | Replace movement's collision queries | `ResolvePenetration` (the engine's minimal translation for the body's own collider: `Physics.ComputePenetration` / `Collider2D.Distance`), `SphereCast` and `Raycast` (used when the object has no collider). `MovementSystem.Probe` is swappable at runtime — that is how the stop/slide/push-out tests run engine-free. |
 | `IQueryBackend` | Answer external queries/commands | Implemented by `MainServer`; the query server is the only consumer. |
 
 ---
@@ -417,7 +418,7 @@ that shape still emits the Resources path, because it has nothing else.
 |---|---|---|
 | `Execution` | `AiExecution` | The booted module + variable tables + state handler. `null` before boot. |
 | `Handles` | `HandleTable` | Handle-id ↔ Unity object map for this AI. |
-| `Movement` | `MovementSystem` | Posted goals, and the environment check: `Movement.Resolve(t, is2D)` reports the `MotionDriver` chosen for an object. `Movement.Probe` and `Movement.CollisionAware` live here too. |
+| `Movement` | `MovementSystem` | Posted goals, and the environment check: `Movement.Resolve(t, is2D)` reports the `MotionDriver` chosen for an object (NavMeshAgent / CharacterController / Rigidbody(2D) / collider-without-a-body / transform), without running anything. `Movement.CollisionAware` lives here too. |
 | `Paths` | `PathTable` | Path ids handed out by `findPath`. |
 | `Dispatcher` | `FunctionDispatcher` | Resolves handles/components for built-in calls. |
 | `InstanceId` / `ModuleName` / `Booted` / `BootError` | — | Registry identity and boot outcome. |

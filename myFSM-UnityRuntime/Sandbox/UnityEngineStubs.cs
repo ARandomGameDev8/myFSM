@@ -544,10 +544,16 @@ namespace UnityEngine
         public float mass = 1f;
         public bool isKinematic = false;
 
+        /// <summary>How many times Unity's move API was called (harness only).</summary>
+        public int movePositionCalls;
+        public Vector3 lastMovePosition;
+
         public void AddForce(Vector3 f) { }
         public void AddForce(Vector3 f, ForceMode mode) { }
         public void MovePosition(Vector3 p)
         {
+            movePositionCalls++;
+            lastMovePosition = p;
             if (transform != null) transform.position = p;
         }
         public void MoveRotation(Quaternion q)
@@ -562,10 +568,16 @@ namespace UnityEngine
         public float mass = 1f;
         public bool isKinematic = false;
 
+        /// <summary>How many times Unity's move API was called (harness only).</summary>
+        public int movePositionCalls;
+        public Vector2 lastMovePosition;
+
         public void AddForce(Vector2 f) { }
         public void AddForce(Vector2 f, ForceMode2D mode) { }
         public void MovePosition(Vector2 p)
         {
+            movePositionCalls++;
+            lastMovePosition = p;
             if (transform != null)
             {
                 transform.position = new Vector3(p.x, p.y, transform.position.z);
@@ -647,8 +659,14 @@ namespace UnityEngine
         public float skinWidth = 0.08f;
         public bool isGrounded = false;
 
+        /// <summary>How many times Unity's Move was called (harness only).</summary>
+        public int moveCalls;
+        public Vector3 lastMotion;
+
         public CollisionFlags Move(Vector3 motion)
         {
+            moveCalls++;
+            lastMotion = motion;
             if (transform != null) transform.position = transform.position + motion;
             return CollisionFlags.None;
         }
@@ -753,9 +771,19 @@ namespace UnityEngine
 
     public static class Debug
     {
-        public static void Log(object m) { Console.WriteLine("[log] " + m); }
-        public static void LogWarning(object m) { Console.WriteLine("[warn] " + m); }
-        public static void LogError(object m) { Console.WriteLine("[error] " + m); }
+        /// <summary>Everything logged this run, for the smoke tests (harness only).</summary>
+        public static readonly System.Collections.Generic.List<string> Messages =
+            new System.Collections.Generic.List<string>();
+
+        private static void Record(string kind, object m)
+        {
+            string line = kind + ": " + m;
+            Messages.Add(line);
+            Console.WriteLine(line);
+        }
+        public static void Log(object m) { Record("[log]", m); }
+        public static void LogWarning(object m) { Record("[warn]", m); }
+        public static void LogError(object m) { Record("[error]", m); }
     }
 
     public static class Time
@@ -800,7 +828,16 @@ namespace UnityEngine.AI
         public bool isOnNavMesh = false;
         public bool isStopped = false;
 
-        public bool SetDestination(Vector3 target) { return true; }
+        /// <summary>How many times Unity's path API was called (harness only).</summary>
+        public int setDestinationCalls;
+        public Vector3 lastDestination;
+
+        public bool SetDestination(Vector3 target)
+        {
+            setDestinationCalls++;
+            lastDestination = target;
+            return true;
+        }
         public void ResetPath() { }
     }
 }

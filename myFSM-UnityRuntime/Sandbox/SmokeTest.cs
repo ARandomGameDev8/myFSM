@@ -498,320 +498,191 @@ public static class SmokeTest
         try { Directory.Delete(root, true); } catch { }
     }
 
-    // -- 9. environment-aware movement. A tier-3 goal does not move a bare
-    // transform: the components on the agent decide how the step is applied
-    // (velocity, CharacterController.Move, a swept MovePosition, an engine cast
-    // sweep, or the transform), and every contact comes from the engine. These
-    // cases cover the sweep, the documented traps around it (SphereCast's
-    // normal is not the surface normal; a shape cast is blind to what it
-    // overlaps and to non-convex meshes), the driver each component set
-    // selects, and end-to-end runs on real compiled bytes -- including the
-    // wall-between-the-AI-and-its-target case.
+    // -- 9. environment-aware movement. Tier-3 goals do not move a bare
+    // transform: each agent's movement is handed to the Unity component that
+    // owns that kind of motion, and this section proves which call is made,
+    // with what arguments, for every component set. The two documented limits
+    // are pinned too: a kinematic body is not stopped by collisions, and a
+    // collider with no body is static geometry that Unity cannot move.
     private static void TestCollisionMovement(string dir)
     {
-        const float wall = 2.0f;    // a wall occupies the half-space past this plane
-        const float radius = 0.5f;
-        Vector3 forward = new Vector3(0f, 0f, 1f);
-        bool blocked;
-
-        // ---- the swept step: engine cast + slide ----
-        Vector3 p = MovementSystem.SlideStep(Vector3.zero, forward, radius, false,
-                                            new NoObstacleProbe(), out blocked);
-        Check(!blocked && Math.Abs(p.z - 1f) < 1e-5f, "open step is unhindered");
-
-        p = MovementSystem.SlideStep(Vector3.zero, forward * 3f, radius, false,
-                                     new PlaneProbe(forward, wall), out blocked);
-        Check(blocked && p.z + radius <= wall + 1e-4f, "head-on: body never overlaps the wall");
-        Check(p.z > wall - radius - 0.1f, "head-on: stops AT the wall, not far from it");
-
-        Vector3 touching = new Vector3(0f, 0f, wall - radius - MovementSystem.CollisionSkin);
-        for (int i = 0; i < 200; i++)
-            touching = MovementSystem.SlideStep(touching, forward * 0.033f, radius, false,
-                                                new PlaneProbe(forward, wall), out blocked);
-        Check(touching.z + radius <= wall + 1e-4f, "pressed against the wall: no creep");
-
-        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
-                                     new PlaneProbe(forward, wall), out blocked);
-        Check(blocked && p.x > 1f && p.z + radius <= wall + 1e-4f,
-              "diagonal: slides along the wall without overlapping it");
-
-        p = MovementSystem.SlideStep(new Vector3(0f, 3f, 0f), forward * 3f, radius, false,
-                                     new PlaneProbe(forward, wall, 1f), out blocked);
-        Check(!blocked && Math.Abs(p.z - 3f) < 1e-5f, "clear above the obstacle: passes freely");
-
-        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(3f, 0f, 0f), radius, true,
-                                     new PlaneProbe(new Vector3(1f, 0f, 0f), wall), out blocked);
-        Check(blocked && p.x + radius <= wall + 1e-4f, "2D circle cast stops at the wall");
-
-        // ---- Unity docs, trap 1: a sphere cast's normal is often the
-        // contact->centre direction, "misleading if you're using it for
-        // sliding". With a deliberately wrong cast normal the slide must still
-        // use the ray's true surface normal and stay out of the wall.
-        PlaneProbe skewed = new PlaneProbe(forward, wall);
-        skewed.SkewCastNormal = true;
-        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
-                                     skewed, out blocked);
-        Check(blocked && p.z + radius <= wall + 1e-4f,
-              "a wrong cast normal cannot push the slide into the wall");
-        Check(p.x > 1f, "the skewed normal still slides along the true surface");
-
-        // ---- Unity docs, trap 2: "SphereCast will not detect colliders for
-        // which the sphere overlaps the collider" (and never non-convex
-        // meshes). When the shape cast is blind the rays must take over.
-        PlaneProbe meshWall = new PlaneProbe(forward, wall);
-        meshWall.BlindToSphereCast = true;
-        p = MovementSystem.SlideStep(Vector3.zero, forward * 3f, radius, false,
-                                     meshWall, out blocked);
-        Check(blocked && p.z + radius <= wall + 1e-4f,
-              "shape-cast-blind wall is caught by the ray fallback");
-        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
-                                     meshWall, out blocked);
-        Check(blocked && p.x > 1f && p.z + radius <= wall + 1e-4f,
-              "the ray fallback slides along it too");
-
-        // ---- trap 2b: already inside the wall -> shape cast blind AND rays
-        // starting inside a collider do not report it. The overlap push-out is
-        // the net that guarantees a tick never ends inside something.
-        Vector3 inside = new Vector3(0f, 0f, wall + 0.3f);
-        PlaneProbe solidWall = new PlaneProbe(forward, wall);
-        Vector3 push;
-        bool pushed = solidWall.ResolvePenetration(null, inside, radius, false, out push);
-        Check(pushed && inside.z + push.z + radius <= wall + 1e-4f,
-              "overlap query pushes a buried body back out of the wall");
-
-        // ---- driver selection: the components decide, not the call ----
+        // ---- the environment check: component set -> Unity call ----
         MovementSystem ms = new MovementSystem();
 
         GameObject bare = new GameObject("Bare");
-        Check(ms.Resolve(bare.transform, false).Driver == MotionDriver.Transform,
-              "no components -> swept transform step");
+        MotionContext bareCtx = ms.Resolve(bare.transform, false);
+        Check(bareCtx.Driver == MotionDriver.Transform,
+              "nothing attached -> transform step");
 
         GameObject colOnly = new GameObject("ColOnly");
         colOnly.AddComponent<Collider>();
-        Check(ms.Resolve(colOnly.transform, false).Driver == MotionDriver.ColliderSweep,
-              "collider, no body -> engine sweep + slide");
+        Check(ms.Resolve(colOnly.transform, false).Driver == MotionDriver.ColliderNoBody,
+              "collider, no body -> Unity has no move for it (warn + transform)");
 
         GameObject dynGo = new GameObject("Dyn");
         Rigidbody dynBody = dynGo.AddComponent<Rigidbody>();
-        Check(ms.Resolve(dynGo.transform, false).Driver == MotionDriver.Rigidbody,
-              "rigidbody -> physics-driven step");
-        Check(ms.Resolve(dynGo.transform, false).Owner == dynGo.transform,
-              "the body's own transform is what moves");
+        MotionContext dynCtx = ms.Resolve(dynGo.transform, false);
+        Check(dynCtx.Driver == MotionDriver.Rigidbody && !dynCtx.Kinematic,
+              "rigidbody -> Rigidbody.velocity (physics resolves collisions)");
+        Check(dynCtx.Owner == dynGo.transform, "the body's own transform is what moves");
 
         dynBody.isKinematic = true;
-        Check(ms.Resolve(dynGo.transform, false).Driver == MotionDriver.Rigidbody,
-              "kinematic rigidbody keeps the swept MovePosition path");
+        MotionContext kinCtx = ms.Resolve(dynGo.transform, false);
+        Check(kinCtx.Driver == MotionDriver.Rigidbody && kinCtx.Kinematic,
+              "kinematic rigidbody -> Rigidbody.MovePosition");
 
         GameObject ccGo = new GameObject("CC");
         ccGo.AddComponent<CharacterController>();
         Check(ms.Resolve(ccGo.transform, false).Driver == MotionDriver.CharacterController,
-              "CharacterController is chosen before its Collider base class");
+              "CharacterController -> CharacterController.Move (chosen before Collider)");
 
         GameObject rb2Go = new GameObject("Rb2");
         rb2Go.AddComponent<Rigidbody2D>();
         Check(ms.Resolve(rb2Go.transform, true).Driver == MotionDriver.Rigidbody2D,
-              "rigidbody2D -> physics-driven step (2D)");
+              "rigidbody2D -> velocity / MovePosition (2D)");
 
         GameObject col2Go = new GameObject("Col2");
         col2Go.AddComponent<Collider2D>();
-        Check(ms.Resolve(col2Go.transform, true).Driver == MotionDriver.ColliderSweep,
-              "collider2D, no body -> 2D engine sweep");
+        Check(ms.Resolve(col2Go.transform, true).Driver == MotionDriver.ColliderNoBody,
+              "collider2D, no body -> same limit in 2D");
 
-        // the script can sit on a child: a body on the parent still drives it
-        GameObject parentGo = new GameObject("Parent");
-        parentGo.AddComponent<Rigidbody>();
-        GameObject childGo = new GameObject("Child");
-        childGo.transform.parent = parentGo.transform;
-        Check(ms.Resolve(childGo.transform, false).Driver == MotionDriver.Rigidbody &&
-              ms.Resolve(childGo.transform, false).Owner == parentGo.transform,
-              "a body on the parent drives the agent");
-
-        // ...and so does a collider on the parent (the reported setup)
+        // a collider on the PARENT is not this object's body: in Unity it
+        // belongs to the parent (that was the bug behind "walks through walls")
         GameObject parentCol = new GameObject("ParentCollider");
         parentCol.AddComponent<Collider>();
         GameObject childScript = new GameObject("ChildScript");
         childScript.transform.parent = parentCol.transform;
-        MotionContext parentCtx = ms.Resolve(childScript.transform, false);
-        Check(parentCtx.Driver == MotionDriver.ColliderSweep &&
-              parentCtx.Owner == parentCol.transform &&
-              parentCtx.Shape != null,
-              "a collider on the parent drives the agent and is swept");
+        Check(ms.Resolve(childScript.transform, false).Driver == MotionDriver.Transform,
+              "a collider on the parent is not the agent's body");
+
+        // ...but a BODY on the parent does drive the agent (it rides it)
+        GameObject parentBody = new GameObject("ParentBody");
+        parentBody.AddComponent<Rigidbody>();
+        GameObject childOnBody = new GameObject("ChildOnBody");
+        childOnBody.transform.parent = parentBody.transform;
+        MotionContext rideCtx = ms.Resolve(childOnBody.transform, false);
+        Check(rideCtx.Driver == MotionDriver.Rigidbody && rideCtx.Owner == parentBody.transform,
+              "a body on the parent drives the agent");
 
         MovementSystem raw = new MovementSystem();
         raw.CollisionAware = false;
         Check(raw.Resolve(colOnly.transform, false).Driver == MotionDriver.Transform,
-              "CollisionAware off -> raw transform stepping");
+              "CollisionAware off -> transform step, no component consulted");
 
-        // ---- how each driver applies a step, end to end on real bytes ----
+        // ---- end to end on real compiled bytes: which call, and with what ----
         string path = Path.Combine(dir, "straightline.fsmb");
-        if (File.Exists(path))
+        if (!File.Exists(path)) return;
+
+        byte[] bytes = File.ReadAllBytes(path);
+        Time.deltaTime = 1f / 60f;
+        const float speed = 2f;                       // straightline.fsm
+        float step = speed * Time.deltaTime;          // 0.0333 per tick
+        const int ticks = 31;                         // first tick posts the goal
+        int steps = ticks - 1;
+
+        // (a) dynamic rigidbody: a velocity request, never a teleport
+        GameObject bodyGo = new GameObject("BodyMover");
+        Rigidbody body = bodyGo.AddComponent<Rigidbody>();
+        FsmbAIInstance bodyAi = bodyGo.AddComponent<FsmbAIInstance>();
+        Check(bodyAi.BootWithBytes(bytes, "Smoke_body"), "rigidbody AI boots");
+        RunTicks(bodyAi, ticks);
+        Check(Math.Abs(body.velocity.z - speed) < 1e-3f && Math.Abs(body.velocity.x) < 1e-4f,
+              "dynamic body: velocity is set to the goal speed (Unity moves it)");
+        Check(Math.Abs(bodyGo.transform.position.z) < 1e-4f && body.movePositionCalls == 0,
+              "dynamic body: movement never positions the transform itself");
+
+        // dropping the goal stops the body it was driving
+        int handleId = 0;
+        for (int id = 1; id <= bodyAi.Handles.Count && handleId == 0; id++)
         {
-            byte[] bytes = File.ReadAllBytes(path);
-            Time.deltaTime = 1f / 60f;
-
-            // (a) collider, no body: swept to the wall and held there
-            GameObject sweepGo = new GameObject("SweepMover");
-            sweepGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            FsmbAIInstance sweepAi = sweepGo.AddComponent<FsmbAIInstance>();
-            Check(sweepAi.BootWithBytes(bytes, "Smoke_sweep"), "collider-only AI boots");
-            sweepAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(sweepAi, 180);
-            Vector3 sweepEnd = sweepGo.transform.position;
-            Console.WriteLine("    collider-only mover ended at z=" + sweepEnd.z.ToString("0.###"));
-            Check(sweepEnd.z > 1f, "collider-only mover travelled");
-            Check(sweepEnd.z + 0.5f <= 5f + 1e-3f, "collider-only mover stopped at the wall");
-
-            // (a2) a wider collider is stopped further out: the SHAPE decides
-            GameObject wideGo = new GameObject("WideMover");
-            wideGo.AddComponent<Collider>().size = new Vector3(3f, 2f, 3f);
-            FsmbAIInstance wideAi = wideGo.AddComponent<FsmbAIInstance>();
-            Check(wideAi.BootWithBytes(bytes, "Smoke_wide"), "wide-collider AI boots");
-            wideAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(wideAi, 180);
-            Vector3 wideEnd = wideGo.transform.position;
-            Console.WriteLine("    wide collider (r=1.5) ended at z=" + wideEnd.z.ToString("0.###"));
-            Check(wideEnd.z + 1.5f <= 5f + 1e-3f, "wide body never overlaps the wall");
-            Check(wideEnd.z < sweepEnd.z - 0.5f,
-                  "a wider body is stopped further from the wall");
-
-            // (a3) shape-cast-blind wall (a non-convex MeshCollider behaves this
-            // way) with NO collider on the agent, so the cast is the only
-            // detector: the ray fallback still stops it
-            GameObject meshGo = new GameObject("MeshWallMover");
-            FsmbAIInstance meshAi = meshGo.AddComponent<FsmbAIInstance>();
-            Check(meshAi.BootWithBytes(bytes, "Smoke_mesh"), "mesh-wall AI boots");
-            PlaneProbe blind = new PlaneProbe(forward, 5f);
-            blind.BlindToSphereCast = true;
-            meshAi.Movement.Probe = blind;
-            RunTicks(meshAi, 180);
-            Check(meshGo.transform.position.z + 0.5f <= 5f + 1e-3f,
-                  "a wall the shape cast cannot see still stops it (ray fallback)");
-
-            // (a3b) a SHAPED body does not depend on casts at all: the engine's
-            // overlap query answers, so even a wall the cast cannot see stops it
-            GameObject mesh2Go = new GameObject("MeshWallBody");
-            mesh2Go.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            FsmbAIInstance mesh2Ai = mesh2Go.AddComponent<FsmbAIInstance>();
-            Check(mesh2Ai.BootWithBytes(bytes, "Smoke_mesh2"), "mesh-wall body boots");
-            PlaneProbe blind2 = new PlaneProbe(forward, 5f);
-            blind2.BlindToSphereCast = true;
-            mesh2Ai.Movement.Probe = blind2;
-            RunTicks(mesh2Ai, 180);
-            Check(mesh2Go.transform.position.z + 0.5f <= 5f + 1e-3f,
-                  "a shaped body is stopped by the overlap query, casts or not");
-
-            // (a4) starting INSIDE the wall: the sweep is blind, the overlap net
-            // pushes it back out, and it never ends up on the far side
-            GameObject buriedGo = new GameObject("BuriedMover");
-            buriedGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            buriedGo.transform.position = new Vector3(0f, 0f, 5.3f);   // inside the wall
-            FsmbAIInstance buriedAi = buriedGo.AddComponent<FsmbAIInstance>();
-            Check(buriedAi.BootWithBytes(bytes, "Smoke_buried"), "buried AI boots");
-            buriedAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(buriedAi, 60);
-            Check(buriedGo.transform.position.z <= 5.001f,
-                  "a body that starts inside the wall is pushed out, not through");
-
-            // (b) nothing on the agent: no rigidbody and no collider still
-            // means "respect collisions" -- it sweeps with the default radius
-            GameObject bareGo = new GameObject("BareMover");
-            FsmbAIInstance bareAi = bareGo.AddComponent<FsmbAIInstance>();
-            Check(bareAi.BootWithBytes(bytes, "Smoke_bare"), "component-free AI boots");
-            bareAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(bareAi, 180);
-            Vector3 bareEnd = bareGo.transform.position;
-            Console.WriteLine("    component-free mover ended at z=" + bareEnd.z.ToString("0.###"));
-            Check(bareEnd.z + 0.5f <= 5f + 1e-3f,
-                  "component-free mover still stops at the wall (default radius)");
-
-            // (b2) the escape hatch: the toggle skips the environment entirely
-            GameObject optOutGo = new GameObject("OptOutMover");
-            optOutGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            FsmbAIInstance optOutAi = optOutGo.AddComponent<FsmbAIInstance>();
-            Check(optOutAi.BootWithBytes(bytes, "Smoke_optout"), "opt-out AI boots");
-            optOutAi.Movement.CollisionAware = false;
-            optOutAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(optOutAi, 180);
-            Check(optOutGo.transform.position.z > 5f,
-                  "CollisionAware off: the collider is ignored and it walks through");
-
-            // (c) dynamic rigidbody: movement is a velocity request to physics
-            GameObject bodyGo = new GameObject("BodyMover");
-            bodyGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            Rigidbody body = bodyGo.AddComponent<Rigidbody>();
-            FsmbAIInstance bodyAi = bodyGo.AddComponent<FsmbAIInstance>();
-            Check(bodyAi.BootWithBytes(bytes, "Smoke_body"), "rigidbody AI boots");
-            bodyAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(bodyAi, 3);
-            Check(body.velocity.z > 1.5f && Math.Abs(body.velocity.x) < 1e-4f,
-                  "dynamic rigidbody is driven by velocity (2 u/s along +Z)");
-            Check(Math.Abs(bodyGo.transform.position.z) < 1e-4f,
-                  "dynamic rigidbody: movement never teleports the transform");
-
-            // (d) dropping the goal clears the velocity it was driving
-            int handleId = 0;
-            for (int id = 1; id <= bodyAi.Handles.Count && handleId == 0; id++)
-            {
-                if (bodyAi.Handles.Resolve(id) == (UnityEngine.Object)bodyGo) handleId = id;
-            }
-            Check(handleId > 0, "the AI's agent handle was found");
-            bodyAi.Movement.ClearGoal(handleId);
-            Check(Math.Abs(body.velocity.z) < 1e-6f,
-                  "dropping the goal zeroes the velocity it was driving");
-
-            // (e) kinematic rigidbody: swept first (the solver would not), so the stop holds
-            GameObject kinGo = new GameObject("KinMover");
-            kinGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            Rigidbody kinBody = kinGo.AddComponent<Rigidbody>();
-            kinBody.isKinematic = true;
-            FsmbAIInstance kinAi = kinGo.AddComponent<FsmbAIInstance>();
-            Check(kinAi.BootWithBytes(bytes, "Smoke_kin"), "kinematic AI boots");
-            kinAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(kinAi, 180);
-            Check(kinGo.transform.position.z > 1f, "kinematic mover travelled");
-            Check(kinGo.transform.position.z + 0.5f <= 5f + 1e-3f,
-                  "kinematic mover never passed the wall");
-
-            // (e2) a fast step: the substep cap must not throttle it...
-            float savedDt = Time.deltaTime;
-            Time.deltaTime = 0.5f;                       // speed 2 -> a 1.0 unit step
-            GameObject fastGo = new GameObject("FastMover");
-            fastGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            FsmbAIInstance fastAi = fastGo.AddComponent<FsmbAIInstance>();
-            Check(fastAi.BootWithBytes(bytes, "Smoke_fast"), "fast AI boots");
-            fastAi.Movement.Probe = new PlaneProbe(forward, 500f);
-            RunTicks(fastAi, 2);
-            Console.WriteLine("    fast step moved z=" + fastGo.transform.position.z.ToString("0.###") +
-                              " (one tick of speed 2 at dt 0.5)");
-            Check(Math.Abs(fastGo.transform.position.z - 1f) < 0.02f,
-                  "a fast step is taken in full, not clamped to one substep");
-
-            // ...and the same fast step against a nearby wall must not tunnel
-            GameObject ramGo = new GameObject("RamMover");
-            ramGo.transform.position = new Vector3(0f, 0f, 4f);
-            ramGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
-            FsmbAIInstance ramAi = ramGo.AddComponent<FsmbAIInstance>();
-            Check(ramAi.BootWithBytes(bytes, "Smoke_ram"), "ramming AI boots");
-            ramAi.Movement.Probe = new PlaneProbe(forward, 5f);
-            RunTicks(ramAi, 2);
-            Console.WriteLine("    rammer ended at z=" + ramGo.transform.position.z.ToString("0.###"));
-            Check(ramGo.transform.position.z + 0.5f <= 5f + 1e-3f,
-                  "a fast step into a wall does not tunnel through it");
-            Time.deltaTime = savedDt;
-
-            // (f) character controller: the engine's capsule sweep moves it
-            GameObject ccMover = new GameObject("CCMover");
-            ccMover.AddComponent<CharacterController>();
-            FsmbAIInstance ccAi = ccMover.AddComponent<FsmbAIInstance>();
-            Check(ccAi.BootWithBytes(bytes, "Smoke_cc"), "character-controller AI boots");
-            ccAi.Movement.Probe = new PlaneProbe(forward, 5f);   // this driver needs none
-            RunTicks(ccAi, 60);
-            Vector3 ccEnd = ccMover.transform.position;
-            Console.WriteLine("    CC mover ended at z=" + ccEnd.z.ToString("0.###") +
-                              " y=" + ccEnd.y.ToString("0.###"));
-            Check(ccEnd.z > 1f, "CharacterController mover advanced through Move()");
-            Check(ccEnd.y < -0.5f, "airborne CharacterController falls (gravity applies)");
+            if (bodyAi.Handles.Resolve(id) == (UnityEngine.Object)bodyGo) handleId = id;
         }
+        Check(handleId > 0, "the AI's agent handle was found");
+        bodyAi.Movement.ClearGoal(handleId);
+        Check(Math.Abs(body.velocity.z) < 1e-6f,
+              "dropping the goal zeroes the velocity it was driving");
+
+        // (b) kinematic rigidbody: MovePosition, Unity's kinematic move API
+        GameObject kinGo = new GameObject("KinMover");
+        Rigidbody kinBody = kinGo.AddComponent<Rigidbody>();
+        kinBody.isKinematic = true;
+        FsmbAIInstance kinAi = kinGo.AddComponent<FsmbAIInstance>();
+        Check(kinAi.BootWithBytes(bytes, "Smoke_kin"), "kinematic AI boots");
+        RunTicks(kinAi, ticks);
+        Console.WriteLine("    kinematic mover: " + kinBody.movePositionCalls +
+                          " MovePosition calls, z=" + kinGo.transform.position.z.ToString("0.###"));
+        Check(kinBody.movePositionCalls == steps, "kinematic body is moved by MovePosition");
+        Check(Math.Abs(kinGo.transform.position.z - steps * step) < 0.02f,
+              "kinematic MovePosition receives position + delta each tick");
+        Check(Math.Abs(kinBody.velocity.z) < 1e-6f,
+              "kinematic body is never given a velocity (Unity ignores it)");
+
+        // (c) CharacterController: Move, with gravity while airborne
+        GameObject ccMover = new GameObject("CCMover");
+        CharacterController cc = ccMover.AddComponent<CharacterController>();
+        FsmbAIInstance ccAi = ccMover.AddComponent<FsmbAIInstance>();
+        Check(ccAi.BootWithBytes(bytes, "Smoke_cc"), "character-controller AI boots");
+        RunTicks(ccAi, ticks);
+        Console.WriteLine("    CC mover: " + cc.moveCalls + " Move calls, z=" +
+                          ccMover.transform.position.z.ToString("0.###") +
+                          " y=" + ccMover.transform.position.y.ToString("0.###"));
+        Check(cc.moveCalls == steps, "CharacterController is moved by Move()");
+        Check(Math.Abs(ccMover.transform.position.z - steps * step) < 0.02f,
+              "CC.Move receives the step towards the goal");
+        Check(ccMover.transform.position.y < -9f,
+              "airborne CharacterController falls (gravity is still applied)");
+
+        // (d) collider with no body: warn once, then the transform step
+        GameObject colMover = new GameObject("ColMover");
+        colMover.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+        FsmbAIInstance colAi = colMover.AddComponent<FsmbAIInstance>();
+        Check(colAi.BootWithBytes(bytes, "Smoke_col"), "collider-only AI boots");
+        Debug.Messages.Clear();
+        RunTicks(colAi, ticks);
+        Check(colAi.Movement.Resolve(colMover.transform, false).Driver == MotionDriver.ColliderNoBody,
+              "collider-only mover is reported as collider-without-a-body");
+        int warnings = 0;
+        for (int i = 0; i < Debug.Messages.Count; i++)
+        {
+            if (Debug.Messages[i].Contains("has a Collider but no Rigidbody")) warnings++;
+        }
+        Console.WriteLine("    collider-only mover: " + warnings + " warning(s), z=" +
+                          colMover.transform.position.z.ToString("0.###"));
+        Check(warnings == 1, "the missing-body warning is logged exactly once");
+        Check(Math.Abs(colMover.transform.position.z - steps * step) < 0.02f,
+              "collider-only mover still advances (by transform, nothing invented)");
+
+        // (e) component-free mover: same transform step, no warning
+        GameObject bareGo = new GameObject("BareMover");
+        FsmbAIInstance bareAi = bareGo.AddComponent<FsmbAIInstance>();
+        Check(bareAi.BootWithBytes(bytes, "Smoke_bare"), "component-free AI boots");
+        Debug.Messages.Clear();
+        RunTicks(bareAi, ticks);
+        int bareWarnings = 0;
+        for (int i = 0; i < Debug.Messages.Count; i++)
+        {
+            if (Debug.Messages[i].Contains("has a Collider")) bareWarnings++;
+        }
+        Check(bareWarnings == 0, "an object with no collider is not warned about");
+        Check(Math.Abs(bareGo.transform.position.z - steps * step) < 0.02f,
+              "component-free mover advances by transform");
+
+        // (f) NavMeshAgent: the mesh does the moving, so the transform is not
+        // touched here and SetDestination is what the AI produces
+        GameObject navGo = new GameObject("NavMover");
+        NavMeshAgent nav = navGo.AddComponent<NavMeshAgent>();
+        nav.isOnNavMesh = true;
+        nav.remainingDistance = float.MaxValue;      // still travelling
+        FsmbAIInstance navAi = navGo.AddComponent<FsmbAIInstance>();
+        Check(navAi.BootWithBytes(bytes, "Smoke_nav"), "navmesh AI boots");
+        RunTicks(navAi, 3);
+        Console.WriteLine("    nav mover: " + nav.setDestinationCalls + " SetDestination calls, dest z=" +
+                          nav.lastDestination.z.ToString("0.###"));
+        Check(nav.setDestinationCalls == 2, "NavMeshAgent is steered with SetDestination");
+        Check(Math.Abs(nav.lastDestination.z - 10f) < 0.1f,
+              "SetDestination receives the goal point");
+        Check(Math.Abs(navGo.transform.position.z) < 1e-4f,
+              "with a live agent nothing here moves the transform");
     }
 
     private static void RunTicks(AIInstance ai, int ticks)
@@ -821,142 +692,5 @@ public static class SmokeTest
             Time.time += Time.deltaTime;
             ai.TickInternal();
         }
-    }
-}
-
-/// <summary>Test probe: an empty collision world (every query misses).</summary>
-public sealed class NoObstacleProbe : MyFSM.Unity.IMotionProbe
-{
-    public string LastHitName { get { return null; } }
-
-    public bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                           bool is2D, out float distance, out Vector3 normal)
-    {
-        distance = 0f;
-        normal = Vector3.zero;
-        return false;
-    }
-
-    public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                        out float distance, out Vector3 point, out Vector3 normal)
-    {
-        distance = 0f;
-        point = Vector3.zero;
-        normal = Vector3.zero;
-        return false;
-    }
-
-    public bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
-                                   out Vector3 push)
-    {
-        push = Vector3.zero;
-        return false;
-    }
-}
-
-/// <summary>
-/// Test probe standing in for the engine: a wall occupying the half-space
-/// <c>dot(axis, p) &gt;= offset</c>, facing <c>-axis</c>. It reproduces the
-/// behaviours the Unity docs describe, so the movement code is tested against
-/// the real contract rather than a convenient one:
-///
-///  * SphereCast reports how far the sphere's CENTRE may travel before touch
-///    (that is what RaycastHit.distance means for a swept volume). With
-///    <see cref="SkewCastNormal"/> it reports a contact-to-centre normal
-///    instead of the surface normal, as SphereCast sometimes does.
-///  * Raycast hits the wall's SURFACE and reports the true normal.
-///  * With <see cref="BlindToSphereCast"/> the shape cast sees nothing (a
-///    non-convex MeshCollider, or a collider the sphere already overlaps)
-///    while rays still work.
-///  * ResolvePenetration pushes a body that is inside the wall back out; the
-///    harness has no real collider shapes, so the body is a sphere of the
-///    radius movement hands it.
-///
-/// <c>topY</c> makes the wall end at a height, so a body above it passes.
-/// </summary>
-public sealed class PlaneProbe : MyFSM.Unity.IMotionProbe
-{
-    private readonly Vector3 _axis;
-    private readonly float _offset;
-    private readonly float _topY;
-    private readonly bool _limited;
-
-    /// <summary>Report a wrong (contact-to-centre) normal, as SphereCast may.</summary>
-    public bool SkewCastNormal;
-    /// <summary>Pretend the shape cast cannot see the wall (rays still can).</summary>
-    public bool BlindToSphereCast;
-
-    public string LastHitName { get; private set; }
-
-    public PlaneProbe(Vector3 axis, float offset) { _axis = axis; _offset = offset; }
-    public PlaneProbe(Vector3 axis, float offset, float topY)
-    {
-        _axis = axis; _offset = offset; _topY = topY; _limited = true;
-    }
-
-    private bool Exists(Vector3 at)
-    {
-        return !_limited || at.y < _topY;
-    }
-
-    public bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                           bool is2D, out float distance, out Vector3 normal)
-    {
-        distance = 0f;
-        normal = Vector3.zero;
-        LastHitName = null;
-        if (BlindToSphereCast || !Exists(origin)) return false;
-        float denom = _axis.x * direction.x + _axis.y * direction.y + _axis.z * direction.z;
-        if (denom <= 1e-9f) return false;                  // not moving into the wall
-        float start = _axis.x * origin.x + _axis.y * origin.y + _axis.z * origin.z;
-        float t = (_offset - radius - start) / denom;      // centre travel, per Unity
-        if (t > maxDistance) return false;
-        if (t < 0f) t = 0f;                                // already at/inside the margin
-        distance = t;
-        if (SkewCastNormal)
-        {
-            // "often the direction from the contact point to the center of the
-            // sphere": tilt the normal toward the direction of travel.
-            normal = (-_axis + direction * 0.35f).normalized;
-        }
-        else
-        {
-            normal = -_axis;
-        }
-        LastHitName = "Wall";
-        return true;
-    }
-
-    public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                        out float distance, out Vector3 point, out Vector3 normal)
-    {
-        distance = 0f;
-        point = Vector3.zero;
-        normal = Vector3.zero;
-        if (!Exists(origin)) return false;
-        float denom = _axis.x * direction.x + _axis.y * direction.y + _axis.z * direction.z;
-        if (denom <= 1e-9f) return false;
-        float start = _axis.x * origin.x + _axis.y * origin.y + _axis.z * origin.z;
-        float t = (_offset - start) / denom;               // the wall's SURFACE
-        if (t < 0f || t > maxDistance) return false;
-        distance = t;
-        point = origin + direction * t;
-        normal = -_axis;
-        LastHitName = "Wall";
-        return true;
-    }
-
-    public bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
-                                   out Vector3 push)
-    {
-        push = Vector3.zero;
-        LastHitName = null;
-        if (!Exists(centre)) return false;
-        float start = _axis.x * centre.x + _axis.y * centre.y + _axis.z * centre.z;
-        float excess = start + radius - _offset;           // the body is a sphere of
-        if (excess <= 1e-4f) return false;                 // `radius` here, as the
-        push = -_axis * (excess + 0.02f);                  // harness has no real shape
-        LastHitName = "Wall";
-        return true;
     }
 }

@@ -87,57 +87,56 @@ the change (null when none). Overriding `Update()` without
 `base.Update()` silently stops the AI — prefer `Paused` / `enabled=false`.
 
 **Movement is component-aware.** Tier-3 goals never move a bare transform:
-every tick the movement system looks at what the agent's GameObject (or its
-nearest parent) actually has on it and moves it the way Unity expects that
-component set to be moved, so an AI is stopped by the same collision world as
-the rest of the game:
+each tick the movement system looks at what the agent's GameObject (or its
+nearest parent) actually has on it and calls the Unity function meant for that
+component. There is no collision maths in the runtime — the component resolves
+everything:
 
-| On the agent | Driver | How the step is applied |
+| On the agent | Unity call | Stopped by walls? |
 |---|---|---|
-| `NavMeshAgent` (enabled, on the mesh) | engine pathing | `SetDestination` — the mesh steers and pathfinds |
-| `CharacterController` | engine capsule | `Move()` — slopes, steps and walls are the controller's own sweep |
-| `Rigidbody` / `Rigidbody2D`, dynamic | physics solver | velocity is set each tick; the solver resolves every contact (mass, drag and gravity keep working; a 3D body keeps its vertical velocity) |
-| `Rigidbody` / `Rigidbody2D`, kinematic | overlap resolution | resolved here, then handed to the engine with `MovePosition` (the solver does not collide kinematic bodies) |
-| `Collider` / `Collider2D` only | overlap resolution | a substep at a time, pushed out of whatever it overlaps by `Physics.ComputePenetration` / `Collider2D.Distance`, sliding along the contact |
-| nothing at all | swept probe sphere | `Physics.SphereCast` / `Physics2D.CircleCast` + a ray for the true surface normal (`0.5` body radius) |
+| `NavMeshAgent` (enabled, on the mesh) | `SetDestination` | yes — via the NavMesh |
+| `CharacterController` | `Move(motion)` | **yes** — its own capsule sweep handles slopes, steps and walls |
+| `Rigidbody` / `Rigidbody2D`, **dynamic** | `velocity` is set each tick | **yes** — the physics solver resolves every contact, and mass, drag and gravity keep working (a 3D body keeps its vertical velocity) |
+| `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"* |
+| `Collider` / `Collider2D`, no body | *(none exists)* | **no** — a collider on its own is static geometry; the runtime warns once and says what to add |
+| nothing at all | *(none)* | no — the step is written to the transform |
 
-For a body that has a collider, the geometry is entirely Unity's: the move is
-split into substeps no larger than half the body's smallest dimension (so a fast
-body cannot jump a thin wall), each substep is applied and then corrected with
-the engine's minimal translation vector, and whatever is left of the step is
-projected onto the contact plane. No radius is assumed, no cast can be blind to
-it, and a tick never ends with the body inside something. This is the
-"depenetration" pattern the docs describe for movement without a rigidbody.
-`ColliderDistance2D` (2D) reports a negative distance while overlapped and the
-depth is used directly.
+**What to use for an AI that must be stopped by walls:** a dynamic
+`Rigidbody`(2D) with gravity off (`useGravity = false` / `gravityScale = 0`) and
+rotation frozen, or a `CharacterController`. Those are the component sets Unity
+provides a collision-resolving move for. The dynamic body is the closest to "it
+just works": the runtime sets its velocity towards the goal each tick and Unity
+does the rest.
 
-The swept probe sphere is only for an object with no collider at all — there is
-no shape for the engine to resolve. It also takes its slide normal from a ray,
-because Unity warns that a sphere cast's normal "does not always represent the
-surface normal... misleading if you're using it for sliding", and falls back to
-a ray fan when the shape cast is blind (it "will not detect colliders for which
-the sphere overlaps the collider", and never sees a non-convex `MeshCollider`).
+`setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
+they write the transform directly and teleport, exactly like `transform.position`
+in Unity. Only the goal-driven tier-3 calls are routed through the moves above.
 
-The `Collision Aware` inspector toggle (default on) is copied into
-`Movement.CollisionAware` at boot. Turn it **off** only when something else
-owns the transform (a hand-written controller, an animated rig): steps are then
-written straight to the transform and no component is consulted. NavMeshAgent
-pathing is unaffected either way — the agent already pathfinds around
-obstacles.
+The `Collision Aware` inspector toggle (default on) is the escape hatch for
+objects whose movement something else owns: with it off, steps go straight to
+the transform and no component is consulted. A `NavMeshAgent` steers itself
+either way.
 
-**Diagnostics.** The first time an agent is driven, and the first time
-something stops it, one line goes to the log:
+**Diagnostics.** The first time an agent is driven — and whenever its driver
+changes — one line goes to the log:
 
 ```
-movement: Marcher driven by collider sweep
-movement: Marcher stopped by Wall (collider sweep)
+movement: Marcher -> Rigidbody.velocity (physics resolves collisions)
+movement: Marcher -> transform (collider without a body: nothing can stop it)
 ```
 
-so which path an object takes (and whether anything was detected at all) is
-visible without guessing. `Movement.Probe` swaps the queries themselves (an
-`IMotionProbe`), which is how the sandbox exercises stop/slide with no engine;
-`Movement.Resolve(transform, is2D)` reports the driver chosen for an object,
-and `MotionDriver` names it.
+and a collider with no body also gets one warning:
+
+```
+movement: Marcher has a Collider but no Rigidbody / CharacterController. Unity
+cannot move a body-less object against collisions (a bare Collider is static
+geometry), so movement is applied to the transform and nothing will stop it.
+Add a dynamic Rigidbody (gravity off) or a CharacterController to make walls matter.
+```
+
+`Movement.Resolve(transform, is2D)` reports the driver chosen for an object
+without running anything — handy from your own code, and what the sandbox tests
+assert against.
 
 ## The generated child (what `ClassGenerator` emits)
 

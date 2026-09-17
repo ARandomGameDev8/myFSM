@@ -1,46 +1,34 @@
 // myFSM Unity Runtime — incremental movement system.
 //
-// Navigation / lookAt calls never teleport: they post a goal for the agent and
-// Advance() (once per tick, before the AI's Update round) takes one step
-// towards it. The step is handed to whatever the agent's GameObject actually
-// has on it, so movement obeys the same collision world as the rest of the
-// game instead of a private one:
+// Navigation / lookAt calls never teleport: they post a goal for the agent, and
+// Advance() (once per tick, before the AI's Update round) takes one step towards
+// it. The step is handed to Unity — this file contains no collision maths at
+// all. It picks the component that should receive the movement and calls the
+// Unity function meant for that component:
 //
-//   NavMeshAgent         SetDestination — the mesh steers and pathfinds.
-//   CharacterController  Move() — the controller resolves slopes, steps and
-//                        walls itself (the engine's capsule sweep).
-//   Rigidbody(2D),       dynamic  -> velocity: the solver resolves every
-//                        collision, and mass/drag/gravity keep working (the
-//                        3D vertical velocity is left alone). Movement is a
-//                        request to the physics engine, not a teleport.
-//                        kinematic-> Physics.SphereCast / Physics2D.CircleCast
-//                        sweep, then MovePosition to the swept point
-//                        (kinematic bodies are not collided by the solver).
-//   Collider(2D) only    engine sphere/circle cast sweep + slide along the
-//                        surface, then an overlap push-out.
-//   nothing at all       the same sweep with the default body radius, then
-//                        position += the result.
+//   NavMeshAgent         SetDestination() — the mesh pathfinds and steers.
+//   CharacterController  Move() — the controller's own capsule sweep resolves
+//                        slopes, steps and walls.
+//   Rigidbody(2D)        dynamic   -> velocity is set; the physics solver
+//                        resolves every contact and gravity/drag/mass keep
+//                        working. A 3D body keeps its vertical velocity.
+//                        kinematic -> MovePosition(), Unity's kinematic move
+//                        API (docs: "Moves the kinematic Rigidbody towards
+//                        position"). Unity also documents that collisions do
+//                        not affect a kinematic body — "If the rigidbody is
+//                        kinematic then any collisions won't affect the
+//                        rigidbody itself" — so nothing is layered on top to
+//                        hide that. Ask for a dynamic body if walls must stop
+//                        it.
+//   Collider, no body    No Unity function can move it: a collider on its own
+//                        is static geometry. Movement is written to the
+//                        transform and a warning names the missing component.
+//   nothing at all       Same: the step goes to the transform.
 //
-// How the step is applied is never guessed from a radius: an object that HAS a
-// collider is moved with the engine's own overlap resolution — move a substep,
-// ask Physics.ComputePenetration (3D) / Collider2D.Distance (2D) for the
-// minimal translation that separates it from whatever it now overlaps, apply
-// that, and slide the leftover along the contact. Unity computes all the
-// geometry; no shape has to be approximated, which is exactly what the docs
-// recommend for movement without a rigidbody ("first query for the colliders
-// nearby using OverlapSphere and then adjust the character's position using the
-// data returned by ComputePenetration"). Substep size is a fraction of the
-// body's own smallest dimension, so a fast body cannot jump a thin wall.
-//
-// An object with NO collider has no shape for the engine to resolve, so that
-// case (and only that case) sweeps a probe sphere instead: Physics.SphereCast /
-// Physics2D.CircleCast, with the true surface normal taken from a ray (the docs
-// warn a sphere cast's normal "does not always represent the surface normal...
-// misleading if you're using it for sliding") and a ray fan standing in when the
-// shape cast is blind — it "will not detect colliders for which the sphere
-// overlaps the collider", and never sees a non-convex MeshCollider. The engine
-// overlap query is the final net in every case: a tick never ends with the body
-// inside something.
+// Direct position changes are deliberately untouched: setPosition() and
+// friends still write the transform (or the body's position) and teleport, the
+// same way transform.position and Rigidbody.position do in Unity. Only the
+// goal-driven tier-3 movements are routed through the moves above.
 //
 // Movement is translation-only; facing changes only through lookAt goals.
 
@@ -53,36 +41,36 @@ using MyFSM.Core;
 namespace MyFSM.Unity
 {
     /// <summary>
-    /// What actually moves the agent this tick, picked from the components the
-    /// agent's GameObject (or one of its parents) carries:
-    /// 3D: NavMeshAgent &gt; CharacterController &gt; Rigidbody &gt; Collider &gt; none;
-    /// 2D: Rigidbody2D &gt; Collider2D &gt; none.
+    /// Which Unity function moves the agent this tick, picked from the
+    /// components the agent's GameObject (or one of its parents) carries:
+    /// 3D: NavMeshAgent &gt; CharacterController &gt; Rigidbody &gt; collider-only &gt; none;
+    /// 2D: Rigidbody2D &gt; collider-only &gt; none.
     /// </summary>
     public enum MotionDriver
     {
-        /// <summary>
-        /// No physics components: the step is swept with the default body
-        /// radius and written to the transform. It still cannot walk through
-        /// walls — it just has no collider to take its size from.
-        /// </summary>
+        /// <summary>No components: the step is written to the transform.</summary>
         Transform = 0,
-        /// <summary>Collider but no body: engine sphere/circle cast sweep + slide.</summary>
-        ColliderSweep = 1,
-        /// <summary>CharacterController.Move — the controller resolves contacts.</summary>
+        /// <summary>
+        /// A collider with no Rigidbody/CharacterController. Unity has no
+        /// collision-resolving move for it, so the step goes to the transform
+        /// and a warning names the missing component.
+        /// </summary>
+        ColliderNoBody = 1,
+        /// <summary>CharacterController.Move().</summary>
         CharacterController = 2,
-        /// <summary>Rigidbody: velocity when dynamic, swept MovePosition when kinematic.</summary>
+        /// <summary>Rigidbody: velocity when dynamic, MovePosition when kinematic.</summary>
         Rigidbody = 3,
-        /// <summary>Rigidbody2D: velocity when dynamic, swept MovePosition when kinematic.</summary>
+        /// <summary>Rigidbody2D: velocity when dynamic, MovePosition when kinematic.</summary>
         Rigidbody2D = 4,
-        /// <summary>NavMeshAgent.SetDestination — the engine pathfinds and steers.</summary>
+        /// <summary>NavMeshAgent.SetDestination().</summary>
         NavMeshAgent = 5,
     }
 
     /// <summary>
     /// The components movement resolved for one agent. <see cref="Agent"/> is
     /// the transform the goal was posted for (positions are measured there);
-    /// <see cref="Owner"/> is the transform the chosen driver actually moves —
-    /// the same one unless the component lives on a parent.
+    /// <see cref="Owner"/> is the transform the chosen component actually moves
+    /// — the same one unless the component lives on a parent.
     /// </summary>
     public struct MotionContext
     {
@@ -96,6 +84,9 @@ namespace MyFSM.Unity
         public Rigidbody2D Body2D;
         public Collider Shape;
         public Collider2D Shape2D;
+
+        /// <summary>True when the body is kinematic (moved with MovePosition).</summary>
+        public bool Kinematic;
     }
 
     public enum MoveMode
@@ -163,253 +154,15 @@ namespace MyFSM.Unity
         }
     }
 
-    /// <summary>
-    /// Everything movement asks about the collision world. Unity's physics
-    /// implements it (PhysicsMotionProbe); the headless sandbox injects a fake
-    /// so stop/slide/push-out behaviour can be tested without an engine.
-    /// Every member is a query the engine answers — movement never computes
-    /// contact geometry itself, it only applies the answers.
-    /// </summary>
-    public interface IMotionProbe
-    {
-        /// <summary>
-        /// The minimal translation that separates the owner's own collider
-        /// from everything it currently overlaps, or false when it is clear.
-        /// This is the shape-accurate path: Unity's ComputePenetration (3D) /
-        /// Collider2D.Distance (2D) does the geometry, so no radius has to be
-        /// assumed and colliders a shape cast cannot see still count.
-        /// <paramref name="centre"/> and <paramref name="radius"/> are only
-        /// used when the owner has no collider at all, as a sphere stand-in.
-        /// </summary>
-        bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
-                                out Vector3 push);
-
-        /// <summary>
-        /// Sweeps a sphere of <paramref name="radius"/> from
-        /// <paramref name="origin"/> along <paramref name="direction"/> (unit
-        /// length) for at most <paramref name="maxDistance"/>. Only used for
-        /// objects with no collider. <paramref name="distance"/> is how far the
-        /// CENTRE may travel before the volume contacts something (Unity's own
-        /// meaning for a swept volume); <paramref name="normal"/> is the
-        /// engine's normal, which for SphereCast may be the contact-to-centre
-        /// direction rather than the surface normal.
-        /// </summary>
-        bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                        bool is2D, out float distance, out Vector3 normal);
-
-        /// <summary>
-        /// A plain ray, for the two things a shape cast cannot do: give the
-        /// true surface normal (Unity's documented workaround for sliding) and
-        /// see colliders the sphere already overlaps or non-convex meshes.
-        /// <paramref name="point"/> is the surface point that was hit.
-        /// </summary>
-        bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                     out float distance, out Vector3 point, out Vector3 normal);
-
-        /// <summary>Name of the collider behind the last positive answer.</summary>
-        string LastHitName { get; }
-    }
-
-    /// <summary>The real thing: Physics and Physics2D.</summary>
-    public sealed class PhysicsMotionProbe : IMotionProbe
-    {
-        /// <summary>How far outside the body to look when pushing it out.</summary>
-        private const float OverlapPadding = 0.05f;
-
-        public string LastHitName { get; private set; }
-
-        public bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                               bool is2D, out float distance, out Vector3 normal)
-        {
-            distance = 0f;
-            normal = Vector3.zero;
-            LastHitName = null;
-            if (maxDistance < 0f) return false;
-            if (is2D)
-            {
-                // A circle cast ignores colliders it already overlaps, so the
-                // agent standing against a wall does not hit itself.
-                RaycastHit2D h = Physics2D.CircleCast(
-                    new Vector2(origin.x, origin.y), radius,
-                    new Vector2(direction.x, direction.y), maxDistance);
-                if (h.collider == null) return false;
-                distance = h.distance;
-                normal = new Vector3(h.normal.x, h.normal.y, 0f);
-                LastHitName = h.collider.name;
-                return true;
-            }
-            RaycastHit hit;
-            if (!Physics.SphereCast(origin, radius, direction, out hit, maxDistance,
-                                    ~0, QueryTriggerInteraction.Ignore))
-                return false;
-            distance = hit.distance;
-            normal = hit.normal;
-            LastHitName = hit.collider != null ? hit.collider.name : null;
-            return true;
-        }
-
-        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                            out float distance, out Vector3 point, out Vector3 normal)
-        {
-            distance = 0f;
-            point = Vector3.zero;
-            normal = Vector3.zero;
-            if (maxDistance < 0f) return false;
-            if (is2D)
-            {
-                RaycastHit2D h = Physics2D.Raycast(new Vector2(origin.x, origin.y),
-                                                   new Vector2(direction.x, direction.y),
-                                                   maxDistance);
-                if (h.collider == null) return false;
-                distance = h.distance;
-                point = new Vector3(h.point.x, h.point.y, origin.z);
-                normal = new Vector3(h.normal.x, h.normal.y, 0f);
-                LastHitName = h.collider.name;
-                return true;
-            }
-            RaycastHit hit;
-            if (!Physics.Raycast(origin, direction, out hit, maxDistance,
-                                 ~0, QueryTriggerInteraction.Ignore))
-                return false;
-            distance = hit.distance;
-            point = hit.point;
-            normal = hit.normal;
-            LastHitName = hit.collider != null ? hit.collider.name : null;
-            return true;
-        }
-
-        public bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
-                                       out Vector3 push)
-        {
-            push = Vector3.zero;
-            LastHitName = null;
-            float best = 0f;
-
-            if (is2D)
-            {
-                Collider2D self2 = owner != null ? owner.GetComponentInParent<Collider2D>() : null;
-                Vector2 c = new Vector2(centre.x, centre.y);
-                // Broad phase only: the query has to reach everything the body
-                // could touch, ComputePenetration/Distance then decide exactly.
-                float query = self2 != null
-                    ? self2.bounds.extents.magnitude + OverlapPadding
-                    : radius + OverlapPadding;
-                Collider2D[] hits = Physics2D.OverlapCircleAll(c, query);
-                for (int i = 0; i < hits.Length; i++)
-                {
-                    Collider2D h = hits[i];
-                    if (h == null || h == self2 || IsSelf(h.transform, owner)) continue;
-                    Vector2 want;
-                    if (self2 != null)
-                    {
-                        // Unity's own 2D separation: distance is negative while
-                        // the two overlap. The direction is taken from the two
-                        // bounds centres so the normal's sign convention never
-                        // matters; the DEPTH is Unity's exact value.
-                        ColliderDistance2D gap = self2.Distance(h);
-                        if (!gap.isValid || gap.distance >= 0f) continue;
-                        Vector2 away = (Vector2)self2.bounds.center - (Vector2)h.bounds.center;
-                        if (away.sqrMagnitude < 1e-8f) away = Vector2.up;
-                        want = away.normalized * (-gap.distance + CollisionSkin);
-                    }
-                    else
-                    {
-                        // No collider to resolve: treat the agent as a sphere.
-                        Vector2 p = h.ClosestPoint(c);
-                        Vector2 away = c - p;
-                        float d = away.magnitude;
-                        if (d >= radius - 1e-4f) continue;
-                        if (d <= 1e-4f)
-                        {
-                            // Buried: leave through the side we came from.
-                            Vector2 out2 = c - (Vector2)h.bounds.center;
-                            if (out2.sqrMagnitude < 1e-8f) out2 = Vector2.up;
-                            want = out2.normalized * (radius + CollisionSkin);
-                        }
-                        else want = away / d * (radius - d + CollisionSkin);
-                    }
-                    if (want.sqrMagnitude > best)
-                    {
-                        best = want.sqrMagnitude;
-                        push = new Vector3(want.x, want.y, 0f);
-                        LastHitName = h.name;
-                    }
-                }
-                return best > 0f;
-            }
-
-            Collider self = owner != null ? owner.GetComponentInParent<Collider>() : null;
-            float query = self != null
-                ? self.bounds.extents.magnitude + OverlapPadding
-                : radius + OverlapPadding;
-            Collider[] solids = Physics.OverlapSphere(centre, query);
-            for (int i = 0; i < solids.Length; i++)
-            {
-                Collider h = solids[i];
-                if (h == null || h == self || IsSelf(h.transform, owner)) continue;
-                Vector3 want;
-                if (self != null)
-                {
-                    // Unity's own minimal translation vector for these two
-                    // colliders at their current poses.
-                    Vector3 dir;
-                    float dist;
-                    if (!Physics.ComputePenetration(self, self.transform.position,
-                                                    self.transform.rotation,
-                                                    h, h.transform.position, h.transform.rotation,
-                                                    out dir, out dist)) continue;
-                    want = dir * (dist + CollisionSkin);
-                }
-                else
-                {
-                    Vector3 p = h.ClosestPoint(centre);
-                    Vector3 away = centre - p;
-                    float d = away.magnitude;
-                    if (d >= radius - 1e-4f) continue;
-                    if (d <= 1e-4f)
-                    {
-                        // Buried: leave through the side we came from.
-                        Vector3 out3 = centre - h.bounds.center;
-                        if (out3.sqrMagnitude < 1e-8f) out3 = Vector3.up;
-                        want = out3.normalized * (radius + CollisionSkin);
-                    }
-                    else want = away / d * (radius - d + CollisionSkin);
-                }
-                if (want.sqrMagnitude > best)
-                {
-                    best = want.sqrMagnitude;
-                    push = want;
-                    LastHitName = h.name;
-                }
-            }
-            return best > 0f;
-        }
-
-        /// <summary>True when <paramref name="t"/> is the agent or part of its hierarchy.</summary>
-        private static bool IsSelf(Transform t, Transform ignore)
-        {
-            if (t == null || ignore == null) return false;
-            for (Transform p = t; p != null; p = p.parent)
-            {
-                if (p == ignore) return true;
-            }
-            for (Transform p = ignore; p != null; p = p.parent)
-            {
-                if (p == t) return true;
-            }
-            return false;
-        }
-    }
-
     public sealed class MovementSystem
     {
         private readonly Dictionary<int, MoveGoal> _goals = new Dictionary<int, MoveGoal>();
 
-        // Diagnostics: one line per agent when its driver or blocked state
-        // changes, so "why did it walk through that wall?" is answerable from
-        // the console instead of guesswork.
+        // Diagnostics: one line per agent when its driver changes, plus a
+        // one-off warning when a collider has no body to move it, so "why did
+        // it walk through that wall?" is answerable from the console.
         private readonly Dictionary<int, string> _reportedDriver = new Dictionary<int, string>();
-        private readonly HashSet<int> _blocked = new HashSet<int>();
+        private readonly HashSet<int> _warnedNoBody = new HashSet<int>();
 
         public void SetGoal(int agentHandleId, MoveGoal goal)
         {
@@ -419,6 +172,8 @@ namespace MyFSM.Unity
         /// <summary>
         /// Drops the goal and stops whatever was driving it: a velocity-driven
         /// body gets its planar velocity zeroed, a NavMeshAgent is stopped.
+        /// (A kinematic body stops because MovePosition simply stops being
+        /// called, and a transform move stops the same way.)
         /// </summary>
         public void ClearGoal(int agentHandleId)
         {
@@ -428,7 +183,6 @@ namespace MyFSM.Unity
                 if (goal.AgentTransform != null)
                     StopMotion(Resolve(goal.AgentTransform, goal.Is2D));
                 _goals.Remove(agentHandleId);
-                _blocked.Remove(agentHandleId);
             }
         }
 
@@ -451,7 +205,7 @@ namespace MyFSM.Unity
             }
             _goals.Clear();
             _reportedDriver.Clear();
-            _blocked.Clear();
+            _warnedNoBody.Clear();
         }
 
         /// <summary>
@@ -476,45 +230,26 @@ namespace MyFSM.Unity
         }
 
         // ----------------------------------------------------------
-        // Which movement the environment gets
+        // The environment check
         //
-        // The agent is never assumed to be a bare transform: the components it
-        // (or a parent) carries decide how the step is applied. Nothing here
-        // re-implements collision detection — every contact is found by the
-        // engine (SphereCast/CircleCast, Raycast, ClosestPoint, Move(), the
-        // physics solver) and the code only decides where to ask and what to do
-        // with the answer.
+        // Which Unity component gets the movement. Nothing here detects or
+        // resolves collisions — that is the component's job once it is called.
         // ----------------------------------------------------------
 
         /// <summary>
-        /// When false the environment is ignored and steps are written
-        /// straight to the transform (the escape hatch for objects whose
-        /// movement something else owns, e.g. an animation or a character
-        /// controller script). NavMeshAgent pathing still applies.
+        /// When false the environment is ignored: steps are written straight to
+        /// the transform and no component is consulted (the escape hatch for
+        /// objects whose movement something else owns). NavMeshAgent pathing
+        /// is unaffected — a mesh agent steers itself either way.
         /// </summary>
         public bool CollisionAware = true;
-
-        /// <summary>Cast source. Swap it to test movement without an engine.</summary>
-        public IMotionProbe Probe = new PhysicsMotionProbe();
 
         /// <summary>Downward acceleration applied to an airborne CharacterController.</summary>
         public float CharacterGravity = 20f;
 
-        /// <summary>Body radius used when the agent has no collider.</summary>
-        public const float DefaultBodyRadius = 0.5f;
-
-        /// <summary>Kept between the body and a surface, to stop it creeping in.</summary>
-        public const float CollisionSkin = 0.02f;
-
-        private const int MaxSlideIterations = 3;
-        private const int MaxOverlapIterations = 3;
-        private const int MaxSubSteps = 12;
-        private const float MinStep = 1e-5f;
-        private const float MinSubStep = 0.02f;
-
         /// <summary>
-        /// Resolves what will move <paramref name="t"/>, from the components on
-        /// its GameObject or the nearest parent carrying them.
+        /// Resolves which component will move <paramref name="t"/>, from the
+        /// components on its GameObject or the nearest parent carrying them.
         /// </summary>
         public MotionContext Resolve(Transform t, bool is2D)
         {
@@ -530,9 +265,6 @@ namespace MyFSM.Unity
             c.Is2D = is2D;
             if (t == null) return c;
 
-            // A live NavMeshAgent is engine pathing, not collision handling, so
-            // it keeps steering even with CollisionAware off (the toggle only
-            // governs how a manual step is applied).
             if (!is2D && !skipNav)
             {
                 NavMeshAgent nav = t.GetComponentInParent<NavMeshAgent>();
@@ -553,24 +285,21 @@ namespace MyFSM.Unity
                 {
                     c.Driver = MotionDriver.Rigidbody2D;
                     c.Body2D = body2d;
-                    // A kinematic body is swept before MovePosition, so its
-                    // collider is what decides when it has touched something.
-                    c.Shape2D = t.GetComponentInParent<Collider2D>();
+                    c.Kinematic = body2d.isKinematic;
                     c.Owner = body2d.transform;
                     return c;
                 }
-                Collider2D shape2d = t.GetComponentInParent<Collider2D>();
+                Collider2D shape2d = t.GetComponent<Collider2D>();
                 if (shape2d != null && shape2d.enabled)
                 {
-                    c.Driver = MotionDriver.ColliderSweep;
+                    c.Driver = MotionDriver.ColliderNoBody;
                     c.Shape2D = shape2d;
-                    c.Owner = shape2d.transform;
                 }
                 return c;
             }
 
             // CharacterController derives from Collider, so it must be tested
-            // before the plain-collider case.
+            // before the bare-collider case.
             CharacterController cc = t.GetComponentInParent<CharacterController>();
             if (cc != null && cc.enabled)
             {
@@ -584,17 +313,18 @@ namespace MyFSM.Unity
             {
                 c.Driver = MotionDriver.Rigidbody;
                 c.Body = body;
-                // Used when the body is kinematic (swept before MovePosition).
-                c.Shape = t.GetComponentInParent<Collider>();
+                c.Kinematic = body.isKinematic;
                 c.Owner = body.transform;
                 return c;
             }
-            Collider shape = t.GetComponentInParent<Collider>();
+            // A collider on this object, but nothing to move it. A collider on
+            // a PARENT is not this object's body (in Unity it belongs to the
+            // parent's own rigidbody), so only the object itself is asked.
+            Collider shape = t.GetComponent<Collider>();
             if (shape != null && shape.enabled)
             {
-                c.Driver = MotionDriver.ColliderSweep;
+                c.Driver = MotionDriver.ColliderNoBody;
                 c.Shape = shape;
-                c.Owner = shape.transform;
             }
             return c;
         }
@@ -608,353 +338,62 @@ namespace MyFSM.Unity
                 case MotionDriver.CharacterController: return "CharacterController";
                 case MotionDriver.Rigidbody: return "Rigidbody";
                 case MotionDriver.Rigidbody2D: return "Rigidbody2D";
-                case MotionDriver.ColliderSweep: return "collider sweep";
+                case MotionDriver.ColliderNoBody: return "collider without a body";
                 default: return "transform";
             }
         }
 
-        /// <summary>
-        /// The agent's half-width, taken from its collider when it has one and
-        /// falling back to <see cref="DefaultBodyRadius"/>.
-        /// </summary>
-        public static float BodyRadius(Transform t, bool is2D)
+        /// <summary>The driver plus the Unity call it stands for.</summary>
+        private static string DriverLabel(MotionContext ctx)
         {
-            if (t != null)
+            switch (ctx.Driver)
             {
-                Collider c = t.GetComponent<Collider>();
-                if (c != null && c.enabled)
-                {
-                    // Horizontal half-extents only: a tall capsule is not a
-                    // wide one, and using y would park it a body-height away
-                    // from every wall.
-                    Vector3 e = c.bounds.extents;
-                    return Mathf.Max(e.x, e.z);
-                }
-                Collider2D c2 = t.GetComponent<Collider2D>();
-                if (c2 != null && c2.enabled)
-                {
-                    Vector2 e2 = c2.bounds.extents;
-                    return Mathf.Max(e2.x, e2.y);
-                }
+                case MotionDriver.NavMeshAgent: return "NavMeshAgent.SetDestination";
+                case MotionDriver.CharacterController: return "CharacterController.Move";
+                case MotionDriver.Rigidbody:
+                    return ctx.Kinematic
+                        ? "Rigidbody.MovePosition (kinematic: Unity does not stop it at colliders)"
+                        : "Rigidbody.velocity (physics resolves collisions)";
+                case MotionDriver.Rigidbody2D:
+                    return ctx.Kinematic
+                        ? "Rigidbody2D.MovePosition (kinematic: Unity does not stop it at colliders)"
+                        : "Rigidbody2D.velocity (physics resolves collisions)";
+                case MotionDriver.ColliderNoBody:
+                    return "transform (collider without a body: nothing can stop it)";
+                default:
+                    return "transform";
             }
-            return DefaultBodyRadius;
-        }
-
-        private static float RadiusOf(MotionContext ctx)
-        {
-            if (ctx.Shape != null)
-            {
-                Vector3 e = ctx.Shape.bounds.extents;
-                return Mathf.Max(e.x, e.z);
-            }
-            if (ctx.Shape2D != null)
-            {
-                Vector2 e = ctx.Shape2D.bounds.extents;
-                return Mathf.Max(e.x, e.y);
-            }
-            return DefaultBodyRadius;
         }
 
         /// <summary>
-        /// Centre of the sweep for this agent: the collider's bounds centre
-        /// when it has one (its pivot need not be its middle), else the given
-        /// position.
+        /// Logs the driver when it changes for an agent, so which Unity call is
+        /// being used is visible instead of guessed.
         /// </summary>
-        private static Vector3 SweepCentre(MotionContext ctx, Vector3 fallback)
+        private void Report(int handleId, MotionContext ctx, string who, AiExecution exec)
         {
-            if (ctx.Shape != null) return ctx.Shape.bounds.center;
-            if (ctx.Shape2D != null)
-            {
-                Vector3 c = ctx.Shape2D.bounds.center;
-                return new Vector3(c.x, c.y, fallback.z);
-            }
-            return fallback;
+            if (exec == null || exec.Log == null) return;
+            string now = DriverLabel(ctx);
+            string before;
+            if (_reportedDriver.TryGetValue(handleId, out before) && before == now) return;
+            _reportedDriver[handleId] = now;
+            exec.Log.Info("movement: " + who + " -> " + now);
         }
 
         /// <summary>
-        /// Moves a sphere of <paramref name="radius"/> from
-        /// <paramref name="origin"/> by <paramref name="delta"/>, stopping at
-        /// obstacles and sliding along them. Returns the position the CENTRE
-        /// reached and sets <paramref name="blocked"/> when anything got in
-        /// the way. Detection and normals come from the engine (the probe);
-        /// the only arithmetic here is projecting what is left of the step
-        /// onto the surface.
+        /// One-off warning for the case Unity cannot help with: a collider with
+        /// no Rigidbody/CharacterController is static geometry, so nothing
+        /// stops it. Says exactly what to add.
         /// </summary>
-        public static Vector3 SlideStep(Vector3 origin, Vector3 delta, float radius, bool is2D,
-                                        IMotionProbe probe, out bool blocked)
+        private void WarnNoBody(int handleId, string who, AiExecution exec)
         {
-            blocked = false;
-            Vector3 pos = origin;
-            Vector3 remaining = is2D ? new Vector3(delta.x, delta.y, 0f) : delta;
-            if (probe == null) return pos + remaining;
-
-            for (int i = 0; i < MaxSlideIterations; i++)
-            {
-                float len = remaining.magnitude;
-                if (len <= MinStep) break;
-                Vector3 dir = remaining / len;
-
-                float travel;
-                Vector3 normal;
-                if (!FindContact(probe, pos, radius, dir, len, is2D, out travel, out normal))
-                {
-                    pos += dir * len;
-                    break;
-                }
-
-                blocked = true;
-                pos += dir * travel;
-                Vector3 leftover = dir * (len - travel);
-                if (normal.sqrMagnitude <= 1e-8f) break;
-                remaining = Vector3.ProjectOnPlane(leftover, normal);
-                if (is2D) remaining.z = 0f;
-            }
-            return pos;
-        }
-
-        /// <summary>
-        /// How far the sphere's centre may travel along <paramref name="dir"/>
-        /// before it touches something, and the normal to slide on. The engine
-        /// shape cast answers first; when it is blind — a non-convex
-        /// MeshCollider, or anything the sphere already overlaps — rays answer
-        /// instead, and the centre travel is derived from the surface plane.
-        /// </summary>
-        private static bool FindContact(IMotionProbe probe, Vector3 pos, float radius,
-                                        Vector3 dir, float len, bool is2D,
-                                        out float travel, out Vector3 normal)
-        {
-            travel = len;
-            normal = Vector3.zero;
-
-            float distance;
-            Vector3 castNormal;
-            if (probe.SphereCast(pos, radius, dir, len, is2D, out distance, out castNormal))
-            {
-                travel = distance - CollisionSkin;
-                if (travel < 0f) travel = 0f;
-                if (travel > len) travel = len;
-
-                // Unity's docs: a sphere cast's normal "does not always
-                // represent the surface normal ... misleading if you're using
-                // it for sliding ... consider using a Physics.Raycast". So ask
-                // a ray for the real one and keep the cast's as a fallback.
-                normal = castNormal;
-                float rd;
-                Vector3 rp, rn;
-                if (probe.Raycast(pos, dir, distance + radius + CollisionSkin * 4f, is2D,
-                                  out rd, out rp, out rn) && rn.sqrMagnitude > 1e-8f)
-                    normal = rn;
-                return true;
-            }
-
-            // Shape cast blind. Rays from the centre and from a ring at the
-            // body radius cover the surface the sphere would have touched.
-            bool hit = false;
-            float best = len;
-            Vector3 bestNormal = Vector3.zero;
-            Vector3 perp = Perpendicular(dir, is2D);
-            Vector3 up2 = is2D ? Vector3.zero : Vector3.Cross(dir, perp).normalized;
-            ConsiderRay(probe, pos, pos, radius, dir, len, is2D,
-                        ref hit, ref best, ref bestNormal);
-            ConsiderRay(probe, pos, pos + perp * radius, radius, dir, len, is2D,
-                        ref hit, ref best, ref bestNormal);
-            ConsiderRay(probe, pos, pos - perp * radius, radius, dir, len, is2D,
-                        ref hit, ref best, ref bestNormal);
-            if (!is2D)
-            {
-                ConsiderRay(probe, pos, pos + up2 * radius, radius, dir, len, is2D,
-                            ref hit, ref best, ref bestNormal);
-                ConsiderRay(probe, pos, pos - up2 * radius, radius, dir, len, is2D,
-                            ref hit, ref best, ref bestNormal);
-            }
-            if (!hit) return false;
-            travel = best;
-            normal = bestNormal;
-            return true;
-        }
-
-        /// <summary>
-        /// One fallback ray. Its hit point is a point on the surface, so the
-        /// centre travel is the plane-contact formula
-        /// <c>t = (radius - dot(pos - point, normal)) / dot(dir, normal)</c>:
-        /// how far the centre goes before the sphere's edge reaches that
-        /// plane. (Subtracting the radius from the ray distance instead would
-        /// only be right head-on.) The running minimum wins.
-        /// </summary>
-        private static void ConsiderRay(IMotionProbe probe, Vector3 pos, Vector3 from, float radius,
-                                        Vector3 dir, float len, bool is2D,
-                                        ref bool hit, ref float best, ref Vector3 bestNormal)
-        {
-            float rd;
-            Vector3 point, normal;
-            if (!probe.Raycast(from, dir, len + radius, is2D, out rd, out point, out normal))
-                return;
-            float denom = Dot(dir, normal);
-            if (denom > -MinStep) return;              // parallel or facing away
-            float t = (radius - Dot(pos - point, normal)) / denom;
-            if (t < 0f) t = 0f;
-            t -= CollisionSkin;
-            if (t < 0f) t = 0f;
-            if (t > len) t = len;
-            if (!hit || t < best)
-            {
-                best = t;
-                bestNormal = normal;
-                hit = true;
-            }
-        }
-
-        private static Vector3 Perpendicular(Vector3 dir, bool is2D)
-        {
-            Vector3 perp;
-            if (is2D)
-            {
-                perp = new Vector3(-dir.y, dir.x, 0f);
-            }
-            else
-            {
-                Vector3 axis = Mathf.Abs(dir.y) > 0.9f
-                    ? new Vector3(1f, 0f, 0f)     // moving vertically: any axis works
-                    : new Vector3(0f, 1f, 0f);
-                perp = Vector3.Cross(dir, axis).normalized;
-            }
-            if (perp.sqrMagnitude <= MinStep * MinStep) perp = new Vector3(1f, 0f, 0f);
-            return perp;
-        }
-
-        private static float Dot(Vector3 a, Vector3 b)
-        {
-            return a.x * b.x + a.y * b.y + a.z * b.z;
-        }
-
-        /// <summary>
-        /// The move for an object that HAS a collider: move a substep, let the
-        /// engine's overlap query say how far it is inside whatever it now
-        /// touches, back it out and slide the leftover along the contact. No
-        /// shape is approximated and no cast can be blind to it, because
-        /// ComputePenetration/Collider2D.Distance answer for the real collider.
-        /// </summary>
-        private Vector3 ResolveStep(MotionContext ctx, Vector3 ownerPos, Vector3 delta,
-                                    out bool blocked)
-        {
-            blocked = false;
-            Transform owner = ctx.Owner;
-            if (owner == null || Probe == null) return ownerPos + delta;
-
-            float cap = SubStepCap(ctx);
-            Vector3 pos = ownerPos;
-            Vector3 remaining = ctx.Is2D ? new Vector3(delta.x, delta.y, 0f) : delta;
-            int slides = 0;
-
-            for (int i = 0; i < MaxSubSteps && slides < MaxSlideIterations; i++)
-            {
-                float len = remaining.magnitude;
-                if (len <= MinStep) break;
-                Vector3 dir = remaining / len;
-                float stepLen = Mathf.Min(cap, len);
-                Vector3 tentative = pos + dir * stepLen;
-                owner.position = tentative;
-
-                Vector3 push;
-                if (Probe.ResolvePenetration(owner, SweepCentre(ctx, tentative), RadiusOf(ctx),
-                                             ctx.Is2D, out push))
-                {
-                    blocked = true;
-                    slides++;
-                    // Back out along the contact as far as it takes, plus a
-                    // skin so the next step does not start inside.
-                    pos = tentative + push;
-                    owner.position = pos;
-                    remaining -= dir * stepLen;
-                    Vector3 normal = push.normalized;
-                    if (normal.sqrMagnitude <= 1e-8f) break;
-                    remaining = Vector3.ProjectOnPlane(remaining, normal);
-                    if (ctx.Is2D) remaining.z = 0f;
-                }
-                else
-                {
-                    pos = tentative;
-                    remaining -= dir * stepLen;
-                }
-            }
-
-            if (ctx.Is2D)
-            {
-                Vector3 fixedPos = new Vector3(pos.x, pos.y, ownerPos.z);
-                owner.position = fixedPos;
-                return fixedPos;
-            }
-            owner.position = pos;
-            return pos;
-        }
-
-        /// <summary>
-        /// How far the body may travel before the engine is asked again: half
-        /// its own smallest dimension, so it can never step past something
-        /// thinner than itself without overlapping it at least once.
-        /// </summary>
-        private static float SubStepCap(MotionContext ctx)
-        {
-            Vector3 e;
-            if (ctx.Shape != null) e = ctx.Shape.bounds.extents;
-            else if (ctx.Shape2D != null)
-            {
-                Vector2 e2 = ctx.Shape2D.bounds.extents;
-                e = new Vector3(e2.x, e2.y, e2.x);
-            }
-            else e = new Vector3(DefaultBodyRadius, DefaultBodyRadius, DefaultBodyRadius);
-
-            float smallest = Mathf.Min(Mathf.Min(e.x, e.y), e.z);
-            float cap = smallest * 0.5f;
-            if (cap < MinSubStep) cap = MinSubStep;
-            return cap;
-        }
-
-        /// <summary>
-        /// The move for an object with NO collider: there is no shape for the
-        /// engine to resolve, so a probe sphere is swept with
-        /// Physics.SphereCast / Physics2D.CircleCast, the true surface normal is
-        /// taken from a ray, and the running position is pushed out of anything
-        /// it ended up inside.
-        /// </summary>
-        private Vector3 SweptSpherePosition(MotionContext ctx, Vector3 ownerPos, Vector3 delta,
-                                            out bool blocked)
-        {
-            Vector3 origin = SweepCentre(ctx, ownerPos);
-            float radius = RadiusOf(ctx);
-            Vector3 swept = SlideStep(origin, delta, radius, ctx.Is2D, Probe, out blocked);
-
-            // "SphereCast will not detect colliders for which the sphere
-            // overlaps the collider": if anything did get the body inside a
-            // collider, leave it outside at the end of the tick.
-            if (Probe != null)
-            {
-                for (int i = 0; i < MaxOverlapIterations; i++)
-                {
-                    Vector3 push;
-                    if (!Probe.ResolvePenetration(null, swept, radius, ctx.Is2D, out push))
-                        break;
-                    swept += push;
-                    blocked = true;
-                }
-            }
-
-            Vector3 moved = swept - origin;
-            if (ctx.Is2D) moved.z = 0f;
-            return ownerPos + moved;
-        }
-
-        /// <summary>
-        /// One step through whichever strategy fits the object: the engine's
-        /// overlap resolution when it has a collider, the swept probe sphere
-        /// when it has none.
-        /// </summary>
-        private Vector3 StepPosition(MotionContext ctx, Vector3 ownerPos, Vector3 delta,
-                                     out bool blocked)
-        {
-            if (ctx.Shape != null || ctx.Shape2D != null)
-                return ResolveStep(ctx, ownerPos, delta, out blocked);
-            return SweptSpherePosition(ctx, ownerPos, delta, out blocked);
+            if (exec == null || exec.Log == null) return;
+            if (!_warnedNoBody.Add(handleId)) return;
+            exec.Log.Warn("movement: " + who + " has a Collider but no Rigidbody / " +
+                          "CharacterController. Unity cannot move a body-less object " +
+                          "against collisions (a bare Collider is static geometry), so " +
+                          "movement is applied to the transform and nothing will stop " +
+                          "it. Add a dynamic Rigidbody (gravity off) or a " +
+                          "CharacterController to make walls matter.");
         }
 
         /// <summary>
@@ -1005,37 +444,6 @@ namespace MyFSM.Unity
             return (a - b).sqrMagnitude <= within * within;
         }
 
-        /// <summary>
-        /// One console line per agent when its driver changes or it first gets
-        /// stopped by something, so "should this object be colliding?" is
-        /// answerable at a glance instead of by guesswork. Logs on the
-        /// transition only, so a goal re-posted every tick stays quiet.
-        /// </summary>
-        private void Report(int handleId, MotionContext ctx, string who, bool blocked,
-                            AiExecution exec)
-        {
-            if (exec == null || exec.Log == null) return;
-            string drv = DriverName(ctx.Driver);
-            string before;
-            bool known = _reportedDriver.TryGetValue(handleId, out before);
-            if (!known || before != drv) _reportedDriver[handleId] = drv;
-
-            if (blocked)
-            {
-                if (_blocked.Add(handleId))
-                {
-                    string what = Probe != null && !string.IsNullOrEmpty(Probe.LastHitName)
-                        ? Probe.LastHitName
-                        : "a collider";
-                    exec.Log.Info("movement: " + who + " stopped by " + what + " (" + drv + ")");
-                }
-                return;
-            }
-            _blocked.Remove(handleId);
-            if (!known || before != drv)
-                exec.Log.Info("movement: " + who + " driven by " + drv);
-        }
-
         private void AdvanceMove(int handleId, MoveGoal goal, float dt,
                                  FunctionDispatcher d, AiExecution exec)
         {
@@ -1083,7 +491,7 @@ namespace MyFSM.Unity
 
             MotionContext ctx = Resolve(t, goal.Is2D);
 
-            // NavMesh fast path: a live agent steers itself.
+            // NavMesh: the engine pathfinds and steers.
             if (ctx.Driver == MotionDriver.NavMeshAgent)
             {
                 NavMeshAgent agent = ctx.Nav;
@@ -1094,8 +502,8 @@ namespace MyFSM.Unity
                 if (!agent.pathPending &&
                     agent.pathStatus == NavMeshPathStatus.PathInvalid)
                 {
-                    // Unreachable on the mesh: use whatever component the
-                    // object has instead of pretending it can walk there.
+                    // No route on the mesh: hand the step to whatever component
+                    // the object does have instead of pretending it can walk.
                     ctx = ResolveCore(t, goal.Is2D, true);
                 }
                 else if (!agent.pathPending && agent.remainingDistance <= goal.StopDistance)
@@ -1106,8 +514,8 @@ namespace MyFSM.Unity
                 }
                 else
                 {
-                    Report(handleId, ctx, t.name, false, exec);
-                    return; // engine is steering; nothing more this tick
+                    Report(handleId, ctx, t.name, exec);
+                    return; // the mesh is steering; nothing more this tick
                 }
             }
 
@@ -1132,63 +540,43 @@ namespace MyFSM.Unity
             {
                 case MotionDriver.CharacterController:
                 {
-                    // The controller does its own capsule sweep, slope and step
-                    // handling; only gravity is ours to apply.
+                    // Unity's controller move: it does its own capsule sweep,
+                    // slope and step handling, and stops at walls. Only gravity
+                    // is ours to add.
                     Vector3 motion = delta;
                     if (!ctx.Controller.isGrounded) motion.y -= CharacterGravity * dt;
                     ctx.Controller.Move(motion);
-                    Report(handleId, ctx, t.name, false, exec);
+                    Report(handleId, ctx, t.name, exec);
                     return;
                 }
                 case MotionDriver.Rigidbody:
                 case MotionDriver.Rigidbody2D:
                 {
-                    bool kinematic = ctx.Driver == MotionDriver.Rigidbody
-                        ? ctx.Body.isKinematic
-                        : ctx.Body2D.isKinematic;
-                    if (kinematic)
+                    if (ctx.Kinematic)
                     {
-                        // Kinematic bodies are not collided by the solver, so
-                        // resolve the move here and hand the result to the
-                        // engine as a pose it will apply.
-                        bool touched;
-                        Vector3 next = StepPosition(ctx, ownerPos, delta, out touched);
+                        // Unity's kinematic move. Its docs are explicit that
+                        // collisions do not affect a kinematic body, so this is
+                        // passed through as-is; nothing is layered on top.
+                        Vector3 next = ownerPos + delta;
                         if (ctx.Driver == MotionDriver.Rigidbody)
                             ctx.Body.MovePosition(next);
                         else
                             ctx.Body2D.MovePosition(new Vector2(next.x, next.y));
-                        Report(handleId, ctx, t.name, touched, exec);
+                        Report(handleId, ctx, t.name, exec);
                         return;
                     }
                     DriveVelocity(ctx, to / dist, dist, dt, goal.Speed);
-                    Report(handleId, ctx, t.name, false, exec);
-                    return;
-                }
-                case MotionDriver.ColliderSweep:
-                {
-                    bool touched;
-                    Vector3 next = StepPosition(ctx, ownerPos, delta, out touched);
-                    ctx.Owner.position = next;
-                    Report(handleId, ctx, t.name, touched, exec);
+                    Report(handleId, ctx, t.name, exec);
                     return;
                 }
                 default:
                 {
-                    // Nothing to drive the object, but "no rigidbody" still
-                    // means collisions are respected: resolve against the real
-                    // collider when there is one, else sweep the default body
-                    // radius. Only CollisionAware=false writes a bare position.
-                    if (CollisionAware)
-                    {
-                        bool touched;
-                        Vector3 next = StepPosition(ctx, ownerPos, delta, out touched);
-                        ctx.Owner.position = next;
-                        Report(handleId, ctx, t.name, touched, exec);
-                    }
-                    else
-                    {
-                        ctx.Owner.position = ownerPos + delta;
-                    }
+                    // No body: Unity has nothing to move here, so the step goes
+                    // to the transform (and the first time, the warning above).
+                    if (ctx.Driver == MotionDriver.ColliderNoBody)
+                        WarnNoBody(handleId, t.name, exec);
+                    ctx.Owner.position = ownerPos + delta;
+                    Report(handleId, ctx, t.name, exec);
                     return;
                 }
             }
@@ -1237,15 +625,15 @@ namespace MyFSM.Unity
         }
 
         /// <summary>
-        /// Applies a new facing through the engine when the object has a body
-        /// (so the physics step and interpolation stay in sync), and straight
-        /// to the transform otherwise.
+        /// Applies a new facing through the body when there is one (MoveRotation
+        /// is Unity's rotation counterpart to MovePosition), and straight to the
+        /// transform otherwise.
         /// </summary>
         private static void ApplyRotation(MotionContext ctx, Quaternion rotation)
         {
             Transform agent = ctx.Agent;
-            // Only the object being faced can carry the body: if the rigidbody
-            // is on a parent, rotating it would not be the agent's facing.
+            // Only the object being faced can carry the body: if the body is on
+            // a parent, rotating it would not be the agent's facing.
             if (agent != null && ctx.Owner == agent)
             {
                 if (ctx.Driver == MotionDriver.Rigidbody && ctx.Body != null)
