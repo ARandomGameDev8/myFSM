@@ -501,10 +501,12 @@ public static class SmokeTest
     // -- 9. environment-aware movement. A tier-3 goal does not move a bare
     // transform: the components on the agent decide how the step is applied
     // (velocity, CharacterController.Move, a swept MovePosition, an engine cast
-    // sweep, or nothing at all), and every contact comes from the engine. These
-    // cases cover the sweep itself, the driver each component set selects, and
-    // end-to-end runs on real compiled bytes -- including the wall-between-the-
-    // AI-and-its-target case.
+    // sweep, or the transform), and every contact comes from the engine. These
+    // cases cover the sweep, the documented traps around it (SphereCast's
+    // normal is not the surface normal; a shape cast is blind to what it
+    // overlaps and to non-convex meshes), the driver each component set
+    // selects, and end-to-end runs on real compiled bytes -- including the
+    // wall-between-the-AI-and-its-target case.
     private static void TestCollisionMovement(string dir)
     {
         const float wall = 2.0f;    // a wall occupies the half-space past this plane
@@ -541,12 +543,48 @@ public static class SmokeTest
                                      new PlaneProbe(new Vector3(1f, 0f, 0f), wall), out blocked);
         Check(blocked && p.x + radius <= wall + 1e-4f, "2D circle cast stops at the wall");
 
+        // ---- Unity docs, trap 1: a sphere cast's normal is often the
+        // contact->centre direction, "misleading if you're using it for
+        // sliding". With a deliberately wrong cast normal the slide must still
+        // use the ray's true surface normal and stay out of the wall.
+        PlaneProbe skewed = new PlaneProbe(forward, wall);
+        skewed.SkewCastNormal = true;
+        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
+                                     skewed, out blocked);
+        Check(blocked && p.z + radius <= wall + 1e-4f,
+              "a wrong cast normal cannot push the slide into the wall");
+        Check(p.x > 1f, "the skewed normal still slides along the true surface");
+
+        // ---- Unity docs, trap 2: "SphereCast will not detect colliders for
+        // which the sphere overlaps the collider" (and never non-convex
+        // meshes). When the shape cast is blind the rays must take over.
+        PlaneProbe meshWall = new PlaneProbe(forward, wall);
+        meshWall.BlindToSphereCast = true;
+        p = MovementSystem.SlideStep(Vector3.zero, forward * 3f, radius, false,
+                                     meshWall, out blocked);
+        Check(blocked && p.z + radius <= wall + 1e-4f,
+              "shape-cast-blind wall is caught by the ray fallback");
+        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
+                                     meshWall, out blocked);
+        Check(blocked && p.x > 1f && p.z + radius <= wall + 1e-4f,
+              "the ray fallback slides along it too");
+
+        // ---- trap 2b: already inside the wall -> shape cast blind AND rays
+        // starting inside a collider do not report it. The overlap push-out is
+        // the net that guarantees a tick never ends inside something.
+        Vector3 inside = new Vector3(0f, 0f, wall + 0.3f);
+        PlaneProbe solidWall = new PlaneProbe(forward, wall);
+        Vector3 push;
+        bool pushed = solidWall.ResolvePenetration(null, inside, radius, false, out push);
+        Check(pushed && inside.z + push.z + radius <= wall + 1e-4f,
+              "overlap query pushes a buried body back out of the wall");
+
         // ---- driver selection: the components decide, not the call ----
         MovementSystem ms = new MovementSystem();
 
         GameObject bare = new GameObject("Bare");
         Check(ms.Resolve(bare.transform, false).Driver == MotionDriver.Transform,
-              "no components -> plain transform step");
+              "no components -> swept transform step");
 
         GameObject colOnly = new GameObject("ColOnly");
         colOnly.AddComponent<Collider>();
@@ -588,6 +626,17 @@ public static class SmokeTest
               ms.Resolve(childGo.transform, false).Owner == parentGo.transform,
               "a body on the parent drives the agent");
 
+        // ...and so does a collider on the parent (the reported setup)
+        GameObject parentCol = new GameObject("ParentCollider");
+        parentCol.AddComponent<Collider>();
+        GameObject childScript = new GameObject("ChildScript");
+        childScript.transform.parent = parentCol.transform;
+        MotionContext parentCtx = ms.Resolve(childScript.transform, false);
+        Check(parentCtx.Driver == MotionDriver.ColliderSweep &&
+              parentCtx.Owner == parentCol.transform &&
+              parentCtx.Shape != null,
+              "a collider on the parent drives the agent and is swept");
+
         MovementSystem raw = new MovementSystem();
         raw.CollisionAware = false;
         Check(raw.Resolve(colOnly.transform, false).Driver == MotionDriver.Transform,
@@ -624,6 +673,44 @@ public static class SmokeTest
             Check(wideEnd.z + 1.5f <= 5f + 1e-3f, "wide body never overlaps the wall");
             Check(wideEnd.z < sweepEnd.z - 0.5f,
                   "a wider body is stopped further from the wall");
+
+            // (a3) shape-cast-blind wall (a non-convex MeshCollider behaves this
+            // way) with NO collider on the agent, so the cast is the only
+            // detector: the ray fallback still stops it
+            GameObject meshGo = new GameObject("MeshWallMover");
+            FsmbAIInstance meshAi = meshGo.AddComponent<FsmbAIInstance>();
+            Check(meshAi.BootWithBytes(bytes, "Smoke_mesh"), "mesh-wall AI boots");
+            PlaneProbe blind = new PlaneProbe(forward, 5f);
+            blind.BlindToSphereCast = true;
+            meshAi.Movement.Probe = blind;
+            RunTicks(meshAi, 180);
+            Check(meshGo.transform.position.z + 0.5f <= 5f + 1e-3f,
+                  "a wall the shape cast cannot see still stops it (ray fallback)");
+
+            // (a3b) a SHAPED body does not depend on casts at all: the engine's
+            // overlap query answers, so even a wall the cast cannot see stops it
+            GameObject mesh2Go = new GameObject("MeshWallBody");
+            mesh2Go.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            FsmbAIInstance mesh2Ai = mesh2Go.AddComponent<FsmbAIInstance>();
+            Check(mesh2Ai.BootWithBytes(bytes, "Smoke_mesh2"), "mesh-wall body boots");
+            PlaneProbe blind2 = new PlaneProbe(forward, 5f);
+            blind2.BlindToSphereCast = true;
+            mesh2Ai.Movement.Probe = blind2;
+            RunTicks(mesh2Ai, 180);
+            Check(mesh2Go.transform.position.z + 0.5f <= 5f + 1e-3f,
+                  "a shaped body is stopped by the overlap query, casts or not");
+
+            // (a4) starting INSIDE the wall: the sweep is blind, the overlap net
+            // pushes it back out, and it never ends up on the far side
+            GameObject buriedGo = new GameObject("BuriedMover");
+            buriedGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            buriedGo.transform.position = new Vector3(0f, 0f, 5.3f);   // inside the wall
+            FsmbAIInstance buriedAi = buriedGo.AddComponent<FsmbAIInstance>();
+            Check(buriedAi.BootWithBytes(bytes, "Smoke_buried"), "buried AI boots");
+            buriedAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(buriedAi, 60);
+            Check(buriedGo.transform.position.z <= 5.001f,
+                  "a body that starts inside the wall is pushed out, not through");
 
             // (b) nothing on the agent: no rigidbody and no collider still
             // means "respect collisions" -- it sweeps with the default radius
@@ -685,6 +772,33 @@ public static class SmokeTest
             Check(kinGo.transform.position.z + 0.5f <= 5f + 1e-3f,
                   "kinematic mover never passed the wall");
 
+            // (e2) a fast step: the substep cap must not throttle it...
+            float savedDt = Time.deltaTime;
+            Time.deltaTime = 0.5f;                       // speed 2 -> a 1.0 unit step
+            GameObject fastGo = new GameObject("FastMover");
+            fastGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            FsmbAIInstance fastAi = fastGo.AddComponent<FsmbAIInstance>();
+            Check(fastAi.BootWithBytes(bytes, "Smoke_fast"), "fast AI boots");
+            fastAi.Movement.Probe = new PlaneProbe(forward, 500f);
+            RunTicks(fastAi, 2);
+            Console.WriteLine("    fast step moved z=" + fastGo.transform.position.z.ToString("0.###") +
+                              " (one tick of speed 2 at dt 0.5)");
+            Check(Math.Abs(fastGo.transform.position.z - 1f) < 0.02f,
+                  "a fast step is taken in full, not clamped to one substep");
+
+            // ...and the same fast step against a nearby wall must not tunnel
+            GameObject ramGo = new GameObject("RamMover");
+            ramGo.transform.position = new Vector3(0f, 0f, 4f);
+            ramGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            FsmbAIInstance ramAi = ramGo.AddComponent<FsmbAIInstance>();
+            Check(ramAi.BootWithBytes(bytes, "Smoke_ram"), "ramming AI boots");
+            ramAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(ramAi, 2);
+            Console.WriteLine("    rammer ended at z=" + ramGo.transform.position.z.ToString("0.###"));
+            Check(ramGo.transform.position.z + 0.5f <= 5f + 1e-3f,
+                  "a fast step into a wall does not tunnel through it");
+            Time.deltaTime = savedDt;
+
             // (f) character controller: the engine's capsule sweep moves it
             GameObject ccMover = new GameObject("CCMover");
             ccMover.AddComponent<CharacterController>();
@@ -710,26 +824,55 @@ public static class SmokeTest
     }
 }
 
-/// <summary>Test probe: nothing to hit (mirrors an empty collision world).</summary>
+/// <summary>Test probe: an empty collision world (every query misses).</summary>
 public sealed class NoObstacleProbe : MyFSM.Unity.IMotionProbe
 {
-    public bool Sphere(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                       bool is2D, out float distance, out Vector3 normal)
+    public string LastHitName { get { return null; } }
+
+    public bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
+                           bool is2D, out float distance, out Vector3 normal)
     {
         distance = 0f;
         normal = Vector3.zero;
         return false;
     }
+
+    public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
+                        out float distance, out Vector3 point, out Vector3 normal)
+    {
+        distance = 0f;
+        point = Vector3.zero;
+        normal = Vector3.zero;
+        return false;
+    }
+
+    public bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
+                                   out Vector3 push)
+    {
+        push = Vector3.zero;
+        return false;
+    }
 }
 
 /// <summary>
-/// Test probe standing in for the engine's cast: the sphere sweep against a
-/// wall that occupies the half-space <c>dot(axis, p) &gt;= offset</c> and faces
-/// <c>-axis</c>. Reports what Physics.SphereCast / Physics2D.CircleCast do --
-/// how far the sphere's CENTRE may travel before its edge touches the surface --
-/// so the stop, the slide and the no-creep behaviour can be driven headlessly.
-/// An origin already inside the margin reports distance 0. <c>topY</c> makes
-/// the wall end at a height, so a body above it passes freely.
+/// Test probe standing in for the engine: a wall occupying the half-space
+/// <c>dot(axis, p) &gt;= offset</c>, facing <c>-axis</c>. It reproduces the
+/// behaviours the Unity docs describe, so the movement code is tested against
+/// the real contract rather than a convenient one:
+///
+///  * SphereCast reports how far the sphere's CENTRE may travel before touch
+///    (that is what RaycastHit.distance means for a swept volume). With
+///    <see cref="SkewCastNormal"/> it reports a contact-to-centre normal
+///    instead of the surface normal, as SphereCast sometimes does.
+///  * Raycast hits the wall's SURFACE and reports the true normal.
+///  * With <see cref="BlindToSphereCast"/> the shape cast sees nothing (a
+///    non-convex MeshCollider, or a collider the sphere already overlaps)
+///    while rays still work.
+///  * ResolvePenetration pushes a body that is inside the wall back out; the
+///    harness has no real collider shapes, so the body is a sphere of the
+///    radius movement hands it.
+///
+/// <c>topY</c> makes the wall end at a height, so a body above it passes.
 /// </summary>
 public sealed class PlaneProbe : MyFSM.Unity.IMotionProbe
 {
@@ -738,26 +881,82 @@ public sealed class PlaneProbe : MyFSM.Unity.IMotionProbe
     private readonly float _topY;
     private readonly bool _limited;
 
+    /// <summary>Report a wrong (contact-to-centre) normal, as SphereCast may.</summary>
+    public bool SkewCastNormal;
+    /// <summary>Pretend the shape cast cannot see the wall (rays still can).</summary>
+    public bool BlindToSphereCast;
+
+    public string LastHitName { get; private set; }
+
     public PlaneProbe(Vector3 axis, float offset) { _axis = axis; _offset = offset; }
     public PlaneProbe(Vector3 axis, float offset, float topY)
     {
         _axis = axis; _offset = offset; _topY = topY; _limited = true;
     }
 
-    public bool Sphere(Vector3 origin, float radius, Vector3 direction, float maxDistance,
-                       bool is2D, out float distance, out Vector3 normal)
+    private bool Exists(Vector3 at)
+    {
+        return !_limited || at.y < _topY;
+    }
+
+    public bool SphereCast(Vector3 origin, float radius, Vector3 direction, float maxDistance,
+                           bool is2D, out float distance, out Vector3 normal)
     {
         distance = 0f;
         normal = Vector3.zero;
-        if (_limited && origin.y >= _topY) return false;
+        LastHitName = null;
+        if (BlindToSphereCast || !Exists(origin)) return false;
         float denom = _axis.x * direction.x + _axis.y * direction.y + _axis.z * direction.z;
         if (denom <= 1e-9f) return false;                  // not moving into the wall
         float start = _axis.x * origin.x + _axis.y * origin.y + _axis.z * origin.z;
-        float t = (_offset - radius - start) / denom;
+        float t = (_offset - radius - start) / denom;      // centre travel, per Unity
         if (t > maxDistance) return false;
-        if (t < 0f) t = 0f;                                // already inside the margin
+        if (t < 0f) t = 0f;                                // already at/inside the margin
         distance = t;
-        normal = new Vector3(-_axis.x, -_axis.y, -_axis.z);
+        if (SkewCastNormal)
+        {
+            // "often the direction from the contact point to the center of the
+            // sphere": tilt the normal toward the direction of travel.
+            normal = (-_axis + direction * 0.35f).normalized;
+        }
+        else
+        {
+            normal = -_axis;
+        }
+        LastHitName = "Wall";
+        return true;
+    }
+
+    public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
+                        out float distance, out Vector3 point, out Vector3 normal)
+    {
+        distance = 0f;
+        point = Vector3.zero;
+        normal = Vector3.zero;
+        if (!Exists(origin)) return false;
+        float denom = _axis.x * direction.x + _axis.y * direction.y + _axis.z * direction.z;
+        if (denom <= 1e-9f) return false;
+        float start = _axis.x * origin.x + _axis.y * origin.y + _axis.z * origin.z;
+        float t = (_offset - start) / denom;               // the wall's SURFACE
+        if (t < 0f || t > maxDistance) return false;
+        distance = t;
+        point = origin + direction * t;
+        normal = -_axis;
+        LastHitName = "Wall";
+        return true;
+    }
+
+    public bool ResolvePenetration(Transform owner, Vector3 centre, float radius, bool is2D,
+                                   out Vector3 push)
+    {
+        push = Vector3.zero;
+        LastHitName = null;
+        if (!Exists(centre)) return false;
+        float start = _axis.x * centre.x + _axis.y * centre.y + _axis.z * centre.z;
+        float excess = start + radius - _offset;           // the body is a sphere of
+        if (excess <= 1e-4f) return false;                 // `radius` here, as the
+        push = -_axis * (excess + 0.02f);                  // harness has no real shape
+        LastHitName = "Wall";
         return true;
     }
 }

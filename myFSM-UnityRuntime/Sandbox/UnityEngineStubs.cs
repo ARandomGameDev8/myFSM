@@ -607,6 +607,22 @@ namespace UnityEngine
         public bool isTrigger = false;
 
         public Vector2 ClosestPoint(Vector2 p) { return p; }
+        public ColliderDistance2D Distance(Collider2D other) { return new ColliderDistance2D(); }
+    }
+
+    /// <summary>
+    /// Unity's 2D separation result: distance is negative while the colliders
+    /// overlap. The harness has no collision world, so this is the "not
+    /// touching" default; tests inject an IMotionProbe instead.
+    /// </summary>
+    public struct ColliderDistance2D
+    {
+        public Vector2 normal;
+        public Vector2 pointA;
+        public Vector2 pointB;
+        public float distance;
+        public bool isOverlapped;
+        public bool isValid;
     }
 
     public enum CollisionFlags
@@ -679,6 +695,18 @@ namespace UnityEngine
                                       float dist, int mask, QueryTriggerInteraction q)
         {
             hit = new RaycastHit();
+            return false;
+        }
+        /// <summary>
+        /// Nothing ever overlaps in an empty world, so this is always false:
+        /// the minimal translation vector is undefined when not overlapping.
+        /// </summary>
+        public static bool ComputePenetration(Collider a, Vector3 pa, Quaternion ra,
+                                              Collider b, Vector3 pb, Quaternion rb,
+                                              out Vector3 direction, out float distance)
+        {
+            direction = Vector3.zero;
+            distance = 0f;
             return false;
         }
     }

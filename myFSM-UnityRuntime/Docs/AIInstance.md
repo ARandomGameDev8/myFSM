@@ -96,15 +96,27 @@ the rest of the game:
 |---|---|---|
 | `NavMeshAgent` (enabled, on the mesh) | engine pathing | `SetDestination` — the mesh steers and pathfinds |
 | `CharacterController` | engine capsule | `Move()` — slopes, steps and walls are the controller's own sweep |
-| `Rigidbody` / `Rigidbody2D`, dynamic | physics solver | the body's velocity is set each tick, so the solver resolves every contact (mass, drag and gravity keep working; a 3D body keeps its vertical velocity) |
-| `Rigidbody` / `Rigidbody2D`, kinematic | engine sweep | `Physics.SphereCast` / `Physics2D.CircleCast` first (the solver does not collide kinematic bodies), then `MovePosition` to the swept point |
-| `Collider` / `Collider2D` only | engine sweep | sphere/circle cast, then the leftover step is projected onto the hit plane — stop at walls, slide along them |
-| nothing | transform | the same engine sweep with the default body radius (`0.5`), then `position += direction * speed * dt` — it cannot walk through walls either, it just has no collider to take its size from |
+| `Rigidbody` / `Rigidbody2D`, dynamic | physics solver | velocity is set each tick; the solver resolves every contact (mass, drag and gravity keep working; a 3D body keeps its vertical velocity) |
+| `Rigidbody` / `Rigidbody2D`, kinematic | overlap resolution | resolved here, then handed to the engine with `MovePosition` (the solver does not collide kinematic bodies) |
+| `Collider` / `Collider2D` only | overlap resolution | a substep at a time, pushed out of whatever it overlaps by `Physics.ComputePenetration` / `Collider2D.Distance`, sliding along the contact |
+| nothing at all | swept probe sphere | `Physics.SphereCast` / `Physics2D.CircleCast` + a ray for the true surface normal (`0.5` body radius) |
 
-The detection is Unity's: `SphereCast`/`CircleCast`, `CharacterController.Move`
-and the physics solver. Movement only decides *where* to ask and what to do
-with the answer; it never re-implements collision detection. That is why a
-wall between an AI and its target stops the AI — in every one of those shapes.
+For a body that has a collider, the geometry is entirely Unity's: the move is
+split into substeps no larger than half the body's smallest dimension (so a fast
+body cannot jump a thin wall), each substep is applied and then corrected with
+the engine's minimal translation vector, and whatever is left of the step is
+projected onto the contact plane. No radius is assumed, no cast can be blind to
+it, and a tick never ends with the body inside something. This is the
+"depenetration" pattern the docs describe for movement without a rigidbody.
+`ColliderDistance2D` (2D) reports a negative distance while overlapped and the
+depth is used directly.
+
+The swept probe sphere is only for an object with no collider at all — there is
+no shape for the engine to resolve. It also takes its slide normal from a ray,
+because Unity warns that a sphere cast's normal "does not always represent the
+surface normal... misleading if you're using it for sliding", and falls back to
+a ray fan when the shape cast is blind (it "will not detect colliders for which
+the sphere overlaps the collider", and never sees a non-convex `MeshCollider`).
 
 The `Collision Aware` inspector toggle (default on) is copied into
 `Movement.CollisionAware` at boot. Turn it **off** only when something else
@@ -113,9 +125,19 @@ written straight to the transform and no component is consulted. NavMeshAgent
 pathing is unaffected either way — the agent already pathfinds around
 obstacles.
 
-`Movement.Probe` swaps the cast itself (an `IMotionProbe`), which is how the
-sandbox exercises stop/slide with no engine. `Movement.Resolve(transform, is2D)`
-reports the driver chosen for an object, and `MotionDriver` names it.
+**Diagnostics.** The first time an agent is driven, and the first time
+something stops it, one line goes to the log:
+
+```
+movement: Marcher driven by collider sweep
+movement: Marcher stopped by Wall (collider sweep)
+```
+
+so which path an object takes (and whether anything was detected at all) is
+visible without guessing. `Movement.Probe` swaps the queries themselves (an
+`IMotionProbe`), which is how the sandbox exercises stop/slide with no engine;
+`Movement.Resolve(transform, is2D)` reports the driver chosen for an object,
+and `MotionDriver` names it.
 
 ## The generated child (what `ClassGenerator` emits)
 

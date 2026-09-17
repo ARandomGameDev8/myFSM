@@ -148,26 +148,60 @@ snapshots (copies) and applies commands with validation. See
 
 ## Movement & functions
 
-Tier-3 calls post goals, never teleport. Movement is **component-aware**:
-each tick the system looks at what the agent's GameObject carries and moves it
-the way that component is meant to be moved — a live `NavMeshAgent` steers
-itself with `SetDestination`; a `CharacterController` goes through `Move()`;
-a dynamic `Rigidbody`/`Rigidbody2D` is given a velocity so the physics solver
-resolves every contact (and drag, mass and gravity keep working); a kinematic
-body is swept with `Physics.SphereCast`/`Physics2D.CircleCast` and then moved
-with `MovePosition`; a collider with no body gets the same engine sweep plus a
-slide along the hit plane; and an object with nothing on it falls back to the same engine sweep
-(default 0.5 body radius) followed by `position += direction * speed * dt`. The detection is always Unity's — the
-movement code decides where to ask, never how collisions work — so an AI stops
-at a wall (or slides along it) whether it is a rigidbody, a character
-controller or a bare collider. `AIInstance` exposes a **Collision Aware**
-inspector toggle (default on) as the escape hatch for objects whose transform
-something else owns. Object destinations snapshot at call time for
+Tier-3 calls post goals, never teleport. Movement is **component-aware**: each
+tick the system looks at what the agent's GameObject (or a parent) carries and
+moves it the way that component is meant to be moved — a live `NavMeshAgent`
+steers itself with `SetDestination`; a `CharacterController` goes through
+`Move()`; a dynamic `Rigidbody`/`Rigidbody2D` is given a velocity so the
+physics solver resolves every contact (drag, mass and gravity keep working);
+a kinematic body, a bare collider and a component-free object are moved by
+this system itself.
+
+For those last three, an object that HAS a collider is moved with **Unity's own
+overlap resolution**: move a substep (a fraction of the body's smallest
+dimension, so a fast body cannot jump a thin wall), ask
+`Physics.ComputePenetration` / `Collider2D.Distance` for the minimal translation
+that separates the body from whatever it now overlaps, apply it, and slide the
+leftover along the contact. Unity computes all the geometry — no shape is
+approximated, which is the approach the docs recommend for movement without a
+rigidbody. An object with **no** collider has no shape to resolve, so that case
+sweeps a probe sphere instead (`Physics.SphereCast` / `Physics2D.CircleCast`,
+true surface normal from a ray, ray fan when the shape cast is blind — it
+"will not detect colliders for which the sphere overlaps the collider" and
+never sees a non-convex `MeshCollider`). In every case the engine's overlap
+query is the final net: a tick never ends with the body inside something.
+
+`AIInstance` exposes a **Collision Aware** inspector toggle (default on) as the
+escape hatch for objects whose transform something else owns. Movement logs its
+driver once per agent (`movement: <object> driven by collider sweep`) and once
+when something stops it (`movement: <object> stopped by Wall`), so the path
+taken is visible in the console. Object destinations snapshot at call time for
 go/sprint/move; `follow`/`followTarget` re-target live; `lookAt` rotates
 gradually (through `MoveRotation` when the object has a body); movement never
 changes facing. The other 150+ overloads are direct engine mappings;
 engine-state failures (null handles, missing components) log and yield
 defaults, never exceptions.
+
+### If an AI still walks through a wall
+
+Movement can only respect what Unity's physics can see. Check, in order:
+
+1. **Does the object that should be stopped have something on it?** The agent
+   needs a `Collider`/`Collider2D` (anywhere on itself or a parent) for the
+   overlap query, or a `Rigidbody`/NavMeshAgent for the engine to move it.
+2. **Does the wall have a collider, and is it a collider?** A mesh without a
+   collider, or a collider with **Is Trigger** ticked, cannot block anything in
+   Unity — triggers do not stop rigidbodies either. Untick Is Trigger.
+3. **`Collision Aware` off in the inspector?** Then steps are written straight
+   to the transform and nothing is queried.
+4. **Is a `NavMeshAgent` moving it?** An agent follows the baked NavMesh and
+   ignores colliders that are not part of it. Bake the obstacle into the
+   NavMesh or put a `NavMeshObstacle` on it.
+5. **Is a dynamic `Rigidbody` driving it?** Then the *solver* owns the motion:
+   the wall must be a non-trigger collider, and the body must not be kinematic.
+6. **Current code?** The console line names the driver on the first tick. If it
+   never appears, the copy of `Runtime/` in the project is not the one that
+   logs — re-copy it (the installer's default branch is not this one).
 
 ## Interpretation notes (spec decisions)
 

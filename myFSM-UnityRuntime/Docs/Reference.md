@@ -57,14 +57,18 @@ letting it walk through:
 | `NavMeshAgent` (enabled, on a mesh) | `SetDestination` — the mesh pathfinds and steers |
 | `CharacterController` | `Move()` — the controller's own capsule sweep handles slopes, steps and walls |
 | `Rigidbody`/`Rigidbody2D`, dynamic | velocity is set each tick; the physics solver resolves the contacts (mass, drag, gravity keep working) |
-| `Rigidbody`/`Rigidbody2D`, kinematic | `Physics.SphereCast` / `Physics2D.CircleCast` sweep, then `MovePosition` |
-| `Collider`/`Collider2D` only | the same engine sweep, with the leftover step projected onto the hit plane (stop + slide) |
-| no components | the same engine sweep with the default body radius, then `position += direction * speed * dt` |
+| `Rigidbody`/`Rigidbody2D`, kinematic | moved here (overlap resolution), then `MovePosition` — the solver does not collide kinematic bodies |
+| `Collider`/`Collider2D` only | substeps through `Physics.ComputePenetration` / `Collider2D.Distance`: the engine supplies the minimal translation that separates the body, and the leftover step slides along the contact |
+| no components | the same substep loop with `SphereCast`/`CircleCast` and a ray for the true surface normal, at the default body radius |
 
-Detection is Unity's (`SphereCast`/`CircleCast`, `Move()`, the solver); movement
-only chooses where to ask. `Movement.CollisionAware = false` skips the
-environment entirely and writes to the transform (the escape hatch for
-objects whose movement something else owns); NavMeshAgent pathing is
+Detection and resolution are Unity's — `ComputePenetration`/`Collider2D.Distance`
+for a body with a collider, `SphereCast`/`CircleCast` + a ray for one without,
+`Move()`, and the solver. Movement only chooses where to ask and what to do
+with the answer, and it logs the driver once per agent
+(`movement: <object> driven by collider sweep`) plus the first time something
+stops it (`movement: <object> stopped by Wall`). `Movement.CollisionAware = false`
+skips the environment entirely and writes to the transform (the escape hatch
+for objects whose movement something else owns); NavMeshAgent pathing is
 unaffected either way.
 
 ---
@@ -400,7 +404,7 @@ that shape still emits the Resources path, because it has nothing else.
 | `ITimeProvider` | Feed your own clock | `Time` + `DeltaTime`. Default `UnityTimeProvider` uses `UnityEngine.Time`. |
 | `IExecutionLog` | Route runtime logging | `Info` / `Warn` / `Error`. Default logs through `Debug` with a `[myFSM name@object]` prefix. |
 | `IFunctionDispatcher` | Serve calls yourself | `Dispatch(id, args, exec)`. Default resolves handles against the scene; the sandbox harness substitutes a stub. |
-| `IMotionProbe` | Replace movement's collision query | `Sphere(origin, radius, dir, maxDist, is2D, out dist, out normal)` — one swept sphere. Default wraps `Physics.SphereCast`/`Physics2D.CircleCast`; `MovementSystem.Probe` is swappable at runtime (that is how the stop/slide tests run engine-free). |
+| `IMotionProbe` | Replace movement's collision queries | `ResolvePenetration` (the engine's minimal translation for the body's own collider: `Physics.ComputePenetration` / `Collider2D.Distance`), `SphereCast` and `Raycast` (used when the object has no collider). `MovementSystem.Probe` is swappable at runtime — that is how the stop/slide/push-out tests run engine-free. |
 | `IQueryBackend` | Answer external queries/commands | Implemented by `MainServer`; the query server is the only consumer. |
 
 ---
