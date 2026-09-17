@@ -221,7 +221,7 @@ namespace MyFSM.Unity
                 for (int i = 0; i < _slotBindings.Count; i++)
                 {
                     if (_slotBindings[i] != null)
-                        Bind((uint)i, _slotBindings[i]);
+                        Bind(i, _slotBindings[i]);
                 }
                 OnBindingsRequired();
             }
