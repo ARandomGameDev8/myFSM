@@ -1,13 +1,14 @@
 # samples — ready-to-compile .fsm files
 
 Write your own `.fsm` files **anywhere you like** — the compiler takes any
-path. These three are complete, working AIs you can compile right now:
+path. These four are complete, working AIs you can compile right now:
 
 ```sh
 # from the repo root (or 'fsmc' after 'make install'):
 ./bin/fsmc samples/patrol.fsm      # -> samples/patrol.fsmb
 ./bin/fsmc samples/hunter.fsm -o /tmp/hunter.fsmb
 ./bin/fsmc samples/guard.fsm
+./bin/fsmc samples/lookat.fsm
 ```
 
 Each binary has a committed human-readable twin (a `.fsmd` disassembly —
@@ -28,5 +29,6 @@ runs once when the state is entered, `Update{}` runs every tick
 | `patrol.fsm` | 4-state cycle, `Start{}` issuing the move order once + an empty `Update{}`, state-level temps, Tier 3 `goTo` / `stopMovement` |
 | `hunter.fsm` | if/else-if/else, block-scoped temps (state body / `Actions` body / else body), an `Actions`-body temp consumed by `Start{}`, vector math, `&&` |
 | `guard.fsm` | bool temps, else-if chain, `Actions`-body temps queried by `Update{}`, a `Start{}` that resets the guard's visuals on entry, a teardown state whose whole job is one `Start{}` block, Tier 2 mutation (`emit`, `setAnimation`, `setVisible`) |
+| `lookat.fsm` | the minimum look-at rig: two `Object3D` slots, a 2-state cycle gated on `isActive()`, and the Tier 3 `lookAt` pattern (the goal is retired once the turn finishes, so a moving target needs re-posting every tick in `Update{}`) |
 
 Full syntax reference: [`../fsmc/LANGUAGE.md`](../fsmc/LANGUAGE.md).

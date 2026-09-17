@@ -1,0 +1,46 @@
+// samples/lookat.fsm — a "watcher": one object (self) continuously turns to
+// FACE another object (target), and drops back to idle when the target goes
+// away or is deactivated.
+//
+// Shows: a 2-state cycle gated on isActive(), and the lookAt pattern — a
+// lookAt goal is retired the moment the turn finishes (within ~0.5 degrees),
+// so a MOVING target needs the order re-posted every tick in Update{}, not
+// just once in Start{}.
+//
+// Slot order follows declaration order, so with this file:
+//   slot 0 = self     (bind the GameObject that does the looking)
+//   slot 1 = target   (bind the object to look at)
+// Both are Object3D, so neither auto-binds to the host (ambiguous) —
+// bind them by hand in the inspector slot list or in OnBindingsManual().
+
+var Object3D self;      // the watcher
+var Object3D target;    // what it should face
+
+State Track {
+    Actions {
+        Start {
+            lookAt(self, target);   // face it the moment the state is entered
+        }
+        Update {
+            lookAt(self, target);   // re-post every tick: tracks a moving target
+        }
+    }
+    Traversals {
+        if (!isActive(target)) { goto Idle; }   // target gone / deactivated
+        goto Track;                             // fallback last (no warning)
+    }
+}
+
+State Idle {
+    Actions {
+        Start { }                   // nothing to set up
+        Update { }                  // hold the last facing while waiting
+    }
+    Traversals {
+        if (isActive(target)) { goto Track; }   // a live target appears
+        goto Idle;
+    }
+}
+
+// Wait for a live target first, then start tracking it.
+@ENTRY Idle

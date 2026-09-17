@@ -1,0 +1,68 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     samples/lookat.fsmb  (409 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000024   0 B    0
+   [2]  Runtime    0x00000024 .. 0x00000044   32 B   2
+   [3]  Temporary  0x00000044 .. 0x00000044   0 B    0
+   [4]  State      0x00000044 .. 0x0000005D   25 B   2
+   [5]  Token      0x0000005D .. 0x0000008D   48 B   6
+   [6]  AST        0x0000008D .. 0x00000179   236 B  27
+   [7]  FSM        0x00000179 .. 0x00000199   32 B   2
+
+ SECTION [1] GLOBAL VARIABLES (0)
+
+ SECTION [2] RUNTIME VARIABLES (2)
+   #0  self            Object3D              slot 0
+   #1  target          Object3D              slot 1
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (2)
+   #0  Track           ast root #0
+   #1  Idle            ast root #17
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Track' — 4 instruction(s) ---
+   0   CALL    lookAt(self, target)   [fn 0x0700]
+   1   CALL    lookAt(self, target)   [fn 0x0700]
+   2   GOTO    Idle
+   3   GOTO    Track
+
+--- state #1 'Idle' — 2 instruction(s) ---
+   0   GOTO    Track
+   1   GOTO    Idle
+
+ SECTION [6] AST (27 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Track' ---
+#[0] STATE
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+         #[3] CALL lookAt(Object3D, Object3D)
+      #[6] UPDATE  (runs every tick)
+         #[7] CALL lookAt(Object3D, Object3D)
+   #[10] TRAVERSALS
+      #[11] IF    cond: !isActive(target)
+         #[15] GOTO Idle
+      #[16] GOTO Track
+
+--- state #1 'Idle' ---
+#[17] STATE   [ENTRY]
+   #[18] ACTIONS
+      #[19] START   (runs once, on state entry)
+      #[20] UPDATE  (runs every tick)
+   #[21] TRAVERSALS
+      #[22] IF    cond: isActive(target)
+         #[25] GOTO Track
+      #[26] GOTO Idle
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   Track        -> Idle
+   Track        -> Track
+   Idle         -> Track
+   Idle         -> Idle
