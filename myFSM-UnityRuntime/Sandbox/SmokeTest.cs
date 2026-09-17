@@ -498,88 +498,223 @@ public static class SmokeTest
         try { Directory.Delete(root, true); } catch { }
     }
 
-    // -- 9. collision-aware movement. The manual (non-NavMesh) path used to be
-    // a bare position += direction * speed * dt, which walked through walls.
-    // These cases drive the slide math with a fake probe, and one of them runs
-    // a real AI off real compiled bytes all the way to the wall.
+    // -- 9. environment-aware movement. A tier-3 goal does not move a bare
+    // transform: the components on the agent decide how the step is applied
+    // (velocity, CharacterController.Move, a swept MovePosition, an engine cast
+    // sweep, or nothing at all), and every contact comes from the engine. These
+    // cases cover the sweep itself, the driver each component set selects, and
+    // end-to-end runs on real compiled bytes -- including the wall-between-the-
+    // AI-and-its-target case.
     private static void TestCollisionMovement(string dir)
     {
-        const float wall = 2.0f;   // plane z = 2, top at y = 1
+        const float wall = 2.0f;    // a wall occupies the half-space past this plane
         const float radius = 0.5f;
-
-        // open space: the step is not touched
+        Vector3 forward = new Vector3(0f, 0f, 1f);
         bool blocked;
-        Vector3 p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
-            new Vector3(0f, 0f, 1f), radius, false, new NoObstacleProbe(), out blocked);
+
+        // ---- the swept step: engine cast + slide ----
+        Vector3 p = MovementSystem.SlideStep(Vector3.zero, forward, radius, false,
+                                            new NoObstacleProbe(), out blocked);
         Check(!blocked && Math.Abs(p.z - 1f) < 1e-5f, "open step is unhindered");
 
-        // head-on: stops with the body clear of the plane (centre <= wall - radius)
-        p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
-            new Vector3(0f, 0f, 3f), radius, false, new WallProbe(wall), out blocked);
+        p = MovementSystem.SlideStep(Vector3.zero, forward * 3f, radius, false,
+                                     new PlaneProbe(forward, wall), out blocked);
         Check(blocked && p.z + radius <= wall + 1e-4f, "head-on: body never overlaps the wall");
         Check(p.z > wall - radius - 0.1f, "head-on: stops AT the wall, not far from it");
 
-        // already touching: no creep forward over many ticks
-        Vector3 touching = new Vector3(0f, 0f, wall - radius);
+        Vector3 touching = new Vector3(0f, 0f, wall - radius - MovementSystem.CollisionSkin);
         for (int i = 0; i < 200; i++)
-            touching = MovementSystem.SlideStep(touching, new Vector3(0f, 0f, 0.033f),
-                                                radius, false, new WallProbe(wall), out blocked);
+            touching = MovementSystem.SlideStep(touching, forward * 0.033f, radius, false,
+                                                new PlaneProbe(forward, wall), out blocked);
         Check(touching.z + radius <= wall + 1e-4f, "pressed against the wall: no creep");
 
-        // diagonal: slides along the wall instead of stopping dead
-        p = MovementSystem.SlideStep(new Vector3(0f, 0f, 0f),
-            new Vector3(2f, 0f, 2f), radius, false, new WallProbe(wall), out blocked);
+        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(2f, 0f, 2f), radius, false,
+                                     new PlaneProbe(forward, wall), out blocked);
         Check(blocked && p.x > 1f && p.z + radius <= wall + 1e-4f,
-            "diagonal: slides along the wall without overlapping it");
+              "diagonal: slides along the wall without overlapping it");
 
-        // obstacle only exists below y = 1: a body above it passes freely
-        p = MovementSystem.SlideStep(new Vector3(0f, 3f, 0f),
-            new Vector3(0f, 0f, 3f), radius, false, new WallProbe(wall, 1f), out blocked);
-        Check(!blocked && Math.Abs(p.z - 3f) < 1e-5f, "clear above the obstacle");
+        p = MovementSystem.SlideStep(new Vector3(0f, 3f, 0f), forward * 3f, radius, false,
+                                     new PlaneProbe(forward, wall, 1f), out blocked);
+        Check(!blocked && Math.Abs(p.z - 3f) < 1e-5f, "clear above the obstacle: passes freely");
 
-        // end to end: a real AI moving towards a wall stops short of it
+        p = MovementSystem.SlideStep(Vector3.zero, new Vector3(3f, 0f, 0f), radius, true,
+                                     new PlaneProbe(new Vector3(1f, 0f, 0f), wall), out blocked);
+        Check(blocked && p.x + radius <= wall + 1e-4f, "2D circle cast stops at the wall");
+
+        // ---- driver selection: the components decide, not the call ----
+        MovementSystem ms = new MovementSystem();
+
+        GameObject bare = new GameObject("Bare");
+        Check(ms.Resolve(bare.transform, false).Driver == MotionDriver.Transform,
+              "no components -> plain transform step");
+
+        GameObject colOnly = new GameObject("ColOnly");
+        colOnly.AddComponent<Collider>();
+        Check(ms.Resolve(colOnly.transform, false).Driver == MotionDriver.ColliderSweep,
+              "collider, no body -> engine sweep + slide");
+
+        GameObject dynGo = new GameObject("Dyn");
+        Rigidbody dynBody = dynGo.AddComponent<Rigidbody>();
+        Check(ms.Resolve(dynGo.transform, false).Driver == MotionDriver.Rigidbody,
+              "rigidbody -> physics-driven step");
+        Check(ms.Resolve(dynGo.transform, false).Owner == dynGo.transform,
+              "the body's own transform is what moves");
+
+        dynBody.isKinematic = true;
+        Check(ms.Resolve(dynGo.transform, false).Driver == MotionDriver.Rigidbody,
+              "kinematic rigidbody keeps the swept MovePosition path");
+
+        GameObject ccGo = new GameObject("CC");
+        ccGo.AddComponent<CharacterController>();
+        Check(ms.Resolve(ccGo.transform, false).Driver == MotionDriver.CharacterController,
+              "CharacterController is chosen before its Collider base class");
+
+        GameObject rb2Go = new GameObject("Rb2");
+        rb2Go.AddComponent<Rigidbody2D>();
+        Check(ms.Resolve(rb2Go.transform, true).Driver == MotionDriver.Rigidbody2D,
+              "rigidbody2D -> physics-driven step (2D)");
+
+        GameObject col2Go = new GameObject("Col2");
+        col2Go.AddComponent<Collider2D>();
+        Check(ms.Resolve(col2Go.transform, true).Driver == MotionDriver.ColliderSweep,
+              "collider2D, no body -> 2D engine sweep");
+
+        // the script can sit on a child: a body on the parent still drives it
+        GameObject parentGo = new GameObject("Parent");
+        parentGo.AddComponent<Rigidbody>();
+        GameObject childGo = new GameObject("Child");
+        childGo.transform.parent = parentGo.transform;
+        Check(ms.Resolve(childGo.transform, false).Driver == MotionDriver.Rigidbody &&
+              ms.Resolve(childGo.transform, false).Owner == parentGo.transform,
+              "a body on the parent drives the agent");
+
+        MovementSystem raw = new MovementSystem();
+        raw.CollisionAware = false;
+        Check(raw.Resolve(colOnly.transform, false).Driver == MotionDriver.Transform,
+              "CollisionAware off -> raw transform stepping");
+
+        // ---- how each driver applies a step, end to end on real bytes ----
         string path = Path.Combine(dir, "straightline.fsmb");
         if (File.Exists(path))
         {
             byte[] bytes = File.ReadAllBytes(path);
-            GameObject go = new GameObject("Mover");
-            FsmbAIInstance ai = go.AddComponent<FsmbAIInstance>();
-            Check(ai.BootWithBytes(bytes, "Smoke_mover"), "mover boots");
-            // straightline marches along +Z at 2 units/s; fence it off at z=5.
-            ai.Movement.Probe = new WallProbe(5f);
             Time.deltaTime = 1f / 60f;
-            for (int t = 0; t < 180; t++)
-            {
-                Time.time += Time.deltaTime;
-                ai.TickInternal();
-            }
-            Vector3 end = go.transform.position;
-            Console.WriteLine("    mover ended at z=" + end.z.ToString("0.###"));
-            Check(end.z > 1f, "mover actually travelled (movement still works)");
-            Check(end.z + radius <= 5f + 1e-3f, "mover never passed through the wall");
 
-            // with collision off the same run walks straight on through
-            GameObject go2 = new GameObject("MoverNoCollide");
-            FsmbAIInstance ai2 = go2.AddComponent<FsmbAIInstance>();
-            go2.transform.position = new Vector3(0f, 0f, 0f);
-            ai2.BootWithBytes(bytes, "Smoke_mover2");
-            ai2.Movement.CollisionAware = false;
-            ai2.Movement.Probe = new WallProbe(5f);
-            for (int t = 0; t < 180; t++)
+            // (a) collider, no body: swept to the wall and held there
+            GameObject sweepGo = new GameObject("SweepMover");
+            sweepGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            FsmbAIInstance sweepAi = sweepGo.AddComponent<FsmbAIInstance>();
+            Check(sweepAi.BootWithBytes(bytes, "Smoke_sweep"), "collider-only AI boots");
+            sweepAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(sweepAi, 180);
+            Vector3 sweepEnd = sweepGo.transform.position;
+            Console.WriteLine("    collider-only mover ended at z=" + sweepEnd.z.ToString("0.###"));
+            Check(sweepEnd.z > 1f, "collider-only mover travelled");
+            Check(sweepEnd.z + 0.5f <= 5f + 1e-3f, "collider-only mover stopped at the wall");
+
+            // (a2) a wider collider is stopped further out: the SHAPE decides
+            GameObject wideGo = new GameObject("WideMover");
+            wideGo.AddComponent<Collider>().size = new Vector3(3f, 2f, 3f);
+            FsmbAIInstance wideAi = wideGo.AddComponent<FsmbAIInstance>();
+            Check(wideAi.BootWithBytes(bytes, "Smoke_wide"), "wide-collider AI boots");
+            wideAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(wideAi, 180);
+            Vector3 wideEnd = wideGo.transform.position;
+            Console.WriteLine("    wide collider (r=1.5) ended at z=" + wideEnd.z.ToString("0.###"));
+            Check(wideEnd.z + 1.5f <= 5f + 1e-3f, "wide body never overlaps the wall");
+            Check(wideEnd.z < sweepEnd.z - 0.5f,
+                  "a wider body is stopped further from the wall");
+
+            // (b) nothing on the agent: no rigidbody and no collider still
+            // means "respect collisions" -- it sweeps with the default radius
+            GameObject bareGo = new GameObject("BareMover");
+            FsmbAIInstance bareAi = bareGo.AddComponent<FsmbAIInstance>();
+            Check(bareAi.BootWithBytes(bytes, "Smoke_bare"), "component-free AI boots");
+            bareAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(bareAi, 180);
+            Vector3 bareEnd = bareGo.transform.position;
+            Console.WriteLine("    component-free mover ended at z=" + bareEnd.z.ToString("0.###"));
+            Check(bareEnd.z + 0.5f <= 5f + 1e-3f,
+                  "component-free mover still stops at the wall (default radius)");
+
+            // (b2) the escape hatch: the toggle skips the environment entirely
+            GameObject optOutGo = new GameObject("OptOutMover");
+            optOutGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            FsmbAIInstance optOutAi = optOutGo.AddComponent<FsmbAIInstance>();
+            Check(optOutAi.BootWithBytes(bytes, "Smoke_optout"), "opt-out AI boots");
+            optOutAi.Movement.CollisionAware = false;
+            optOutAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(optOutAi, 180);
+            Check(optOutGo.transform.position.z > 5f,
+                  "CollisionAware off: the collider is ignored and it walks through");
+
+            // (c) dynamic rigidbody: movement is a velocity request to physics
+            GameObject bodyGo = new GameObject("BodyMover");
+            bodyGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            Rigidbody body = bodyGo.AddComponent<Rigidbody>();
+            FsmbAIInstance bodyAi = bodyGo.AddComponent<FsmbAIInstance>();
+            Check(bodyAi.BootWithBytes(bytes, "Smoke_body"), "rigidbody AI boots");
+            bodyAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(bodyAi, 3);
+            Check(body.velocity.z > 1.5f && Math.Abs(body.velocity.x) < 1e-4f,
+                  "dynamic rigidbody is driven by velocity (2 u/s along +Z)");
+            Check(Math.Abs(bodyGo.transform.position.z) < 1e-4f,
+                  "dynamic rigidbody: movement never teleports the transform");
+
+            // (d) dropping the goal clears the velocity it was driving
+            int handleId = 0;
+            for (int id = 1; id <= bodyAi.Handles.Count && handleId == 0; id++)
             {
-                Time.time += Time.deltaTime;
-                ai2.TickInternal();
+                if (bodyAi.Handles.Resolve(id) == (UnityEngine.Object)bodyGo) handleId = id;
             }
-            Check(go2.transform.position.z > 5f, "collision off: still walks through (opt-out works)");
+            Check(handleId > 0, "the AI's agent handle was found");
+            bodyAi.Movement.ClearGoal(handleId);
+            Check(Math.Abs(body.velocity.z) < 1e-6f,
+                  "dropping the goal zeroes the velocity it was driving");
+
+            // (e) kinematic rigidbody: swept first (the solver would not), so the stop holds
+            GameObject kinGo = new GameObject("KinMover");
+            kinGo.AddComponent<Collider>().size = new Vector3(1f, 2f, 1f);
+            Rigidbody kinBody = kinGo.AddComponent<Rigidbody>();
+            kinBody.isKinematic = true;
+            FsmbAIInstance kinAi = kinGo.AddComponent<FsmbAIInstance>();
+            Check(kinAi.BootWithBytes(bytes, "Smoke_kin"), "kinematic AI boots");
+            kinAi.Movement.Probe = new PlaneProbe(forward, 5f);
+            RunTicks(kinAi, 180);
+            Check(kinGo.transform.position.z > 1f, "kinematic mover travelled");
+            Check(kinGo.transform.position.z + 0.5f <= 5f + 1e-3f,
+                  "kinematic mover never passed the wall");
+
+            // (f) character controller: the engine's capsule sweep moves it
+            GameObject ccMover = new GameObject("CCMover");
+            ccMover.AddComponent<CharacterController>();
+            FsmbAIInstance ccAi = ccMover.AddComponent<FsmbAIInstance>();
+            Check(ccAi.BootWithBytes(bytes, "Smoke_cc"), "character-controller AI boots");
+            ccAi.Movement.Probe = new PlaneProbe(forward, 5f);   // this driver needs none
+            RunTicks(ccAi, 60);
+            Vector3 ccEnd = ccMover.transform.position;
+            Console.WriteLine("    CC mover ended at z=" + ccEnd.z.ToString("0.###") +
+                              " y=" + ccEnd.y.ToString("0.###"));
+            Check(ccEnd.z > 1f, "CharacterController mover advanced through Move()");
+            Check(ccEnd.y < -0.5f, "airborne CharacterController falls (gravity applies)");
+        }
+    }
+
+    private static void RunTicks(AIInstance ai, int ticks)
+    {
+        for (int i = 0; i < ticks; i++)
+        {
+            Time.time += Time.deltaTime;
+            ai.TickInternal();
         }
     }
 }
 
-/// <summary>Test probe: nothing to hit (mirrors a stub engine's null result).</summary>
+/// <summary>Test probe: nothing to hit (mirrors an empty collision world).</summary>
 public sealed class NoObstacleProbe : MyFSM.Unity.IMotionProbe
 {
-    public bool Ray(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                    out float distance, out Vector3 normal)
+    public bool Sphere(Vector3 origin, float radius, Vector3 direction, float maxDistance,
+                       bool is2D, out float distance, out Vector3 normal)
     {
         distance = 0f;
         normal = Vector3.zero;
@@ -588,30 +723,41 @@ public sealed class NoObstacleProbe : MyFSM.Unity.IMotionProbe
 }
 
 /// <summary>
-/// Test probe: an infinite plane at z = <c>planeZ</c> whose normal faces -Z.
-/// When <c>topY</c> is given the plane only exists below that height, so a body
-/// above it passes freely.
+/// Test probe standing in for the engine's cast: the sphere sweep against a
+/// wall that occupies the half-space <c>dot(axis, p) &gt;= offset</c> and faces
+/// <c>-axis</c>. Reports what Physics.SphereCast / Physics2D.CircleCast do --
+/// how far the sphere's CENTRE may travel before its edge touches the surface --
+/// so the stop, the slide and the no-creep behaviour can be driven headlessly.
+/// An origin already inside the margin reports distance 0. <c>topY</c> makes
+/// the wall end at a height, so a body above it passes freely.
 /// </summary>
-public sealed class WallProbe : MyFSM.Unity.IMotionProbe
+public sealed class PlaneProbe : MyFSM.Unity.IMotionProbe
 {
-    private readonly float _z;
+    private readonly Vector3 _axis;
+    private readonly float _offset;
     private readonly float _topY;
     private readonly bool _limited;
 
-    public WallProbe(float planeZ) { _z = planeZ; }
-    public WallProbe(float planeZ, float topY) { _z = planeZ; _topY = topY; _limited = true; }
+    public PlaneProbe(Vector3 axis, float offset) { _axis = axis; _offset = offset; }
+    public PlaneProbe(Vector3 axis, float offset, float topY)
+    {
+        _axis = axis; _offset = offset; _topY = topY; _limited = true;
+    }
 
-    public bool Ray(Vector3 origin, Vector3 direction, float maxDistance, bool is2D,
-                    out float distance, out Vector3 normal)
+    public bool Sphere(Vector3 origin, float radius, Vector3 direction, float maxDistance,
+                       bool is2D, out float distance, out Vector3 normal)
     {
         distance = 0f;
         normal = Vector3.zero;
         if (_limited && origin.y >= _topY) return false;
-        if (direction.z <= 1e-9f) return false;
-        float t = (_z - origin.z) / direction.z;
-        if (t < 0f || t > maxDistance) return false;
+        float denom = _axis.x * direction.x + _axis.y * direction.y + _axis.z * direction.z;
+        if (denom <= 1e-9f) return false;                  // not moving into the wall
+        float start = _axis.x * origin.x + _axis.y * origin.y + _axis.z * origin.z;
+        float t = (_offset - radius - start) / denom;
+        if (t > maxDistance) return false;
+        if (t < 0f) t = 0f;                                // already inside the margin
         distance = t;
-        normal = new Vector3(0f, 0f, -1f);
+        normal = new Vector3(-_axis.x, -_axis.y, -_axis.z);
         return true;
     }
 }

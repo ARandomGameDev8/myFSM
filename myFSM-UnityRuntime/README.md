@@ -148,20 +148,26 @@ snapshots (copies) and applies commands with validation. See
 
 ## Movement & functions
 
-Tier-3 calls post goals, never teleport: NavMesh agents steer via
-`SetDestination` (manual fallback when the path is invalid), everything else
-moves `position += direction * speed * dt` — **swept against colliders**: the
-step is tested with rays from the body's centre and from a ring around it, and
-whatever is left after the first contact is projected onto the surface, so a
-body stops at a wall and slides along it rather than passing through. The body
-radius comes from the agent's collider (0.5 when it has none), and movement is
-applied with `Rigidbody.MovePosition` when the object has a rigidbody.
-`AIInstance` exposes a **Collision Aware** inspector toggle for the rare case
-where something else owns the transform. Object destinations snapshot at
-call time for go/sprint/move; `follow`/`followTarget` re-target live;
-`lookAt` rotates gradually; movement never changes facing. The other 150+
-overloads are direct engine mappings; engine-state failures (null handles,
-missing components) log and yield defaults, never exceptions.
+Tier-3 calls post goals, never teleport. Movement is **component-aware**:
+each tick the system looks at what the agent's GameObject carries and moves it
+the way that component is meant to be moved — a live `NavMeshAgent` steers
+itself with `SetDestination`; a `CharacterController` goes through `Move()`;
+a dynamic `Rigidbody`/`Rigidbody2D` is given a velocity so the physics solver
+resolves every contact (and drag, mass and gravity keep working); a kinematic
+body is swept with `Physics.SphereCast`/`Physics2D.CircleCast` and then moved
+with `MovePosition`; a collider with no body gets the same engine sweep plus a
+slide along the hit plane; and an object with nothing on it falls back to the same engine sweep
+(default 0.5 body radius) followed by `position += direction * speed * dt`. The detection is always Unity's — the
+movement code decides where to ask, never how collisions work — so an AI stops
+at a wall (or slides along it) whether it is a rigidbody, a character
+controller or a bare collider. `AIInstance` exposes a **Collision Aware**
+inspector toggle (default on) as the escape hatch for objects whose transform
+something else owns. Object destinations snapshot at call time for
+go/sprint/move; `follow`/`followTarget` re-target live; `lookAt` rotates
+gradually (through `MoveRotation` when the object has a body); movement never
+changes facing. The other 150+ overloads are direct engine mappings;
+engine-state failures (null handles, missing components) log and yield
+defaults, never exceptions.
 
 ## Interpretation notes (spec decisions)
 

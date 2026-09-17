@@ -27,6 +27,25 @@ namespace UnityEngine
             if (gameObject == null) return default(T);
             return gameObject.GetComponent<T>();
         }
+
+        /// <summary>
+        /// Self first, then up the parents, like Unity. Movement uses this so a
+        /// body or collider on a parent still drives the agent.
+        /// </summary>
+        public T GetComponentInParent<T>()
+        {
+            Transform p = transform;
+            while (p != null)
+            {
+                if (p.gameObject != null)
+                {
+                    T found = p.gameObject.GetComponent<T>();
+                    if (found != null) return found;
+                }
+                p = p.parent;
+            }
+            return default(T);
+        }
     }
 
     public class Behaviour : Component
@@ -70,6 +89,9 @@ namespace UnityEngine
             transform = new Transform();
             transform.gameObject = this;
             transform.name = name;
+            // Unity's Transform.transform is itself; GetComponentInParent walks
+            // up from here, so the stub must not answer null for it.
+            transform.transform = transform;
         }
 
         public void SetActive(bool value) { activeSelf = value; }
@@ -234,6 +256,14 @@ namespace UnityEngine
             d = d < -1f ? -1f : (d > 1f ? 1f : d);
             return (float)Math.Acos(d) * Mathf.Rad2Deg;
         }
+
+        /// <summary>The part of <paramref name="v"/> that lies in the plane.</summary>
+        public static Vector3 ProjectOnPlane(Vector3 v, Vector3 normal)
+        {
+            float m = normal.sqrMagnitude;
+            if (m <= 1e-12f) return v;
+            return v - normal * (Dot(v, normal) / m);
+        }
     }
 
     public struct Vector2
@@ -334,9 +364,19 @@ namespace UnityEngine
             get { return new Quaternion(0f, 0f, 0f, 1f); }
         }
 
+        /// <summary>Z-only, which is the axis the DSL's 2D rotation uses.</summary>
         public static Quaternion Euler(float x, float y, float z)
         {
-            return identity;
+            float half = z * 0.5f * Mathf.Deg2Rad;
+            return new Quaternion(0f, 0f, (float)Math.Sin(half), (float)Math.Cos(half));
+        }
+        public Vector3 eulerAngles
+        {
+            get
+            {
+                float z = 2f * (float)Math.Atan2(z, w) * Mathf.Rad2Deg;
+                return new Vector3(0f, 0f, z);
+            }
         }
         public static Quaternion LookRotation(Vector3 forward)
         {
@@ -355,6 +395,7 @@ namespace UnityEngine
     public static class Mathf
     {
         public const float Rad2Deg = 57.29578f;
+        public const float Deg2Rad = 0.0174532924f;
 
         public static float Sin(float f) { return (float)Math.Sin(f); }
         public static float Cos(float f) { return (float)Math.Cos(f); }
@@ -509,6 +550,10 @@ namespace UnityEngine
         {
             if (transform != null) transform.position = p;
         }
+        public void MoveRotation(Quaternion q)
+        {
+            if (transform != null) transform.rotation = q;
+        }
     }
 
     public class Rigidbody2D : Component
@@ -525,6 +570,10 @@ namespace UnityEngine
             {
                 transform.position = new Vector3(p.x, p.y, transform.position.z);
             }
+        }
+        public void MoveRotation(float degrees)
+        {
+            if (transform != null) transform.rotation = Quaternion.Euler(0f, 0f, degrees);
         }
     }
 
@@ -560,6 +609,35 @@ namespace UnityEngine
         public Vector2 ClosestPoint(Vector2 p) { return p; }
     }
 
+    public enum CollisionFlags
+    {
+        None = 0,
+        Sides = 1,
+        Above = 2,
+        Below = 4,
+    }
+
+    /// <summary>
+    /// Unity's CharacterController is a Collider, which is why movement tests
+    /// for it BEFORE the plain-collider case. Here Move() just translates.
+    /// </summary>
+    public class CharacterController : Collider
+    {
+        public float radius = 0.5f;
+        public float height = 2f;
+        public Vector3 center;
+        public float slopeLimit = 45f;
+        public float stepOffset = 0.3f;
+        public float skinWidth = 0.08f;
+        public bool isGrounded = false;
+
+        public CollisionFlags Move(Vector3 motion)
+        {
+            if (transform != null) transform.position = transform.position + motion;
+            return CollisionFlags.None;
+        }
+    }
+
     public struct RaycastHit
     {
         public Collider collider;
@@ -593,6 +671,23 @@ namespace UnityEngine
         {
             return new Collider[0];
         }
+        /// <summary>
+        /// No collision world in the harness: always a miss, exactly like an
+        /// empty scene. Tests that need a wall inject an IMotionProbe instead.
+        /// </summary>
+        public static bool SphereCast(Vector3 o, float radius, Vector3 d, out RaycastHit hit,
+                                      float dist, int mask, QueryTriggerInteraction q)
+        {
+            hit = new RaycastHit();
+            return false;
+        }
+    }
+
+    public enum QueryTriggerInteraction
+    {
+        UseGlobal = 0,
+        Ignore = 1,
+        Collide = 2,
     }
 
     public static class Physics2D

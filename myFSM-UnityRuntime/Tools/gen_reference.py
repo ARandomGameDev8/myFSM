@@ -182,7 +182,7 @@ CAT_TITLE = {
  "Animation": ("Animation", "Animator channel: play/stop/pause/resume, speed, progress, and jumping to a state by id. Each handle keeps its own speed memory, so `pause`/`resume` round-trip."),
  "Physics": ("Physics", "Rigidbody state and collision queries. `applyForce` accumulates for the physics step; `applyImpulse` is an instant kick; `raycast` answers only yes/no — use `getRaycastHit` for the object."),
  "Camera": ("Camera", "Camera-space helpers: view tests and screen/world/viewport conversion."),
- "Navigation": ("Navigation", "Path queries and goal-posting movement — the largest category, and the only one that spans all three tiers. Posting a goal never teleports: the movement system advances it a step per tick (see the movement section of the README)."),
+ "Navigation": ("Navigation", "Path queries and goal-posting movement — the largest category, and the only one that spans all three tiers. Posting a goal never teleports: the movement system advances it a step per tick, and HOW that step is applied is decided by the components on the agent (NavMeshAgent, CharacterController, Rigidbody(2D), a bare Collider, or nothing — see §2 and the movement section of the README)."),
  "Perception": ("Perception", "What the AI can sense about other objects: facing, line of sight, range, angle, distance, and tag/radius scans."),
  "Steering": ("Steering", "Pure vector maths for classic steering behaviours: flee, pursuit, separation, arrival, wander. These **return** a vector; they do not move anything — feed the result to `moveTowards`/`setVelocity`."),
  "Sensing": ("Sensing", "Scene queries that return an object rather than a number."),
@@ -241,6 +241,25 @@ A("Tier 3 calls never do the work themselves: they post a **goal** onto the AI's
 A("`MovementSystem`, which advances it once per tick, before the state's `Update`")
 A("round. That is why `waitUntil(hasReachedDestination(agent, point))` can come")
 A("true, and why movement keeps advancing while the AI is suspended.")
+A("")
+A("The step is then applied through the components the agent actually carries —")
+A("this is the environment check, and it is why walls stop an AI instead of")
+A("letting it walk through:")
+A("")
+A("| On the agent | How the step is applied |")
+A("|---|---|")
+A("| `NavMeshAgent` (enabled, on a mesh) | `SetDestination` — the mesh pathfinds and steers |")
+A("| `CharacterController` | `Move()` — the controller's own capsule sweep handles slopes, steps and walls |")
+A("| `Rigidbody`/`Rigidbody2D`, dynamic | velocity is set each tick; the physics solver resolves the contacts (mass, drag, gravity keep working) |")
+A("| `Rigidbody`/`Rigidbody2D`, kinematic | `Physics.SphereCast` / `Physics2D.CircleCast` sweep, then `MovePosition` |")
+A("| `Collider`/`Collider2D` only | the same engine sweep, with the leftover step projected onto the hit plane (stop + slide) |")
+A("| no components | the same engine sweep with the default body radius, then `position += direction * speed * dt` |")
+A("")
+A("Detection is Unity's (`SphereCast`/`CircleCast`, `Move()`, the solver); movement")
+A("only chooses where to ask. `Movement.CollisionAware = false` skips the")
+A("environment entirely and writes to the transform (the escape hatch for")
+A("objects whose movement something else owns); NavMeshAgent pathing is")
+A("unaffected either way.")
 A("")
 A("---")
 A("")
@@ -332,7 +351,7 @@ A("|---|---|---|")
 A("| `ITimeProvider` | Feed your own clock | `Time` + `DeltaTime`. Default `UnityTimeProvider` uses `UnityEngine.Time`. |")
 A("| `IExecutionLog` | Route runtime logging | `Info` / `Warn` / `Error`. Default logs through `Debug` with a `[myFSM name@object]` prefix. |")
 A("| `IFunctionDispatcher` | Serve calls yourself | `Dispatch(id, args, exec)`. Default resolves handles against the scene; the sandbox harness substitutes a stub. |")
-A("| `IMotionProbe` | Replace movement's collision query | `Ray(origin, dir, maxDist, is2D, out dist, out normal)`. Default wraps `Physics.Raycast`/`Physics2D.Raycast`; `MovementSystem.Probe` is swappable at runtime (that is how the collision tests run engine-free). |")
+A("| `IMotionProbe` | Replace movement's collision query | `Sphere(origin, radius, dir, maxDist, is2D, out dist, out normal)` — one swept sphere. Default wraps `Physics.SphereCast`/`Physics2D.CircleCast`; `MovementSystem.Probe` is swappable at runtime (that is how the stop/slide tests run engine-free). |")
 A("| `IQueryBackend` | Answer external queries/commands | Implemented by `MainServer`; the query server is the only consumer. |")
 A("")
 A("---")
@@ -345,7 +364,7 @@ A("| Member | Type | Meaning |")
 A("|---|---|---|")
 A("| `Execution` | `AiExecution` | The booted module + variable tables + state handler. `null` before boot. |")
 A("| `Handles` | `HandleTable` | Handle-id ↔ Unity object map for this AI. |")
-A("| `Movement` | `MovementSystem` | Posted goals; `Movement.Probe` and `Movement.CollisionAware` are here. |")
+A("| `Movement` | `MovementSystem` | Posted goals, and the environment check: `Movement.Resolve(t, is2D)` reports the `MotionDriver` chosen for an object. `Movement.Probe` and `Movement.CollisionAware` live here too. |")
 A("| `Paths` | `PathTable` | Path ids handed out by `findPath`. |")
 A("| `Dispatcher` | `FunctionDispatcher` | Resolves handles/components for built-in calls. |")
 A("| `InstanceId` / `ModuleName` / `Booted` / `BootError` | — | Registry identity and boot outcome. |")

@@ -86,16 +86,36 @@ DB timetable row + publish to both broadcast servers → tick-sample. Returns
 the change (null when none). Overriding `Update()` without
 `base.Update()` silently stops the AI — prefer `Paused` / `enabled=false`.
 
-**Movement collision.** The `Collision Aware` inspector toggle (default on)
-is copied into `Movement.CollisionAware` at boot. With it on, manual
-(non-NavMesh) movement sweeps each step against colliders and slides along
-surfaces instead of passing through them: the body radius comes from the
-agent's `Collider`/`Collider2D` (horizontal half-extents; `0.5` when it has
-none), the sweep uses the collider centre as its origin, and the position is
-applied through `Rigidbody.MovePosition` when the object has one. Turn it off
-when something else owns the transform (a `CharacterController`, a
-hand-written controller, an animated rig). NavMeshAgent-driven movement is
-unaffected either way — the agent already pathfinds around obstacles.
+**Movement is component-aware.** Tier-3 goals never move a bare transform:
+every tick the movement system looks at what the agent's GameObject (or its
+nearest parent) actually has on it and moves it the way Unity expects that
+component set to be moved, so an AI is stopped by the same collision world as
+the rest of the game:
+
+| On the agent | Driver | How the step is applied |
+|---|---|---|
+| `NavMeshAgent` (enabled, on the mesh) | engine pathing | `SetDestination` — the mesh steers and pathfinds |
+| `CharacterController` | engine capsule | `Move()` — slopes, steps and walls are the controller's own sweep |
+| `Rigidbody` / `Rigidbody2D`, dynamic | physics solver | the body's velocity is set each tick, so the solver resolves every contact (mass, drag and gravity keep working; a 3D body keeps its vertical velocity) |
+| `Rigidbody` / `Rigidbody2D`, kinematic | engine sweep | `Physics.SphereCast` / `Physics2D.CircleCast` first (the solver does not collide kinematic bodies), then `MovePosition` to the swept point |
+| `Collider` / `Collider2D` only | engine sweep | sphere/circle cast, then the leftover step is projected onto the hit plane — stop at walls, slide along them |
+| nothing | transform | the same engine sweep with the default body radius (`0.5`), then `position += direction * speed * dt` — it cannot walk through walls either, it just has no collider to take its size from |
+
+The detection is Unity's: `SphereCast`/`CircleCast`, `CharacterController.Move`
+and the physics solver. Movement only decides *where* to ask and what to do
+with the answer; it never re-implements collision detection. That is why a
+wall between an AI and its target stops the AI — in every one of those shapes.
+
+The `Collision Aware` inspector toggle (default on) is copied into
+`Movement.CollisionAware` at boot. Turn it **off** only when something else
+owns the transform (a hand-written controller, an animated rig): steps are then
+written straight to the transform and no component is consulted. NavMeshAgent
+pathing is unaffected either way — the agent already pathfinds around
+obstacles.
+
+`Movement.Probe` swaps the cast itself (an `IMotionProbe`), which is how the
+sandbox exercises stop/slide with no engine. `Movement.Resolve(transform, is2D)`
+reports the driver chosen for an object, and `MotionDriver` names it.
 
 ## The generated child (what `ClassGenerator` emits)
 

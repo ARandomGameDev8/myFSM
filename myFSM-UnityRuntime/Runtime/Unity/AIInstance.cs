@@ -47,10 +47,12 @@ namespace MyFSM.Unity
         [SerializeField] private List<UnityEngine.Object> _slotBindings =
             new List<UnityEngine.Object>();
         [SerializeField] private string _moduleNameOverride = string.Empty;
-        [Tooltip("Sweep manual movement against colliders so this object stops at " +
-                 "walls and slides along them instead of walking through. " +
-                 "NavMeshAgent-driven movement is unaffected (the agent already " +
-                 "pathfinds). Turn off only if something else owns the transform.")]
+        [Tooltip("Movement asks the components on this GameObject (or a parent) " +
+                 "to do the moving: a NavMeshAgent pathfinds, a CharacterController " +
+                 "sweeps, a rigidbody is driven through physics, a bare collider is " +
+                 "swept with Unity's own casts — so walls always stop it. Turn off " +
+                 "only if something else owns the transform: steps are then written " +
+                 "straight to it and no component is consulted.")]
         [SerializeField] private bool _collisionAware = true;
 
         public AiExecution Execution { get; private set; }
