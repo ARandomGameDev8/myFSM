@@ -1,0 +1,43 @@
+// samples/straightline.fsm — a "marcher": one object slides forward along a
+// straight world-space line at a constant speed, forever.
+//
+// Shows: a single state that never leaves (no Traversals block at all — the
+// runtime skips an absent block, so the head stays put with no goto and no
+// "dead code" warning), a const Vector3 direction + scalar multiply to build a
+// destination POINT, and the moveTowards re-post idiom.
+//
+// Why re-post every tick: moveTowards(agent, Vector3, speed) takes a
+// destination POINT, not a direction — the goal is retired the moment the
+// object arrives (StopDistance, 0.2 default), so a one-shot order would move a
+// fraction of a unit and stop. Posting a fresh point a fixed lookahead ahead
+// every tick keeps a live goal, which the movement system advances by
+// position += direction * speed * dt — frame-rate independent, dead straight.
+//
+// No NavMeshAgent is needed: an Object3D with no live agent on the NavMesh
+// uses the manual translation fallback.
+//
+// Slot order follows declaration order, so with this file:
+//   slot 0 = self   (bind the GameObject that should move)
+// Object3D is an ambiguous tag, so it does not auto-bind — set it by hand in
+// the inspector slot list or in OnBindingsManual().
+
+const float   speed     = 2.0f;                        // world units per second
+const float   lookahead = 10.0f;                       // how far ahead the goal point sits
+const Vector3 forward   = Vector3(0.0f, 0.0f, 1.0f);   // unity's forward = world +Z
+
+var Object3D self;      // the marcher
+
+State MoveForward {
+    Actions {
+        Start {
+            setRotation(self, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));  // face +Z, so it also LOOKS the way it travels
+        }
+        Update {
+            moveTowards(self, getPosition(self) + forward * lookahead, speed);  // Tier 3: a fresh goal every tick
+        }
+    }
+}
+
+// The only state — with no Traversals block there is no transition to take, so
+// this AI marches until it is destroyed or disabled.
+@ENTRY MoveForward

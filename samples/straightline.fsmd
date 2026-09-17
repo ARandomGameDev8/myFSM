@@ -1,0 +1,45 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     samples/straightline.fsmb  (323 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000062   62 B   3
+   [2]  Runtime    0x00000062 .. 0x00000071   15 B   1
+   [3]  Temporary  0x00000071 .. 0x00000071   0 B    0
+   [4]  State      0x00000071 .. 0x00000086   21 B   1
+   [5]  Token      0x00000086 .. 0x00000098   18 B   2
+   [6]  AST        0x00000098 .. 0x00000139   161 B  16
+   [7]  FSM        0x00000139 .. 0x00000143   10 B   1
+
+ SECTION [1] GLOBAL VARIABLES (3)
+   #0  speed           float         = 2f
+   #1  lookahead       float         = 10f
+   #2  forward         Vector3       = Vector3(0f, 0f, 1f)
+
+ SECTION [2] RUNTIME VARIABLES (1)
+   #0  self            Object3D              slot 0
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (1)
+   #0  MoveForward     ast root #0
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'MoveForward' — 2 instruction(s) ---
+   0   CALL    setRotation(self, Quaternion(0f, 0f, 0f, 1f))   [fn 0x0107]
+   1   CALL    moveTowards(self, (getPosition(self) + (forward * lookahead)), speed)   [fn 0x0626]
+
+ SECTION [6] AST (16 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'MoveForward' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+         #[3] CALL setRotation(Object3D, Quaternion)
+      #[6] UPDATE  (runs every tick)
+         #[7] CALL moveTowards(Object3D, Vector3, float)
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
