@@ -118,6 +118,7 @@ This is Unity's pipeline, not a bug in the burst flow.
 | `[warnings]` suffix | Compiled fine; check the `.fsm` (bare gotos etc.) |
 | `NOT under Resources/` | `.fsmb` written, but the generated class can't load by path — assign the `.fsmb` in the inspector instead (or move output under `Resources/`) |
 | `file:line:col: error: …` | Compiler rejected the source; nothing written — fix the `.fsm` |
+| `missing .fsm: Assets/… (looked for /abs/path)` | The entry's `FsmPath` does not resolve to a real file. The status prints the absolute path it checked: compare it with the Project window (a project-relative path resolves against the project root, so `Assets/MyFSM/Fsm/Test.fsm` must map to `<project>/Assets/MyFSM/Fsm/Test.fsm`) |
 | `native compiler library 'myfsmc' not found…` | Plugin missing for this platform — add it (see table) or precompile via CLI |
 | `fresh .fsmb failed loader validation: …` | Compiler/loader version skew — should never happen on 0.5; report it |
 | `'XxxAI' is not compiled yet` | Normal right after Compile — wait for Unity's script compile, then Attach/Generate again |

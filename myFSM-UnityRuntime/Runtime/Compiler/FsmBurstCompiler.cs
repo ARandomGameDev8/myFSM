@@ -54,9 +54,12 @@ namespace MyFSM.Unity
         public List<FsmBurstEntry> Entries = new List<FsmBurstEntry>();
 
         /// <summary>
-        /// "Assets/..." -> absolute path (editor). Absolute paths pass
-        /// through untouched: runtime callers outside the project must pass
-        /// absolute paths, since asset-relative paths are an editor convention.
+        /// Project-relative "Assets/..." -> absolute path (editor): joins the
+        /// path with the PROJECT root (the parent of Application.dataPath's
+        /// trailing "Assets"), keeping the prefix, so "Assets/A/B.fsm" ->
+        /// "&lt;project&gt;/Assets/A/B.fsm". Absolute paths pass through
+        /// untouched: runtime callers outside the project must pass absolute
+        /// paths, since asset-relative paths are an editor convention.
         /// </summary>
         public static string ResolveProjectPath(string assetPath)
         {
@@ -67,8 +70,6 @@ namespace MyFSM.Unity
             string project = assets;
             int i = assets.LastIndexOf("/Assets", StringComparison.Ordinal);
             if (i >= 0) project = assets.Substring(0, i);
-            if (p.StartsWith("Assets/", StringComparison.Ordinal))
-                p = p.Substring("Assets/".Length);
             return project + "/" + p;
         }
 
@@ -175,7 +176,8 @@ namespace MyFSM.Unity
             string fsmAbs = ResolveProjectPath(e.FsmPath);
             if (!File.Exists(fsmAbs))
             {
-                e.LastStatus = "missing .fsm: " + e.FsmPath;
+                e.LastStatus = "missing .fsm: " + e.FsmPath +
+                               " (looked for " + fsmAbs + ")";
                 return false;
             }
             string stem = Path.GetFileNameWithoutExtension(fsmAbs);

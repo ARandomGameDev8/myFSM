@@ -41,6 +41,21 @@ namespace UnityEngine
     {
     }
 
+    public sealed class Tooltip : Attribute
+    {
+        public Tooltip(string text) { }
+    }
+
+    /// <summary>
+    /// Application.dataPath is the project's "&lt;project&gt;/Assets" folder in
+    /// the editor. The harness points it at a temp project before running the
+    /// burst compiler's path-mapping checks.
+    /// </summary>
+    public static class Application
+    {
+        public static string dataPath = "";
+    }
+
     public sealed class GameObject : Object
     {
         public string tag;

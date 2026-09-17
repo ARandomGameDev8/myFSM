@@ -116,6 +116,7 @@ public static class SmokeTest
         TestBroadcast();
         TestGenerator(files);
         TestAIInstance(dir);
+        TestPathMapping();
 
         Console.WriteLine(_fails == 0 ? "SMOKE OK" : "SMOKE FAILED (" + _fails + ")");
         return _fails == 0 ? 0 : 1;
@@ -345,5 +346,40 @@ public static class SmokeTest
                 "const slot rejects writes");
             Check(main.Db.SnapshotInstances().Count >= 4, "db tracks instances");
         }
+    }
+
+    // -- 7. burst compiler path mapping: a project-relative "Assets/..." path
+    // must land INSIDE the project's Assets folder. It used to strip the
+    // "Assets/" prefix and join with the project root, pointing one level
+    // above Assets — every entry then failed with "missing .fsm" for a file
+    // that was sitting right there in the Project window.
+    private static void TestPathMapping()
+    {
+        string saved = Application.dataPath;
+        Application.dataPath = Path.Combine(Path.GetTempPath(), "MyFSMProj", "Assets");
+
+        string asset = "Assets/MyFSM/Fsm/Test.fsm";
+        string abs = FsmBurstCompiler.ResolveProjectPath(asset).Replace('\\', '/');
+        string want = Path.Combine(Path.GetTempPath(), "MyFSMProj", "Assets",
+                                   "MyFSM", "Fsm", "Test.fsm").Replace('\\', '/');
+        Check(abs == want, "ResolveProjectPath keeps the Assets/ segment");
+        Check(FsmBurstCompiler.ToAssetPath(abs) == asset,
+            "absolute -> Assets/... round-trips");
+
+        string outside = Path.Combine(Path.GetTempPath(), "elsewhere.fsm");
+        Check(FsmBurstCompiler.ResolveProjectPath(outside).Replace('\\', '/')
+              == outside.Replace('\\', '/'), "absolute paths pass through untouched");
+
+        // The failure path must still fail, and name the path it looked at.
+        GameObject go = new GameObject("BurstCompiler");
+        FsmBurstCompiler c = go.AddComponent<FsmBurstCompiler>();
+        FsmBurstEntry e = new FsmBurstEntry();
+        e.FsmPath = "Assets/MyFSM/Fsm/NotThere.fsm";
+        Check(!c.CompileEntry(e), "missing .fsm is reported, not fabricated");
+        Check(e.LastStatus != null && e.LastStatus.Contains("NotThere.fsm") &&
+              e.LastStatus.Contains("looked for"),
+            "missing .fsm status names the resolved path");
+
+        Application.dataPath = saved;
     }
 }
