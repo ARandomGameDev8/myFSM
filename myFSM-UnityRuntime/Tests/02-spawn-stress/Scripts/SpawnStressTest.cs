@@ -132,8 +132,9 @@ namespace MyFSM.Tests
         public float logCrowdEverySeconds = 5f;
 
         [Header("Player watch")]
-        [Tooltip("Metres of sideways movement with NO key held that count as the player "
-                 + "being moved by something else, and get logged as an error. 0 = off.")]
+        [Tooltip("Metres the player may travel sideways with NO key held (measured from "
+                 + "where the keys left it, accumulated) before it is logged as an error. "
+                 + "0 = off.")]
         public float driftWarnDistance = 0.05f;
 
         public class SpawnRecord
@@ -190,6 +191,8 @@ namespace MyFSM.Tests
         private PlayerController _wasd;
         private float _nextCrowdLog;
         private Vector3 _lastPlayerPosition;
+        private Vector3 _driftAnchor;
+        private float _driftSinceAnchor;
         private bool _havePlayerPosition;
         private bool _wasdMovingLastFrame;
         private float _driftTotal;
@@ -342,6 +345,18 @@ namespace MyFSM.Tests
             if (follow == null) follow = camera.gameObject.AddComponent<TopDownFollowCamera>();
             follow.target = player;
             follow.SnapToTarget();   // guards a null target itself
+            Debug.Log("[stress] camera: TopDownFollowCamera on '" + camera.gameObject.name
+                      + "', " + follow.height.ToString("F0") + " m up / "
+                      + follow.backDistance.ToString("F0") + " m back, follow smoothing "
+                      + follow.smoothing.ToString("F2") + " s"
+                      + (follow.smoothing > 0f
+                         ? " — while you walk the camera trails behind you, and when you "
+                           + "release the keys it glides forward to catch up, so the "
+                           + "world appears to slide and the player re-centres in the "
+                           + "frame for a moment. That is the camera, not movement: set "
+                           + "smoothing = 0 for a rigid camera and it disappears."
+                         : " (rigid: the camera cannot lag the player at all)."),
+                      follow);
         }
 
         private void LogSetup()
@@ -381,6 +396,20 @@ namespace MyFSM.Tests
                     Debug.Log("[stress] scripts on the player '" + player.name + "': "
                               + loadout + " - the complete list of things that can move it.",
                               player);
+
+                Rigidbody body = player.GetComponent<Rigidbody>();
+                if (body != null && !body.isKinematic)
+                    Debug.LogError("[stress] the player carries a DYNAMIC Rigidbody: physics "
+                                   + "can push this object, so the crowd CAN shove it. "
+                                   + "Make it kinematic or remove it - a CharacterController "
+                                   + "is the collider this test needs.", player);
+                else if (body != null)
+                    Debug.Log("[stress] the player also carries a kinematic Rigidbody "
+                              + "(nothing can push a kinematic body).", player);
+                else if (player.GetComponent<CharacterController>() == null)
+                    Debug.LogWarning("[stress] the player has no CharacterController and no "
+                                     + "Rigidbody: it is moved by writing its transform, and "
+                                     + "cubes will walk through it.", player);
             }
             Debug.Log("[stress] ground " + groundSize + " m, cubes "
                       + (cubeGravity ? "with gravity" : "without gravity")
@@ -654,9 +683,11 @@ namespace MyFSM.Tests
         /// <summary>
         /// The player moves only while a movement key is held, so if it moves
         /// sideways with NO key held, that is said out loud as an error with the
-        /// distance - never left for the player to notice by eye. Vertical motion is
-        /// ignored (gravity moves the player down legitimately), and the frame the key
-        /// is released is skipped so a last step is not misread as drift.
+        /// distance - never left for the player to notice by eye. The distance is
+        /// measured from where the keys left the player and ACCUMULATES, so a slow
+        /// pull is as visible as a fast one (a per-frame test would miss a slow one).
+        /// Vertical motion is ignored (gravity moves the player down legitimately), and
+        /// the frame a key is released is skipped so a last step is not misread.
         /// </summary>
         private void WatchPlayerDrift()
         {
@@ -666,26 +697,41 @@ namespace MyFSM.Tests
             {
                 _havePlayerPosition = true;
                 _lastPlayerPosition = now;
+                _driftAnchor = now;
                 return;
             }
             Vector3 moved = now - _lastPlayerPosition;
             _lastPlayerPosition = now;
 
-            if (driftWarnDistance <= 0f) return;
             bool walking = _wasd != null && _wasd.Moving;
             bool wasWalking = _wasdMovingLastFrame;
             _wasdMovingLastFrame = walking;
-            if (walking || wasWalking) return;   // a key was held: normal movement
+            if (walking || wasWalking)   // the keys are (or were, this frame) moving him
+            {
+                _driftAnchor = now;
+                _driftSinceAnchor = 0f;
+                return;
+            }
+            if (driftWarnDistance <= 0f) return;
 
-            float sideways = new Vector2(moved.x, moved.z).magnitude;
-            if (sideways <= driftWarnDistance) return;
+            // The distance from the place the keys left the player, not one frame's
+            // twitch: a pull of a few millimetres per frame is still a pull, and it
+            // adds up here instead of slipping under a per-frame threshold.
+            float twitch = new Vector2(moved.x, moved.z).magnitude;
+            if (twitch > 0.0005f)
+                _driftSinceAnchor = new Vector2(now.x - _driftAnchor.x,
+                                                now.z - _driftAnchor.z).magnitude;
+            if (_driftSinceAnchor <= driftWarnDistance) return;
 
+            float sideways = _driftSinceAnchor;
+            _driftAnchor = now;          // the next report covers the next chunk
+            _driftSinceAnchor = 0f;
             _driftEvents++;
             _driftTotal += sideways;
             if (Time.unscaledTime < _nextDriftLog) return;
             _nextDriftLog = Time.unscaledTime + 1f;
             Debug.LogError("[stress] THE PLAYER MOVED " + sideways.ToString("F3")
-                           + " m sideways while NO movement key was held ("
+                           + " m from where the keys left it, with NO movement key held ("
                            + _driftEvents + " time(s) so far, "
                            + _driftTotal.ToString("F2") + " m total). "
                            + (_wasd != null
@@ -704,6 +750,8 @@ namespace MyFSM.Tests
         {
             if (player == null) return;
             _lastPlayerPosition = player.position;
+            _driftAnchor = _lastPlayerPosition;
+            _driftSinceAnchor = 0f;
             _havePlayerPosition = true;
         }
 
