@@ -171,7 +171,9 @@ objects whose transform something else owns.
 
 Each agent logs the call it uses when that changes
 (`movement: Marcher -> Rigidbody.MovePosition (physics resolves collisions)`), which
-makes the path taken visible instead of guessed. `moveTowards` with an OBJECT
+makes the path taken visible instead of guessed. A moving body with gravity on is
+driven along the ground plane — Unity keeps the vertical axis, so a walker falls and
+lands instead of hovering at its goal's height. `moveTowards` with an OBJECT
 destination re-reads it every tick, as `follow`/`followTarget` do; `goTo` and
 `sprintTowards` take a Vector3 (or an object's position at call time); `lookAt`
 rotates gradually (through `MoveRotation` when the object has a body); movement

@@ -118,10 +118,15 @@ physics steps while an AI ticks once per frame, so the steps of the frames insid
 one physics step are summed and requested as a single move: the body travels at
 exactly the requested speed whatever the frame rate is doing.
 
-Gravity, drag and mass keep working on a body that no goal is driving — while a
-goal is active, the goal's step is what moves it. A goal posted towards an
-**object** re-reads that object's position every tick, so the agent tracks a
-target that moves and settles on one that stands still.
+**Gravity keeps the vertical axis.** A dynamic body with gravity on (a 2D one
+with gravity, or a CharacterController — whose gravity this runtime adds) has its
+step taken in the ground plane, so Unity keeps the fall: a cube dropped from the
+air falls, lands and runs, and is never lifted or held at the goal's height. A
+body with gravity **off**, or a kinematic body, has nothing else driving the
+vertical axis, so the goal drives all three axes and the agent flies to the
+target. A goal posted towards an **object** re-reads that object's position every
+tick, so the agent tracks a target that moves and settles on one that stands
+still.
 
 `setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
 they write the transform directly and teleport, exactly like `transform.position`

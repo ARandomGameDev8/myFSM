@@ -460,6 +460,22 @@ namespace MyFSM.Unity
         }
 
         /// <summary>Stops a body the goal was driving, keeping pose and gravity.</summary>
+        /// <summary>
+        /// True when something other than the goal drives the vertical axis: a
+        /// dynamic body with gravity on, a 2D body with gravity, or a
+        /// CharacterController (its own gravity is added here). The goal then takes
+        /// its step in the plane and measures arrival there.
+        /// </summary>
+        private static bool GravityOwnsVertical(MotionContext ctx)
+        {
+            if (ctx.Driver == MotionDriver.CharacterController) return true;
+            if (ctx.Driver == MotionDriver.Rigidbody)
+                return ctx.Body != null && !ctx.Body.isKinematic && ctx.Body.useGravity;
+            if (ctx.Driver == MotionDriver.Rigidbody2D)
+                return ctx.Body2D != null && !ctx.Body2D.isKinematic && ctx.Body2D.gravityScale != 0f;
+            return false;
+        }
+
         private static void StopMotion(MotionContext ctx)
         {
             if (ctx.Driver == MotionDriver.Rigidbody && ctx.Body != null && !ctx.Body.isKinematic)
@@ -568,6 +584,19 @@ namespace MyFSM.Unity
             Vector3 ownerPos = ctx.Owner != null ? ctx.Owner.position : pos;
             Vector3 to = dest - pos;
             if (goal.Is2D) to.z = 0f;
+
+            // A body that gravity is holding down cannot be lifted or held by the
+            // goal: MovePosition writes the whole 3D position (and therefore the
+            // velocity for that step), so a vertical component would cancel gravity
+            // and glue the body to the goal's height - a crowd of cubes ends up
+            // climbing and hovering instead of walking. For those components the
+            // goal owns the plane it can walk in and gravity keeps the vertical
+            // axis, exactly like a NavMeshAgent walking the ground. A body with
+            // gravity off (or a kinematic body) has nothing else driving the
+            // vertical axis, so the goal drives all three - that is the flyer case.
+            bool planar = GravityOwnsVertical(ctx);
+            if (planar) to.y = 0f;
+
             float dist = to.magnitude;
             if (dist <= goal.StopDistance)
             {
