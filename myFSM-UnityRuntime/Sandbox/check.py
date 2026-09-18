@@ -272,6 +272,61 @@ def collect_declared_and_used(tree, src):
     return declared, {u for u in used if u[:1].isupper()}
 
 
+# Members that return a DOUBLE in C#. Assigning one to a float is CS0266 (an
+# explicit cast is required) - Unity is the only compiler here, so it is checked.
+# Mathf.* is deliberately absent: those overloads are float already. Math.Abs and
+# Math.Min/Max are absent too: they have float overloads and would false-positive.
+DOUBLE_RETURNS = (
+    ".TotalMilliseconds", ".TotalSeconds", ".TotalMinutes", ".TotalHours", ".TotalDays",
+    "Math.Sqrt(", "Math.Pow(", "Math.Sin(", "Math.Cos(", "Math.Tan(", "Math.Log(",
+    "Math.Exp(", "Math.Round(", "Math.Floor(", "Math.Ceiling(",
+)
+
+
+def scan_double_into_float(parser, files):
+    """`float x = <double>;` without a cast - the CS0266 family.
+
+    Checked on declarations (`float name = ...`), which is where it bites and
+    where there are no false positives: the declared type is right there in the
+    source. Assignments to an existing float field are not modelled (the field's
+    type may live in another file).
+    """
+    problems = []
+    for path in files:
+        errs, code, tree, src = parse_file(parser, path)
+        if errs:
+            continue
+        rel = os.path.relpath(path, ROOT)
+
+        def visit(node):
+            if node.type == "variable_declaration":
+                type_node = node.child_by_field_name("type")
+                if type_node is not None and _text(type_node, src).strip() == "float":
+                    for decl in node.children:
+                        if decl.type != "variable_declarator":
+                            continue
+                        text = _text(decl, src)
+                        if "=" not in text:
+                            continue
+                        value = text.split("=", 1)[1]
+                        if value.lstrip().startswith("(float)") or value.lstrip().startswith("(double)"):
+                            continue
+                        for source in DOUBLE_RETURNS:
+                            if source in value:
+                                name_node = decl.child_by_field_name("name")
+                                name = _text(name_node, src) if name_node is not None else text
+                                problems.append(
+                                    "%s: float '%s' is assigned a double ('%s') - add an "
+                                    "explicit (float) cast (CS0266)"
+                                    % (rel, name.split("=")[0].strip(), source.strip("(")))
+                                break
+            for child in node.children:
+                visit(child)
+
+        visit(tree.root_node)
+    return problems
+
+
 NESTED_TYPE_KINDS = frozenset((
     "class_declaration", "struct_declaration", "interface_declaration",
     "enum_declaration", "delegate_declaration", "record_declaration",
@@ -612,6 +667,15 @@ def main():
         print("names ok: every type/static receiver used here is declared here or listed as "
               "external (%d declared, %d external)"
               % (len(declared_all), external_baseline_size()))
+
+    # 3a. double into float without a cast (the CS0266 family: Unity-only errors)
+    doubles = scan_double_into_float(parser, collect_cs_files())
+    if doubles:
+        fails += len(doubles)
+        for problem in doubles:
+            print("DOUBLE FAIL " + problem)
+    else:
+        print("numbers ok: no float is assigned a double-returning expression without a cast")
 
     # 3b. names a type cannot hold twice (the CS0102 family: Unity-only errors)
     collisions = scan_member_collisions(parser, collect_cs_files())

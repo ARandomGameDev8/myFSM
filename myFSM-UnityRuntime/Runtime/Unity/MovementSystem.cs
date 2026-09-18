@@ -511,6 +511,13 @@ namespace MyFSM.Unity
             Transform t = d.ResolveTransform(goal.Agent, exec, "movement");
             if (t == null)
             {
+                // An unresolved handle must never become a destination: stop and say
+                // so. Reading (0,0,0) for a missing object is what turned a missing
+                // target into everything marching to the middle of the plane.
+                exec.ErrorOnce("movement:agent:" + handleId,
+                               "movement: the goal's agent cannot be resolved (destroyed, or "
+                               + "a slot that was never bound). The goal is dropped instead "
+                               + "of moving anything.");
                 _goals.Remove(handleId);
                 return;
             }
@@ -522,6 +529,13 @@ namespace MyFSM.Unity
                 Transform tt = d.ResolveTransform(goal.Target, exec, "movement");
                 if (tt == null)
                 {
+                    // Same rule for the thing being followed: it is re-read every
+                    // tick, so a target that is destroyed or was never bound must
+                    // error and stop - never fall back to a position.
+                    exec.ErrorOnce("movement:target:" + handleId,
+                                   "movement: the goal's target object cannot be resolved "
+                                   + "(destroyed, or a slot that was never bound). The agent "
+                                   + "stops where it is instead of walking to (0,0,0).");
                     _goals.Remove(handleId);
                     return;
                 }

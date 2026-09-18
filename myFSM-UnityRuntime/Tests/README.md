@@ -183,6 +183,14 @@ ok   03-navmesh-maze/mazerunner:      module 475 bytes in sync, class MazeRunner
 ok   04-navmesh-moving-target/pathchaser: module 513 bytes in sync, class PathChaserAI.cs matches (2 states, 4 runtime slots, blob identical)
 ```
 
+`Sandbox/check.py` covers the two compile-error families that only Unity would
+otherwise report: a **float assigned a double without a cast** (`CS0266` — this
+shipped once: `float instantiateMs = _watch.Elapsed.TotalMilliseconds;`) and
+**names a type cannot hold twice** (`CS0102`/`CS0111`/`CS0542` — that shipped
+once too: a method and a nested class both called `PendingStep`). Both are proven
+by re-injecting the broken shape into a scratch copy and watching the check fail;
+neither is a compiler, so a signature-level mistake still surfaces in Unity first.
+
 `Tools/gen_class.py` is a line-for-line mirror of
 `Runtime/Unity/ClassGenerator.cs` (`GenerateSource` with the module bytes):
 same header, same `State_*`/`Slot_*` constants, same per-slot comments, same

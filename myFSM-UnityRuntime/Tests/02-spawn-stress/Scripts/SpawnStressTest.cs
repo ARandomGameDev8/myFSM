@@ -338,6 +338,16 @@ namespace MyFSM.Tests
                              : " — BUT NO INPUT BACKEND IS AVAILABLE: " + StressInput.Fix),
                           player);
             }
+            if (player != null && _wasd != null)
+            {
+                Debug.Log("[stress] WASD controller is on '" + _wasd.gameObject.name
+                          + "'; the crowd's target is '" + player.name
+                          + "' — the object itself, not a child of it: "
+                          + (_wasd.gameObject == player.gameObject
+                             ? "same object, so the crowd is moved by what you move."
+                             : "A DIFFERENT OBJECT. Point this component's Player field at "
+                               + "the object you drive."), player);
+            }
             Debug.Log("[stress] ground " + groundSize + " m, cubes "
                       + (cubeGravity ? "with gravity" : "without gravity")
                       + ", spawn placement " + placement
@@ -371,7 +381,7 @@ namespace MyFSM.Tests
                 _watch.Reset();
                 _watch.Start();
                 GameObject cube = CreateChaser(position);
-                float instantiateMs = _watch.Elapsed.TotalMilliseconds;
+                float instantiateMs = (float)_watch.Elapsed.TotalMilliseconds;   // TimeSpan totals are double
                 _watch.Stop();
 
                 SpawnedTotal++;
