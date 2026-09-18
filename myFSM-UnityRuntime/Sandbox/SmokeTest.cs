@@ -370,6 +370,7 @@ public static class SmokeTest
             Check(booted, "AIInstance boot " + name);
             if (!booted) continue;
             Time.deltaTime = 1f / 60f;
+        Time.fixedDeltaTime = 1f / 60f;      // the harness runs one physics step per tick
             for (int t = 0; t < 30; t++)
             {
                 Time.time += Time.deltaTime;
@@ -523,7 +524,7 @@ public static class SmokeTest
         Rigidbody dynBody = dynGo.AddComponent<Rigidbody>();
         MotionContext dynCtx = ms.Resolve(dynGo.transform, false);
         Check(dynCtx.Driver == MotionDriver.Rigidbody && !dynCtx.Kinematic,
-              "rigidbody -> Rigidbody.velocity (physics resolves collisions)");
+              "rigidbody -> Rigidbody.MovePosition (physics resolves collisions)");
         Check(dynCtx.Owner == dynGo.transform, "the body's own transform is what moves");
 
         dynBody.isKinematic = true;
@@ -539,7 +540,7 @@ public static class SmokeTest
         GameObject rb2Go = new GameObject("Rb2");
         rb2Go.AddComponent<Rigidbody2D>();
         Check(ms.Resolve(rb2Go.transform, true).Driver == MotionDriver.Rigidbody2D,
-              "rigidbody2D -> velocity / MovePosition (2D)");
+              "rigidbody2D -> MovePosition (2D)");
 
         GameObject col2Go = new GameObject("Col2");
         col2Go.AddComponent<Collider2D>();
@@ -580,18 +581,19 @@ public static class SmokeTest
         const int ticks = 31;                         // first tick posts the goal
         int steps = ticks - 1;
 
-        // (a) dynamic rigidbody: a velocity request, never a teleport
+        // (a) dynamic rigidbody: position += direction * speed * time, handed to
+        // Unity's move call — no velocity is written by the runtime
         GameObject bodyGo = new GameObject("BodyMover");
         Rigidbody body = bodyGo.AddComponent<Rigidbody>();
         FsmbAIInstance bodyAi = bodyGo.AddComponent<FsmbAIInstance>();
         Check(bodyAi.BootWithBytes(bytes, "Smoke_body"), "rigidbody AI boots");
         RunTicks(bodyAi, ticks);
-        Check(Math.Abs(body.velocity.z - speed) < 1e-3f && Math.Abs(body.velocity.x) < 1e-4f,
-              "dynamic body: velocity is set to the goal speed (Unity moves it)");
-        Check(Math.Abs(bodyGo.transform.position.z) < 1e-4f && body.movePositionCalls == 0,
-              "dynamic body: movement never positions the transform itself");
+        Check(body.movePositionCalls == steps && Math.Abs(body.velocity.z) < 1e-6f,
+              "dynamic body: moved by MovePosition, never given a velocity");
+        Check(Math.Abs(bodyGo.transform.position.z - steps * step) < 0.02f,
+              "dynamic body travels direction * speed * time each tick");
 
-        // dropping the goal stops the body it was driving
+        // dropping the goal stops the move that was being requested
         int handleId = 0;
         for (int id = 1; id <= bodyAi.Handles.Count && handleId == 0; id++)
         {
@@ -599,8 +601,10 @@ public static class SmokeTest
         }
         Check(handleId > 0, "the AI's agent handle was found");
         bodyAi.Movement.ClearGoal(handleId);
-        Check(Math.Abs(body.velocity.z) < 1e-6f,
-              "dropping the goal zeroes the velocity it was driving");
+        int callsAtClear = body.movePositionCalls;
+        RunTicks(bodyAi, 5);
+        Check(body.movePositionCalls == callsAtClear,
+              "dropping the goal stops the move (no further MovePosition)");
 
         // (b) kinematic rigidbody: MovePosition, Unity's kinematic move API
         GameObject kinGo = new GameObject("KinMover");
@@ -690,6 +694,7 @@ public static class SmokeTest
         for (int i = 0; i < ticks; i++)
         {
             Time.time += Time.deltaTime;
+            Time.fixedTime += Time.fixedDeltaTime;   // one physics step per tick
             ai.TickInternal();
         }
     }

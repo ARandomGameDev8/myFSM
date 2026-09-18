@@ -428,15 +428,25 @@ namespace MyFSM.Unity
         private static FsmValue MoveToObject(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             if (d.ResolveTransform(args[0], exec, "moveTowards") == null) return FsmValue.Void;
-            Transform tt = d.ResolveTransform(args[1], exec, "moveTowards");
-            if (tt == null) return FsmValue.Void;
+            if (d.ResolveTransform(args[1], exec, "moveTowards") == null) return FsmValue.Void;
             float speed = args[2].F;
             if (speed < 0f)
             {
                 exec.Log.Warn("moveTowards: negative speed clamped to 0");
                 speed = 0f;
             }
-            PostPoint(d, args[0], tt.position, speed, Is2DAgent(args[0]), "moveTowards", exec);
+            // An OBJECT target is tracked, not snapshotted: the destination is
+            // re-read every tick, so the agent keeps moving towards it whether it
+            // stands still or wanders off. (Pass a Vector3 — e.g.
+            // getPosition(target) — for a one-off point instead.)
+            MoveGoal g = new MoveGoal();
+            g.Mode = MoveMode.FollowObject;
+            g.Agent = args[0];
+            g.Target = args[1];
+            g.Speed = speed;
+            g.StopDistance = StopForNew(d, args[0]);
+            g.Is2D = Is2DAgent(args[0]);
+            d.Movement.SetGoal(args[0].HandleId, g);
             return FsmValue.Void;
         }
 

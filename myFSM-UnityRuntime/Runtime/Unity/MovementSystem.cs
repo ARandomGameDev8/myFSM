@@ -9,26 +9,15 @@
 //   NavMeshAgent         SetDestination() — the mesh pathfinds and steers.
 //   CharacterController  Move() — the controller's own capsule sweep resolves
 //                        slopes, steps and walls.
-//   Rigidbody(2D)        dynamic   -> velocity is set; the physics solver
-//                        resolves every contact, and drag/mass keep working.
-//                        GRAVITY KEEPS ITS AXIS: on a body with gravity on
-//                        (useGravity / gravityScale != 0) the goal drives the
-//                        HORIZONTAL plane only and velocity.y is left to the
-//                        solver, so a dropped body falls at Unity's gravity
-//                        (9.81 m/s^2 by default) and lands — it is never
-//                        lifted to the goal's height, and ARRIVAL is measured
-//                        in that same plane (a grounded chaser settles around
-//                        its target instead of pressing into its centre). With
-//                        gravity off nothing else drives the vertical axis, so
-//                        the goal drives all three (flying/hovering agents).
-//                        kinematic -> MovePosition(), Unity's kinematic move
-//                        API (docs: "Moves the kinematic Rigidbody towards
-//                        position"). Unity also documents that collisions do
-//                        not affect a kinematic body — "If the rigidbody is
-//                        kinematic then any collisions won't affect the
-//                        rigidbody itself" — so nothing is layered on top to
-//                        hide that. Ask for a dynamic body if walls must stop
-//                        it.
+//   Rigidbody(2D)        MovePosition(), Unity's move call — the documented
+//                        way to move a body by a step (its own example is
+//                        `rb.MovePosition(transform.position + input * dt *
+//                        speed)`, i.e. position += direction * speed * time).
+//                        It is a MOVE, not a teleport (teleporting is
+//                        Rigidbody.position), so the body still collides with
+//                        what is in the way and interpolation stays smooth.
+//                        Nothing is layered on top: no velocity is written and
+//                        no collision maths happens here.
 //   Collider, no body    No Unity function can move it: a collider on its own
 //                        is static geometry. Movement is written to the
 //                        transform and a warning names the missing component.
@@ -167,6 +156,12 @@ namespace MyFSM.Unity
     {
         private readonly Dictionary<int, MoveGoal> _goals = new Dictionary<int, MoveGoal>();
 
+        // Rigidbody moves are requested per render frame but applied in physics
+        // steps, so each agent's move is accumulated per step (see MoveBody).
+        private readonly Dictionary<int, PendingStep> _pendingSteps =
+            new Dictionary<int, PendingStep>();
+        private readonly List<int> _staleHandles = new List<int>();
+
         // Diagnostics: one line per agent when its driver changes, plus a
         // one-off warning when a collider has no body to move it, so "why did
         // it walk through that wall?" is answerable from the console.
@@ -179,10 +174,11 @@ namespace MyFSM.Unity
         }
 
         /// <summary>
-        /// Drops the goal and stops whatever was driving it: a velocity-driven
-        /// body gets its planar velocity zeroed, a NavMeshAgent is stopped.
-        /// (A kinematic body stops because MovePosition simply stops being
-        /// called, and a transform move stops the same way.)
+        /// Drops the goal and stops whatever was driving it: a dynamic body gets
+        /// its planar velocity zeroed (MovePosition sets a velocity to travel, so
+        /// a body would otherwise coast on after the goal is gone), a
+        /// NavMeshAgent is stopped. A kinematic body and a transform move stop
+        /// because MovePosition simply stops being called.
         /// </summary>
         public void ClearGoal(int agentHandleId)
         {
@@ -193,6 +189,7 @@ namespace MyFSM.Unity
                     StopMotion(Resolve(goal.AgentTransform, goal.Is2D));
                 _goals.Remove(agentHandleId);
             }
+            _pendingSteps.Remove(agentHandleId);
         }
 
         public bool HasGoal(int agentHandleId)
@@ -213,6 +210,7 @@ namespace MyFSM.Unity
                     StopMotion(Resolve(goal.AgentTransform, goal.Is2D));
             }
             _goals.Clear();
+            _pendingSteps.Clear();
             _reportedDriver.Clear();
             _warnedNoBody.Clear();
         }
@@ -235,6 +233,17 @@ namespace MyFSM.Unity
                     AdvanceLook(keys[i], goal, dt, d, exec);
                 else
                     AdvanceMove(keys[i], goal, dt, d, exec);
+            }
+
+            // Forget the accumulated move of agents that no longer have a goal,
+            // so a reused handle id cannot inherit someone else's pending step.
+            if (_pendingSteps.Count > 0)
+            {
+                _staleHandles.Clear();
+                foreach (KeyValuePair<int, PendingStep> entry in _pendingSteps)
+                    if (!_goals.ContainsKey(entry.Key)) _staleHandles.Add(entry.Key);
+                for (int i = 0; i < _staleHandles.Count; i++)
+                    _pendingSteps.Remove(_staleHandles[i]);
             }
         }
 
@@ -362,11 +371,11 @@ namespace MyFSM.Unity
                 case MotionDriver.Rigidbody:
                     return ctx.Kinematic
                         ? "Rigidbody.MovePosition (kinematic: Unity does not stop it at colliders)"
-                        : "Rigidbody.velocity (physics resolves collisions)";
+                        : "Rigidbody.MovePosition (physics resolves collisions)";
                 case MotionDriver.Rigidbody2D:
                     return ctx.Kinematic
                         ? "Rigidbody2D.MovePosition (kinematic: Unity does not stop it at colliders)"
-                        : "Rigidbody2D.velocity (physics resolves collisions)";
+                        : "Rigidbody2D.MovePosition (physics resolves collisions)";
                 case MotionDriver.ColliderNoBody:
                     return "transform (collider without a body: nothing can stop it)";
                 default:
@@ -406,60 +415,48 @@ namespace MyFSM.Unity
         }
 
         /// <summary>
-        /// Asks a dynamic body's solver for this tick's motion. Unity's physics
-        /// resolves every contact from here on, so the agent is stopped by
-        /// walls (and slowed by drag/gravity) exactly like any other body.
+        /// Moves a body by this tick's step, through Unity's move call.
+        ///
+        /// Rigidbodies move in PHYSICS steps: MovePosition keeps the LAST request
+        /// of the step while this runs once per RENDER frame, and several frames
+        /// can sit between two physics steps. The steps of those frames are
+        /// therefore summed per body and requested as one move — without that, a
+        /// body would travel at (render fps / physics fps) of the requested speed.
         /// </summary>
-        private static void DriveVelocity(MotionContext ctx, Vector3 dir, float dist, float dt,
-                                          float speed)
+        private void MoveBody(int handleId, MotionContext ctx, Vector3 step)
         {
+            Vector3 total = PendingStep(handleId, step);
             if (ctx.Body != null)
             {
-                if (ctx.Body.useGravity)
-                {
-                    // Gravity owns the vertical axis. The goal drives the target's
-                    // XZ only and velocity.y is left exactly as the solver left it,
-                    // so the body falls at Unity's gravity and lands instead of
-                    // being lifted to (or held at) the goal's height — the same
-                    // split a NavMeshAgent uses walking the ground.
-                    Vector3 planar = new Vector3(dir.x, 0f, dir.z);
-                    float planarMag = planar.magnitude;   // sin(angle from vertical)
-                    if (planarMag < 1e-4f)
-                    {
-                        // Directly above/below the goal: gravity does all of it.
-                        ctx.Body.velocity = new Vector3(0f, ctx.Body.velocity.y, 0f);
-                        return;
-                    }
-                    float planarWant = Mathf.Min(speed, dist * planarMag / Mathf.Max(dt, 1e-6f));
-                    Vector3 planarDir = planar / planarMag;
-                    ctx.Body.velocity = new Vector3(planarDir.x * planarWant,
-                                                    ctx.Body.velocity.y,
-                                                    planarDir.z * planarWant);
-                    return;
-                }
-                // Gravity off: nothing else drives the vertical axis, so the goal
-                // drives all three (a flying or hovering agent).
-                ctx.Body.velocity = dir * Mathf.Min(speed, dist / Mathf.Max(dt, 1e-6f));
+                ctx.Body.MovePosition(ctx.Body.position + total);
                 return;
             }
-            // 2D twin of the same rule: gravityScale 0 is the usual top-down case
-            // (the goal drives both axes); with gravity on, Unity keeps the
-            // vertical axis and the goal drives X.
-            if (ctx.Body2D.gravityScale != 0f)
+            ctx.Body2D.MovePosition(ctx.Body2D.position + new Vector2(total.x, total.y));
+        }
+
+        /// <summary>This physics step's accumulated move for one agent.</summary>
+        private Vector3 PendingStep(int handleId, Vector3 step)
+        {
+            PendingStep pending;
+            if (!_pendingSteps.TryGetValue(handleId, out pending))
             {
-                float magX = Mathf.Abs(dir.x);
-                if (magX < 1e-4f)
-                {
-                    ctx.Body2D.velocity = new Vector2(0f, ctx.Body2D.velocity.y);
-                    return;
-                }
-                float planarWant2 = Mathf.Min(speed, dist * magX / Mathf.Max(dt, 1e-6f));
-                ctx.Body2D.velocity = new Vector2(dir.x / magX * planarWant2,
-                                                  ctx.Body2D.velocity.y);
-                return;
+                pending = new PendingStep();
+                _pendingSteps[handleId] = pending;
             }
-            float want = Mathf.Min(speed, dist / Mathf.Max(dt, 1e-6f));
-            ctx.Body2D.velocity = new Vector2(dir.x * want, dir.y * want);
+            if (pending.PhysicsTime != Time.fixedTime)
+            {
+                // A physics step has run since the last request: start over.
+                pending.PhysicsTime = Time.fixedTime;
+                pending.Step = Vector3.zero;
+            }
+            pending.Step += step;
+            return pending.Step;
+        }
+
+        private sealed class PendingStep
+        {
+            public float PhysicsTime = float.NaN;
+            public Vector3 Step;
         }
 
         /// <summary>Stops a body the goal was driving, keeping pose and gravity.</summary>
@@ -479,20 +476,6 @@ namespace MyFSM.Unity
             }
             if (ctx.Driver == MotionDriver.NavMeshAgent && ctx.Nav != null)
                 ctx.Nav.isStopped = true;
-        }
-
-        /// <summary>
-        /// True when the goal must be treated as a horizontal-plane problem: a
-        /// dynamic body whose gravity is on cannot be lifted or held by the goal,
-        /// so the vertical component of the step is not the goal's to measure.
-        /// </summary>
-        private static bool GravityOwnsVertical(MotionContext ctx, MoveGoal goal)
-        {
-            if (goal.Is2D)
-                return ctx.Driver == MotionDriver.Rigidbody2D && ctx.Body2D != null &&
-                       !ctx.Kinematic && ctx.Body2D.gravityScale != 0f;
-            return ctx.Driver == MotionDriver.Rigidbody && ctx.Body != null &&
-                   !ctx.Kinematic && ctx.Body.useGravity;
         }
 
         private static bool CloseEnough(Vector3 a, Vector3 b, float within, bool is2D)
@@ -585,13 +568,6 @@ namespace MyFSM.Unity
             Vector3 ownerPos = ctx.Owner != null ? ctx.Owner.position : pos;
             Vector3 to = dest - pos;
             if (goal.Is2D) to.z = 0f;
-            // Gravity-driven dynamic body: the goal cannot own the vertical axis
-            // (gravity does — see DriveVelocity), so the step is measured in the
-            // horizontal plane. Arrival then means "under the goal": a grounded
-            // chaser settles around its target instead of driving into the
-            // target's centre forever, and the FSM's hasReachedDestination turns
-            // true when it has actually arrived in the plane it can move in.
-            if (GravityOwnsVertical(ctx, goal)) to.y = 0f;
             float dist = to.magnitude;
             if (dist <= goal.StopDistance)
             {
@@ -621,20 +597,10 @@ namespace MyFSM.Unity
                 case MotionDriver.Rigidbody:
                 case MotionDriver.Rigidbody2D:
                 {
-                    if (ctx.Kinematic)
-                    {
-                        // Unity's kinematic move. Its docs are explicit that
-                        // collisions do not affect a kinematic body, so this is
-                        // passed through as-is; nothing is layered on top.
-                        Vector3 next = ownerPos + delta;
-                        if (ctx.Driver == MotionDriver.Rigidbody)
-                            ctx.Body.MovePosition(next);
-                        else
-                            ctx.Body2D.MovePosition(new Vector2(next.x, next.y));
-                        Report(handleId, ctx, t.name, exec);
-                        return;
-                    }
-                    DriveVelocity(ctx, to / dist, dist, dt, goal.Speed);
+                    // position += direction * speed * time, handed to Unity's move
+                    // call for this body. Unity resolves the contacts; this file
+                    // still contains no collision maths.
+                    MoveBody(handleId, ctx, delta);
                     Report(handleId, ctx, t.name, exec);
                     return;
                 }

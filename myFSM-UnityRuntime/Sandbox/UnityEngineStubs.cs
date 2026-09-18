@@ -548,6 +548,13 @@ namespace UnityEngine
         public int movePositionCalls;
         public Vector3 lastMovePosition;
 
+        /// <summary>World position of the body (setting it teleports).</summary>
+        public Vector3 position
+        {
+            get { return transform != null ? transform.position : Vector3.zero; }
+            set { if (transform != null) transform.position = value; }
+        }
+
         public void AddForce(Vector3 f) { }
         public void AddForce(Vector3 f, ForceMode mode) { }
         public void MovePosition(Vector3 p)
@@ -571,6 +578,14 @@ namespace UnityEngine
         /// <summary>How many times Unity's move API was called (harness only).</summary>
         public int movePositionCalls;
         public Vector2 lastMovePosition;
+
+        public Vector2 position
+        {
+            get { return transform != null ? new Vector2(transform.position.x, transform.position.y)
+                                           : Vector2.zero; }
+            set { if (transform != null) transform.position = new Vector3(value.x, value.y,
+                                                                          transform.position.z); }
+        }
 
         public void AddForce(Vector2 f) { }
         public void AddForce(Vector2 f, ForceMode2D mode) { }
@@ -790,6 +805,8 @@ namespace UnityEngine
     {
         public static float time;
         public static float deltaTime;
+        public static float fixedTime;
+        public static float fixedDeltaTime;
     }
 }
 
