@@ -102,9 +102,14 @@ Tests/
     Scripts/StateTransitionRecorder.cs  logs every state change + watched variables
     Scripts/ZoneController.cs        drives `zone`, verifies the outcome
     Scripts/ZoneTestSetup.cs         one component that finishes the scene
-  02-spawn-stress/                   chaser.fsm (232 bytes) + ChaserAI(.Manual) + ...
-  03-navmesh-maze/                   mazerunner.fsm (475 bytes) + MazeRunnerAI(.Manual) + ...
-  04-navmesh-moving-target/          pathchaser.fsm (513 bytes) + PathChaserAI(.Manual) + ...
+  02-spawn-stress/                   chaser.fsm (232 bytes) + ChaserAI(.Manual)
+    Scripts/StressInput.cs           keyboard reads, either Unity input backend
+    Scripts/TopDownFollowCamera.cs   the follow rig the test adds to the Main Camera
+  03-navmesh-maze/                   mazerunner.fsm (475 bytes) + MazeRunnerAI(.Manual)
+    Scripts/MazeInput.cs             keyboard reads (G rebuild, B re-bake)
+  04-navmesh-moving-target/          pathchaser.fsm (513 bytes) + PathChaserAI(.Manual)
+    Scripts/ChaseInput.cs            keyboard reads (M manual mode, WASD)
+  01-state-transitions/Scripts/ZoneInput.cs   the same helper for test 01
 ```
 
 ## How an FSM becomes a running test
@@ -286,7 +291,7 @@ Controls: `Space` = +`spawnPerPress` AI (default 1), `B` = +100, `P` = pause
 spawning, `L` = write the reports now, `Backspace` = clear. Move the player with
 WASD: the chasers follow, so the load is real movement, not idle ticking.
 `spawnOnStart` (0 by default) exists if you want a starting population without
-touching the keyboard; keys are read through `InputCompat`, so they work with
+touching the keyboard; keys are read through `StressInput`, so they work with
 either Unity input backend.
 
 Files:
@@ -389,6 +394,7 @@ the live route length and the chaser's state — the curve that shows the chase)
 | --- | --- | --- |
 | `CS0246: The type or namespace name 'StateTransitionRecorder' could not be found` in `ZoneTestSetup.cs` | the recorder script is not in the project — test 01 needs it | copy `Tests/01-state-transitions/Scripts/StateTransitionRecorder.cs` somewhere under `Assets/` (any folder; Unity compiles every script under `Assets/`) |
 | `CS0103: The name 'FsmValue' does not exist in the current context` in a `*.Manual.cs` | that file writes value slots, and `FsmValue` lives in `MyFSM.Core` — a `using` applies to ONE file, so `using MyFSM.Unity;` does not bring it in | add `using MyFSM.Core;` (fixed in the shipped files; if you copied them earlier, re-copy or add the line) |
+| `CS0103: The name 'StressInput' / 'MazeInput' / 'ChaseInput' does not exist` | that script is from this repo but its per-folder input helper is missing from the project (each test folder carries its own copy) | copy the helper file from the same folder (`Tests/<case>/Scripts/<Name>Input.cs`) — `Tests/Tools/check_project.py` lists exactly what is missing. All four helpers are in namespace `MyFSM.Tests`, so no `using` is involved any more |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
 | test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
 | test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube; the keys then drive it (nothing moves by itself) |
@@ -397,10 +403,13 @@ the live route length and the chaser's state — the curve that shows the chase)
 | test 01: `[zone] SetBoundValue(…) failed` or `[myFSM] SetBoundValue before execution exists` | the FSM could not be written at that moment | fixed: the first push now waits for the AI to boot. If it still appears, the AI never booted — the controller then reports `the AI never booted after N s: <BootError>` |
 | test 01: `zone` changes in the Inspector but the FSM does not follow | the field was edited before the AI booted | the controller pushes any changed `zone` on the next frame and logs it; if nothing is logged at all, look for the boot error row above |
 
-`Tests/Tools/check_project.py` finds all three situations before Unity does, and
-`Sandbox/check.py` (repo-side) now also fails on the second one: it verifies that
-every file naming a `MyFSM.Core`/`MyFSM.Unity`/`MyFSM.Compiler` type imports that
-namespace, so the `CS0103` above cannot ship again.
+`Tests/Tools/check_project.py` finds the first three situations before Unity does,
+and `Sandbox/check.py` (repo-side) now fails on the `CS0103` class: it reads the
+top-level types of every shipped `MyFSM.*` namespace from the files themselves and
+fails any file that names one without importing its namespace (nested types and
+global-namespace types are ignored — the generated AI classes live in the global
+namespace and are importable by anyone). Proved by reintroducing the bug:
+`USING FAIL … names TmpProbe but never imports MyFSM.Tests.Stress; … -> RESULT: FAIL`.
 
 ## Reading the output
 

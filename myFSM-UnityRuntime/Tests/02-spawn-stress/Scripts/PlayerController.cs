@@ -6,7 +6,6 @@
 // spread out and re-path every tick (that is the load being measured).
 
 using UnityEngine;
-using MyFSM.Tests.Stress; // the per-folder input helper
 
 namespace MyFSM.Tests
 {
@@ -30,11 +29,11 @@ namespace MyFSM.Tests
         {
             float x = 0f;
             float z = 0f;
-            // InputCompat: works with either Unity input backend (see InputCompat.cs).
-            if (InputCompat.GetKey(KeyCode.A) || InputCompat.GetKey(KeyCode.LeftArrow)) x -= 1f;
-            if (InputCompat.GetKey(KeyCode.D) || InputCompat.GetKey(KeyCode.RightArrow)) x += 1f;
-            if (InputCompat.GetKey(KeyCode.S) || InputCompat.GetKey(KeyCode.DownArrow)) z -= 1f;
-            if (InputCompat.GetKey(KeyCode.W) || InputCompat.GetKey(KeyCode.UpArrow)) z += 1f;
+            // StressInput: works with either Unity input backend (see StressInput.cs).
+            if (StressInput.GetKey(KeyCode.A) || StressInput.GetKey(KeyCode.LeftArrow)) x -= 1f;
+            if (StressInput.GetKey(KeyCode.D) || StressInput.GetKey(KeyCode.RightArrow)) x += 1f;
+            if (StressInput.GetKey(KeyCode.S) || StressInput.GetKey(KeyCode.DownArrow)) z -= 1f;
+            if (StressInput.GetKey(KeyCode.W) || StressInput.GetKey(KeyCode.UpArrow)) z += 1f;
 
             Vector3 direction = new Vector3(x, 0f, z);
             if (direction.sqrMagnitude < 0.0001f) return;

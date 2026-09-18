@@ -16,8 +16,13 @@
 //   ENABLE_INPUT_SYSTEM         -> Keyboard.current (the Input System package)
 //
 // Both symbols come from Unity (Active Input Handling), so neither branch is
-// compiled when it would not work. Namespace MyFSM.Tests.Chase keeps this copy from
-// colliding with the identical helper in another test folder (MyFSM.Tests.Zone and MyFSM.Tests.Stress).
+// compiled when it would not work.
+//
+// The class name is specific to this test folder on purpose: switch, maze and
+// chase each carry their own copy (ZoneInput, StressInput and MazeInput),
+// so several test cases can live in the same Unity project without colliding -
+// and because every test script is in namespace MyFSM.Tests, none of them needs
+// a `using` to reach its own helper.
 using UnityEngine;
 
 #if ENABLE_INPUT_SYSTEM
@@ -25,9 +30,9 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
 #endif
 
-namespace MyFSM.Tests.Chase
+namespace MyFSM.Tests
 {
-    public static class InputCompat
+    public static class ChaseInput
     {
         /// <summary>Which backend this build reads, for the startup log line.</summary>
         public static string Backend
@@ -90,8 +95,8 @@ namespace MyFSM.Tests.Chase
 #endif
         }
 
-        /// <summary>Any of the given keys held/held-down (either spelling of WASD etc.).</summary>
-        public static bool GetKeyAny(KeyCode a, KeyCode b)
+        /// <summary>Any of two keys held (either spelling of WASD, for example).</summary>
+        public static bool GetKeyEither(KeyCode a, KeyCode b)
         {
             return GetKey(a) || GetKey(b);
         }

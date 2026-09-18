@@ -27,7 +27,6 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 using MyFSM.Unity;
-using MyFSM.Tests.Maze; // the per-folder input helper
 
 namespace MyFSM.Tests
 {
@@ -126,9 +125,9 @@ namespace MyFSM.Tests
 
         private void Update()
         {
-            // InputCompat: works with either Unity input backend (see InputCompat.cs).
-            if (InputCompat.GetKeyDown(rebuildKey)) Build(0);
-            if (InputCompat.GetKeyDown(rebakeKey)) BakeNavMesh();
+            // MazeInput: works with either Unity input backend (see MazeInput.cs).
+            if (MazeInput.GetKeyDown(rebuildKey)) Build(0);
+            if (MazeInput.GetKeyDown(rebakeKey)) BakeNavMesh();
         }
 
         /// <summary>Builds a maze (seed 0 = random), its markers, and its NavMesh.</summary>
