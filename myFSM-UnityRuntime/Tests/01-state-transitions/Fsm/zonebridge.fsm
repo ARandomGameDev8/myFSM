@@ -1,0 +1,71 @@
+// Test 01 — state transitions driven by a runtime variable.
+//
+// The controller (Scripts/ZoneController.cs) owns `zone`; this module only
+// reacts to it. Every state change is recorded by the runtime (internal DB +
+// broadcast servers), which is what the test checks: that the per-state
+// Traversal evaluation actually drives the head to the state the variable asks
+// for.
+//
+//   zone  0..10   -> AtHome   : the position the object was placed at
+//   zone 11..20   -> Above10  : 10 m above it
+//   zone 21..     -> Above40  : 40 m above it
+//
+// Boundaries: the ranges as specified ("0-10 home / 11-20 +10 m / >=20 +40 m")
+// overlap at 20, so the lower band owns it: 20 still means +10 m and only 21
+// and up mean +40 m. Both states test the same two numbers, which is what
+// makes the three ranges tile the line with no gap and no overlap.
+
+const Vector3 lift10 = Vector3(0.0f, 10.0f, 0.0f);
+const Vector3 lift40 = Vector3(0.0f, 40.0f, 0.0f);
+
+var Object3D self;    // slot 0 - the object this AI moves
+var Object3D marker;  // slot 1 - same type as `self`, so the tag is AMBIGUOUS
+                      //          and BOTH must be bound by hand
+var Vector3  home;    // slot 2 - value slot: the position it started at
+var int      zone;    // slot 3 - value slot: driven by the controller
+
+State AtHome {
+    Actions {
+        Start {
+            setPosition(self, home);
+            setPosition(marker, home);
+        }
+        Update { }
+    }
+    Traversals {
+        if (zone > 10) { goto Above10; }
+        goto AtHome;
+    }
+}
+
+State Above10 {
+    Actions {
+        Start {
+            setPosition(self, home + lift10);
+            setPosition(marker, home);
+        }
+        Update { }
+    }
+    Traversals {
+        if (zone > 20) { goto Above40; }
+        if (zone <= 10) { goto AtHome; }
+        goto Above10;
+    }
+}
+
+State Above40 {
+    Actions {
+        Start {
+            setPosition(self, home + lift40);
+            setPosition(marker, home);
+        }
+        Update { }
+    }
+    Traversals {
+        if (zone <= 10) { goto AtHome; }
+        if (zone <= 20) { goto Above10; }
+        goto Above40;
+    }
+}
+
+@ENTRY AtHome

@@ -1,0 +1,46 @@
+// Test 04 — shortest path to a MOVING target (same maze, walking exit).
+//
+// The difference from test 03 is that the target is not static, so the corner
+// queue cannot be planned once: the whole route is re-planned every tick and
+// the movement system follows the refreshed queue. `plannedLength` is rewritten
+// on every re-plan, so the recorder can watch the route change as the target
+// moves (a re-plan that never happens would show up as a constant length).
+//
+// `caught` flips when the runner gets within catchRadius, which ends the test;
+// a capture radius is used instead of hasReachedDestination because a moving
+// target is rarely exactly at the goal point.
+
+const float catchRadius = 2.0f;
+
+var Object3D self;           // slot 0 - the runner
+var Object3D target;         // slot 1 - same type as self: bind both by hand
+var float    plannedLength;  // slot 2 - rewritten every tick (the live route)
+var bool     caught;         // slot 3 - set once the target is caught
+
+State Chase {
+    Actions {
+        Start { }
+        Update {
+            plannedLength = getPathLength(findPath(getPosition(self), getPosition(target)));
+            findShortestPathAndMove(self, target);
+        }
+    }
+    Traversals {
+        if (isInRange(self, target, catchRadius)) { goto Caught; }
+        goto Chase;
+    }
+}
+
+State Caught {
+    Actions {
+        Start {
+            stopMovement(self);
+            caught = true;
+        }
+        Update { }
+    }
+}
+// No Traversals in Caught: the state is terminal (a state without a Traversals
+// block is never left), which freezes the runner on the target it caught.
+
+@ENTRY Chase

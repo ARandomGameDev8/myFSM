@@ -1,0 +1,47 @@
+// Test 03 — shortest path out of a maze, using the navigation built-ins.
+//
+// The runner carries a NavMeshAgent, so:
+//   findShortestPathAndMove(self, exit)  posts the corner queue the engine's
+//                                        NavMesh.CalculatePath produced, and
+//                                        the movement system walks it with
+//                                        NavMeshAgent.SetDestination per corner
+//   findPath + getPathLength             measure that same route in metres, so
+//                                        the recorder can compare the distance
+//                                        actually travelled with the distance
+//                                        the navigation system planned
+//
+// The path is posted once (the exit is static) and the Traversals watch for
+// arrival, which is the pattern the sample FSMs use for a fixed waypoint.
+
+var Object3D self;           // slot 0 - the runner
+var Object3D exit;           // slot 1 - same type as self: bind both by hand
+var float    plannedLength;  // slot 2 - written here, read by the recorder
+var bool     arrived;        // slot 3 - set once the exit is reached
+
+State Run {
+    Actions {
+        Start {
+            plannedLength = getPathLength(findPath(getPosition(self), getPosition(exit)));
+            findShortestPathAndMove(self, exit);
+        }
+        Update { }
+    }
+    Traversals {
+        if (hasReachedDestination(self, exit)) { goto Done; }
+        goto Run;
+    }
+}
+
+State Done {
+    Actions {
+        Start {
+            stopMovement(self);
+            arrived = true;
+        }
+        Update { }
+    }
+}
+// No Traversals in Done: a state without a Traversals block never leaves, which
+// is what stops the runner from re-running the route after it has arrived.
+
+@ENTRY Run

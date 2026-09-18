@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """myFSM-UnityRuntime static checks (no Unity/dotnet needed).
 
-1. tree-sitter parses every .cs file (Runtime + Sandbox) without errors.
+1. tree-sitter parses every .cs file (Runtime + Sandbox + Samples + Tests)
+   without errors. The Tests folder holds the Play-mode test cases, whose
+   generated/manual classes and scene scripts must at least be well-formed.
 2. FunctionCatalog holds exactly 179 unique overload rows.
 3. Every catalog ID has exactly one `case` in the Run dispatchers and vice versa.
 4. Every catalog ID falls inside exactly one category dispatch range.
@@ -14,6 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNTIME = os.path.join(ROOT, "Runtime")
 SANDBOX = os.path.join(ROOT, "Sandbox")
 SAMPLES = os.path.join(ROOT, "Samples")
+TESTS = os.path.join(ROOT, "Tests")
 
 RANGES = [
     (0x0000, 0x0018), (0x0100, 0x0115), (0x0200, 0x020B), (0x0300, 0x0311),
@@ -53,7 +56,7 @@ def parse_errors(parser, path):
 
 def collect_cs_files():
     files = []
-    for base in (RUNTIME, SANDBOX, SAMPLES):
+    for base in (RUNTIME, SANDBOX, SAMPLES, TESTS):
         for dirpath, _, names in os.walk(base):
             for name in names:
                 if name.endswith(".cs"):

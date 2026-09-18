@@ -1,0 +1,105 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     01-state-transitions/Fsm/zonebridge.fsmb  (950 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000056   50 B   2
+   [2]  Runtime    0x00000056 .. 0x00000094   62 B   4
+   [3]  Temporary  0x00000094 .. 0x00000094   0 B    0
+   [4]  State      0x00000094 .. 0x000000BE   42 B   3
+   [5]  Token      0x000000BE .. 0x00000124   102 B  14
+   [6]  AST        0x00000124 .. 0x00000380   604 B  65
+   [7]  FSM        0x00000380 .. 0x000003B6   54 B   3
+
+ SECTION [1] GLOBAL VARIABLES (2)
+   #0  lift10          Vector3       = Vector3(0f, 10f, 0f)
+   #1  lift40          Vector3       = Vector3(0f, 40f, 0f)
+
+ SECTION [2] RUNTIME VARIABLES (4)
+   #0  self            Object3D              slot 0
+   #1  marker          Object3D              slot 1
+   #2  home            Vector3               slot 2
+   #3  zone            int                   slot 3
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (3)
+   #0  AtHome          ast root #0
+   #1  Above10         ast root #17
+   #2  Above40         ast root #41
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'AtHome' — 4 instruction(s) ---
+   0   CALL    setPosition(self, home)   [fn 0x0105]
+   1   CALL    setPosition(marker, home)   [fn 0x0105]
+   2   GOTO    Above10
+   3   GOTO    AtHome
+
+--- state #1 'Above10' — 5 instruction(s) ---
+   0   CALL    setPosition(self, (home + lift10))   [fn 0x0105]
+   1   CALL    setPosition(marker, home)   [fn 0x0105]
+   2   GOTO    Above40
+   3   GOTO    AtHome
+   4   GOTO    Above10
+
+--- state #2 'Above40' — 5 instruction(s) ---
+   0   CALL    setPosition(self, (home + lift40))   [fn 0x0105]
+   1   CALL    setPosition(marker, home)   [fn 0x0105]
+   2   GOTO    AtHome
+   3   GOTO    Above10
+   4   GOTO    Above40
+
+ SECTION [6] AST (65 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'AtHome' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+         #[3] CALL setPosition(Object3D, Vector3)
+         #[6] CALL setPosition(Object3D, Vector3)
+      #[9] UPDATE  (runs every tick)
+   #[10] TRAVERSALS
+      #[11] IF    cond: (zone > 10)
+         #[15] GOTO Above10
+      #[16] GOTO AtHome
+
+--- state #1 'Above10' ---
+#[17] STATE
+   #[18] ACTIONS
+      #[19] START   (runs once, on state entry)
+         #[20] CALL setPosition(Object3D, Vector3)
+         #[25] CALL setPosition(Object3D, Vector3)
+      #[28] UPDATE  (runs every tick)
+   #[29] TRAVERSALS
+      #[30] IF    cond: (zone > 20)
+         #[34] GOTO Above40
+      #[35] IF    cond: (zone <= 10)
+         #[39] GOTO AtHome
+      #[40] GOTO Above10
+
+--- state #2 'Above40' ---
+#[41] STATE
+   #[42] ACTIONS
+      #[43] START   (runs once, on state entry)
+         #[44] CALL setPosition(Object3D, Vector3)
+         #[49] CALL setPosition(Object3D, Vector3)
+      #[52] UPDATE  (runs every tick)
+   #[53] TRAVERSALS
+      #[54] IF    cond: (zone <= 10)
+         #[58] GOTO AtHome
+      #[59] IF    cond: (zone <= 20)
+         #[63] GOTO Above10
+      #[64] GOTO Above40
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   AtHome       -> Above10
+   AtHome       -> AtHome
+   Above10      -> Above40
+   Above10      -> AtHome
+   Above10      -> Above10
+   Above40      -> AtHome
+   Above40      -> Above10
+   Above40      -> Above40

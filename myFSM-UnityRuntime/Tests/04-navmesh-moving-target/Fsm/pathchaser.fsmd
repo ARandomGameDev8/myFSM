@@ -1,0 +1,67 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     myFSM-UnityRuntime/Tests/04-navmesh-moving-target/Fsm/pathchaser.fsmb  (513 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x0000003A   22 B   1
+   [2]  Runtime    0x0000003A .. 0x00000083   73 B   4
+   [3]  Temporary  0x00000083 .. 0x00000083   0 B    0
+   [4]  State      0x00000083 .. 0x0000009E   27 B   2
+   [5]  Token      0x0000009E .. 0x000000D6   56 B   6
+   [6]  AST        0x000000D6 .. 0x000001E9   275 B  30
+   [7]  FSM        0x000001E9 .. 0x00000201   24 B   2
+
+ SECTION [1] GLOBAL VARIABLES (1)
+   #0  catchRadius     float         = 2f
+
+ SECTION [2] RUNTIME VARIABLES (4)
+   #0  self            Object3D              slot 0
+   #1  target          Object3D              slot 1
+   #2  plannedLength   float                 slot 2
+   #3  caught          bool                  slot 3
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (2)
+   #0  Chase           ast root #0
+   #1  Caught          ast root #22
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Chase' — 4 instruction(s) ---
+   0   ASSIGN  plannedLength = getPathLength(findPath(getPosition(self), getPosition(target)))
+   1   CALL    findShortestPathAndMove(self, target)   [fn 0x0617]
+   2   GOTO    Caught
+   3   GOTO    Chase
+
+--- state #1 'Caught' — 2 instruction(s) ---
+   0   CALL    stopMovement(self)   [fn 0x062B]
+   1   ASSIGN  caught = true
+
+ SECTION [6] AST (30 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Chase' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+      #[3] UPDATE  (runs every tick)
+         #[4] ASSIGN plannedLength = getPathLength(findPath(getPosition(self), getPosition(target)))
+         #[11] CALL findShortestPathAndMove(Object3D, Object3D)
+   #[14] TRAVERSALS
+      #[15] IF    cond: isInRange(self, target, catchRadius)
+         #[20] GOTO Caught
+      #[21] GOTO Chase
+
+--- state #1 'Caught' ---
+#[22] STATE
+   #[23] ACTIONS
+      #[24] START   (runs once, on state entry)
+         #[25] CALL stopMovement(Object3D)
+         #[27] ASSIGN caught = true
+      #[29] UPDATE  (runs every tick)
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   Chase        -> Caught
+   Chase        -> Chase

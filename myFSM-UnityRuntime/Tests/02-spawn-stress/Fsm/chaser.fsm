@@ -1,0 +1,31 @@
+// Test 02 — spawn-stress chaser: one AI per spawned cube, hunting the player.
+//
+// The point of this module is to be tiny, so the spawn-stress test measures the
+// RUNTIME (N AIs ticking, each posting a goal every tick), not the FSM.
+//
+// moveTowards takes a destination POINT and the goal is retired on arrival, so
+// it is re-posted every tick: the cube keeps chasing a player who can walk away
+// with WASD. Speed is explicit here (the runtime uses it directly), which is
+// what makes the stress numbers comparable between runs.
+//
+// The spawned cube carries a dynamic Rigidbody, so the runtime drives it by
+// setting velocity and Unity's solver does the colliding.
+
+const float chaseSpeed = 6.0f;
+
+var Object3D self;    // slot 0 - the spawned cube
+var Object3D player;  // slot 1 - the WASD target (same type: bind both by hand)
+
+State Chase {
+    Actions {
+        Start { }
+        Update {
+            moveTowards(self, getPosition(player), chaseSpeed);
+        }
+    }
+    Traversals {
+        goto Chase;
+    }
+}
+
+@ENTRY Chase

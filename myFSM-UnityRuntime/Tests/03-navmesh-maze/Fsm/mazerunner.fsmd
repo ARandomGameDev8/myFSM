@@ -1,0 +1,66 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     myFSM-UnityRuntime/Tests/03-navmesh-maze/Fsm/mazerunner.fsmb  (475 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000024   0 B    0
+   [2]  Runtime    0x00000024 .. 0x0000006C   72 B   4
+   [3]  Temporary  0x0000006C .. 0x0000006C   0 B    0
+   [4]  State      0x0000006C .. 0x00000083   23 B   2
+   [5]  Token      0x00000083 .. 0x000000BB   56 B   6
+   [6]  AST        0x000000BB .. 0x000001C3   264 B  29
+   [7]  FSM        0x000001C3 .. 0x000001DB   24 B   2
+
+ SECTION [1] GLOBAL VARIABLES (0)
+
+ SECTION [2] RUNTIME VARIABLES (4)
+   #0  self            Object3D              slot 0
+   #1  exit            Object3D              slot 1
+   #2  plannedLength   float                 slot 2
+   #3  arrived         bool                  slot 3
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (2)
+   #0  Run             ast root #0
+   #1  Done            ast root #21
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Run' — 4 instruction(s) ---
+   0   ASSIGN  plannedLength = getPathLength(findPath(getPosition(self), getPosition(exit)))
+   1   CALL    findShortestPathAndMove(self, exit)   [fn 0x0617]
+   2   GOTO    Done
+   3   GOTO    Run
+
+--- state #1 'Done' — 2 instruction(s) ---
+   0   CALL    stopMovement(self)   [fn 0x062B]
+   1   ASSIGN  arrived = true
+
+ SECTION [6] AST (29 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Run' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+         #[3] ASSIGN plannedLength = getPathLength(findPath(getPosition(self), getPosition(exit)))
+         #[10] CALL findShortestPathAndMove(Object3D, Object3D)
+      #[13] UPDATE  (runs every tick)
+   #[14] TRAVERSALS
+      #[15] IF    cond: hasReachedDestination(self, exit)
+         #[19] GOTO Done
+      #[20] GOTO Run
+
+--- state #1 'Done' ---
+#[21] STATE
+   #[22] ACTIONS
+      #[23] START   (runs once, on state entry)
+         #[24] CALL stopMovement(Object3D)
+         #[26] ASSIGN arrived = true
+      #[28] UPDATE  (runs every tick)
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   Run          -> Done
+   Run          -> Run

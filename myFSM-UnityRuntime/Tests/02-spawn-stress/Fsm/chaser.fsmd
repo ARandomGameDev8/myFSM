@@ -1,0 +1,46 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     myFSM-UnityRuntime/Tests/02-spawn-stress/Fsm/chaser.fsmb  (232 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000039   21 B   1
+   [2]  Runtime    0x00000039 .. 0x00000059   32 B   2
+   [3]  Temporary  0x00000059 .. 0x00000059   0 B    0
+   [4]  State      0x00000059 .. 0x00000068   15 B   1
+   [5]  Token      0x00000068 .. 0x0000007A   18 B   2
+   [6]  AST        0x0000007A .. 0x000000DA   96 B   11
+   [7]  FSM        0x000000DA .. 0x000000E8   14 B   1
+
+ SECTION [1] GLOBAL VARIABLES (1)
+   #0  chaseSpeed      float         = 6f
+
+ SECTION [2] RUNTIME VARIABLES (2)
+   #0  self            Object3D              slot 0
+   #1  player          Object3D              slot 1
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (1)
+   #0  Chase           ast root #0
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Chase' — 2 instruction(s) ---
+   0   CALL    moveTowards(self, getPosition(player), chaseSpeed)   [fn 0x0626]
+   1   GOTO    Chase
+
+ SECTION [6] AST (11 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Chase' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+      #[3] UPDATE  (runs every tick)
+         #[4] CALL moveTowards(Object3D, Vector3, float)
+   #[9] TRAVERSALS
+      #[10] GOTO Chase
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
+   Chase        -> Chase
