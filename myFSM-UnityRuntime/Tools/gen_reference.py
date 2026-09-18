@@ -76,13 +76,13 @@ NOTES = {
 "findPath":"Stores a corner list and returns its **path id** (int). NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid.",
 "getNextWaypoint":"Pops the next corner of a path id. Past the end it returns the last corner forever (no error).",
 "getPathLength":"Total length of the stored polyline; 0 for an unknown path (logs an error).",
-"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2.",
+"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is \"there\" when it is under the target.",
 "goTo":"Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves.",
 "follow":"Posts a FollowObject goal: re-reads the target's position every tick, so it chases a moving object forever. Stops at **half** the agent's stopping distance — the tighter of the two follow calls.",
 "findShortestPathAndMove":"Posts a corner queue (PathCorners) and walks it.",
 "followTarget":"Same as `follow` but stops at the **full** stopping distance, so it keeps the agent's normal stand-off instead of closing in.",
 "sprintTowards":"Point goal at **base speed × multiplier** (multiplier is the 3rd argument; negative clamps to 0).",
-"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction.",
+"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2).",
 "stopMovement":"Clears the goal (and stops a NavMeshAgent).",
 # --- Perception (0x0700-0x070D) ---
 "lookAt":"Posts a LookAt goal: gradual rotation toward the target. The goal is **retired within 0.5°**, so re-post it every tick to track a moving target. 2D uses +X as forward and rotates around Z.",
@@ -254,6 +254,18 @@ A("| `Rigidbody`/`Rigidbody2D`, dynamic | `velocity` is set (or `AddForce`) | ye
 A("| `Rigidbody`/`Rigidbody2D`, kinematic | `MovePosition` | **no** — Unity: \"collisions won't affect the rigidbody itself\" |")
 A("| `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |")
 A("| nothing at all | none | no — the step goes to the transform |")
+A("")
+A("Dynamic bodies split the axes: **gravity keeps the vertical, the goal keeps")
+A("the horizontal.** A body with gravity on (`useGravity`, or a non-zero")
+A("`gravityScale` in 2D) has its XZ velocity driven towards the goal at the")
+A("requested speed while its vertical velocity is left exactly as the solver")
+A("left it — a body dropped from the air falls at Unity's gravity (9.81 m/s²")
+A("by default), lands, and is never lifted to the goal's height. That is the")
+A("same split a `NavMeshAgent` uses walking the ground, and arrival is measured")
+A("in that same plane: a gravity-driven body has arrived when it is under the")
+A("goal horizontally, so a grounded chaser settles around its target instead of")
+A("pressing into its centre. With gravity off nothing else owns the vertical")
+A("axis, so the goal drives all three — what a flying or hovering agent wants.")
 A("")
 A("Direct position changes are untouched: `setPosition`, `setRotation` and")
 A("`setScale` still write the transform and teleport, exactly like")

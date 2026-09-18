@@ -10,8 +10,17 @@
 //   CharacterController  Move() — the controller's own capsule sweep resolves
 //                        slopes, steps and walls.
 //   Rigidbody(2D)        dynamic   -> velocity is set; the physics solver
-//                        resolves every contact and gravity/drag/mass keep
-//                        working. A 3D body keeps its vertical velocity.
+//                        resolves every contact, and drag/mass keep working.
+//                        GRAVITY KEEPS ITS AXIS: on a body with gravity on
+//                        (useGravity / gravityScale != 0) the goal drives the
+//                        HORIZONTAL plane only and velocity.y is left to the
+//                        solver, so a dropped body falls at Unity's gravity
+//                        (9.81 m/s^2 by default) and lands — it is never
+//                        lifted to the goal's height, and ARRIVAL is measured
+//                        in that same plane (a grounded chaser settles around
+//                        its target instead of pressing into its centre). With
+//                        gravity off nothing else drives the vertical axis, so
+//                        the goal drives all three (flying/hovering agents).
 //                        kinematic -> MovePosition(), Unity's kinematic move
 //                        API (docs: "Moves the kinematic Rigidbody towards
 //                        position"). Unity also documents that collisions do
@@ -404,13 +413,52 @@ namespace MyFSM.Unity
         private static void DriveVelocity(MotionContext ctx, Vector3 dir, float dist, float dt,
                                           float speed)
         {
-            float want = Mathf.Min(speed, dist / Mathf.Max(dt, 1e-6f));
             if (ctx.Body != null)
             {
-                Vector3 v = ctx.Body.velocity;
-                ctx.Body.velocity = new Vector3(dir.x * want, v.y, dir.z * want);
+                if (ctx.Body.useGravity)
+                {
+                    // Gravity owns the vertical axis. The goal drives the target's
+                    // XZ only and velocity.y is left exactly as the solver left it,
+                    // so the body falls at Unity's gravity and lands instead of
+                    // being lifted to (or held at) the goal's height — the same
+                    // split a NavMeshAgent uses walking the ground.
+                    Vector3 planar = new Vector3(dir.x, 0f, dir.z);
+                    float planarMag = planar.magnitude;   // sin(angle from vertical)
+                    if (planarMag < 1e-4f)
+                    {
+                        // Directly above/below the goal: gravity does all of it.
+                        ctx.Body.velocity = new Vector3(0f, ctx.Body.velocity.y, 0f);
+                        return;
+                    }
+                    float planarWant = Mathf.Min(speed, dist * planarMag / Mathf.Max(dt, 1e-6f));
+                    Vector3 planarDir = planar / planarMag;
+                    ctx.Body.velocity = new Vector3(planarDir.x * planarWant,
+                                                    ctx.Body.velocity.y,
+                                                    planarDir.z * planarWant);
+                    return;
+                }
+                // Gravity off: nothing else drives the vertical axis, so the goal
+                // drives all three (a flying or hovering agent).
+                ctx.Body.velocity = dir * Mathf.Min(speed, dist / Mathf.Max(dt, 1e-6f));
                 return;
             }
+            // 2D twin of the same rule: gravityScale 0 is the usual top-down case
+            // (the goal drives both axes); with gravity on, Unity keeps the
+            // vertical axis and the goal drives X.
+            if (ctx.Body2D.gravityScale != 0f)
+            {
+                float magX = Mathf.Abs(dir.x);
+                if (magX < 1e-4f)
+                {
+                    ctx.Body2D.velocity = new Vector2(0f, ctx.Body2D.velocity.y);
+                    return;
+                }
+                float planarWant2 = Mathf.Min(speed, dist * magX / Mathf.Max(dt, 1e-6f));
+                ctx.Body2D.velocity = new Vector2(dir.x / magX * planarWant2,
+                                                  ctx.Body2D.velocity.y);
+                return;
+            }
+            float want = Mathf.Min(speed, dist / Mathf.Max(dt, 1e-6f));
             ctx.Body2D.velocity = new Vector2(dir.x * want, dir.y * want);
         }
 
@@ -431,6 +479,20 @@ namespace MyFSM.Unity
             }
             if (ctx.Driver == MotionDriver.NavMeshAgent && ctx.Nav != null)
                 ctx.Nav.isStopped = true;
+        }
+
+        /// <summary>
+        /// True when the goal must be treated as a horizontal-plane problem: a
+        /// dynamic body whose gravity is on cannot be lifted or held by the goal,
+        /// so the vertical component of the step is not the goal's to measure.
+        /// </summary>
+        private static bool GravityOwnsVertical(MotionContext ctx, MoveGoal goal)
+        {
+            if (goal.Is2D)
+                return ctx.Driver == MotionDriver.Rigidbody2D && ctx.Body2D != null &&
+                       !ctx.Kinematic && ctx.Body2D.gravityScale != 0f;
+            return ctx.Driver == MotionDriver.Rigidbody && ctx.Body != null &&
+                   !ctx.Kinematic && ctx.Body.useGravity;
         }
 
         private static bool CloseEnough(Vector3 a, Vector3 b, float within, bool is2D)
@@ -523,6 +585,13 @@ namespace MyFSM.Unity
             Vector3 ownerPos = ctx.Owner != null ? ctx.Owner.position : pos;
             Vector3 to = dest - pos;
             if (goal.Is2D) to.z = 0f;
+            // Gravity-driven dynamic body: the goal cannot own the vertical axis
+            // (gravity does — see DriveVelocity), so the step is measured in the
+            // horizontal plane. Arrival then means "under the goal": a grounded
+            // chaser settles around its target instead of driving into the
+            // target's centre forever, and the FSM's hasReachedDestination turns
+            // true when it has actually arrived in the plane it can move in.
+            if (GravityOwnsVertical(ctx, goal)) to.y = 0f;
             float dist = to.magnitude;
             if (dist <= goal.StopDistance)
             {

@@ -43,12 +43,17 @@ public sealed partial class ChaserAI
         }
         else
         {
-            // Leave the slot unbound rather than binding the cube to itself: the
-            // module would then chase its own position. The error is loud on
-            // purpose — a stress test with no target measures nothing.
-            Debug.LogWarning("[chaser] no player target for " + name
-                             + " — set ChaserAI.Player or create an object named '"
-                             + playerName + "' before spawning.", this);
+            // Bind the cube to ITSELF instead of leaving the slot unbound, and
+            // say so as an error. An unresolved handle makes getPosition(...)
+            // return (0,0,0), so a chaser with no player would walk to the WORLD
+            // ORIGIN — the centre of the plane — which reads as the scene having
+            // its own gravity well. Chasing yourself keeps it standing still.
+            Bind(Slot_player, gameObject);
+            Debug.LogError("[chaser] no player target for " + name
+                           + " — set ChaserAI.Player or create an object named '"
+                           + playerName + "' before spawning. Until then this cube "
+                           + "stands still (without a target it would otherwise walk to "
+                           + "the world origin).", this);
         }
     }
 }

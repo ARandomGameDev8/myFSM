@@ -176,6 +176,12 @@ namespace MyFSM.Tests
         private int _lastRegistered;
         private bool _warnedNoGravity;
         private Transform _ground;
+        private PlayerController _playerController;
+        private Vector3 _lastPlayerPosition;
+        private bool _hasLastPlayerPosition;
+        private int _driftFrames;
+        private float _driftDistance;
+        private bool _driftReported;
         private long _lastCalls;
         private bool _wroteFiles;
 
@@ -186,7 +192,9 @@ namespace MyFSM.Tests
             EnsureGround();
             ChaserAI.Player = ResolvePlayer();
             ConfigurePlayerBounds();
+            HardenPlayer();
             SetUpCamera();
+            if (player != null) _playerController = player.GetComponent<PlayerController>();
         }
 
         /// <summary>
@@ -200,6 +208,153 @@ namespace MyFSM.Tests
             if (controller == null) return;
             controller.halfExtent = Mathf.Max(5f, groundSize * 0.5f - 5f);
             controller.height = playerHeight * 0.5f;
+        }
+
+        /// <summary>
+        /// Makes sure the player cannot be dragged around by the crowd, and says
+        /// what it found.
+        ///
+        /// A player is the one object in this test that must never be moved by
+        /// the simulation: it is the target every chaser aims at, so if physics
+        /// can push it, thousands of dynamic cubes squeeze it into the middle of
+        /// the mob and the "player" wanders on its own. Unity's rule for that is
+        /// a KINEMATIC body — "collisions do not affect a kinematic body" — so the
+        /// crowd can block the player but never move it. The controller then walks
+        /// it with Rigidbody.MovePosition.
+        ///
+        /// It also names any FSM AI sitting on the player, because an AI ticks
+        /// every frame and drives its own object towards its own goal: if one is
+        /// on the player, the player is dragged there whenever WASD is released.
+        /// </summary>
+        private void HardenPlayer()
+        {
+            if (player == null) return;
+
+            AIInstance[] ais = player.GetComponentsInChildren<AIInstance>(true);
+            if (ais.Length > 0)
+            {
+                string names = "";
+                for (int i = 0; i < ais.Length; i++)
+                    names += (i > 0 ? ", " : "") + ais[i].GetType().Name + " on '"
+                             + ais[i].gameObject.name + "'";
+                Debug.LogError("[stress] the player object carries " + ais.Length
+                               + " myFSM AI component(s): " + names + ". An AI drives its"
+                               + " own object towards its own goal every tick, so the player"
+                               + " will be dragged towards that goal whenever you stop"
+                               + " pressing WASD. Remove the AI from the player (the player"
+                               + " is meant to be moved by keys only).", player);
+            }
+
+            Rigidbody body = player.GetComponent<Rigidbody>();
+            CharacterController controller = player.GetComponent<CharacterController>();
+            if (body != null)
+            {
+                if (!body.isKinematic)
+                {
+                    // Dynamic player: the crowd pushes it around. Unity's answer is
+                    // a kinematic body, so switch it and say so.
+                    body.velocity = Vector3.zero;
+                    body.angularVelocity = Vector3.zero;
+                    body.useGravity = false;
+                    body.isKinematic = true;
+                    Debug.LogWarning("[stress] the player had a DYNAMIC Rigidbody — "
+                                     + "switched it to kinematic so the crowding cubes "
+                                     + "cannot push it around (they can still block it). "
+                                     + "Remove that body, or keep it kinematic, if you "
+                                     + "want no surprises.", player);
+                }
+                else if (body.useGravity)
+                {
+                    body.useGravity = false;
+                    Debug.Log("[stress] player Rigidbody is kinematic with gravity on — "
+                              + "gravity does nothing to a kinematic body; switched it off "
+                              + "so the setup matches Unity's rules.", player);
+                }
+                return;
+            }
+            if (controller != null)
+            {
+                Debug.Log("[stress] player uses a CharacterController: it is not pushed "
+                          + "by rigidbodies, and the controller resolves its own collisions.",
+                          player);
+                return;
+            }
+
+            // No body at all: give it a kinematic one. Nothing can push it, and the
+            // crowd collides against a real body instead of static geometry that is
+            // teleported every frame.
+            Rigidbody added = player.gameObject.AddComponent<Rigidbody>();
+            added.isKinematic = true;
+            added.useGravity = false;
+            added.interpolation = RigidbodyInterpolation.Interpolate;
+            Debug.Log("[stress] player had no Rigidbody — added a KINEMATIC one so the "
+                      + "crowd can block the player but never push or drag it.", player);
+        }
+
+        /// <summary>
+        /// Spots a player that moves without the keys and says what is moving it.
+        ///
+        /// The player is the one object in this scene that nothing but WASD is
+        /// allowed to move. If it drifts while no key is held — physics pushing a
+        /// dynamic body, or an FSM AI standing on the player and driving it
+        /// towards its own goal — this reports it once, with the distance, so the
+        /// cause is named instead of guessed. A few frames of interpolation after
+        /// the last key press are ignored.
+        /// </summary>
+        private void WatchPlayerDrift()
+        {
+            Transform who = ChaserAI.Player;
+            if (who == null) return;
+
+            Vector3 now = who.position;
+            if (!_hasLastPlayerPosition)
+            {
+                _hasLastPlayerPosition = true;
+                _lastPlayerPosition = now;
+                return;
+            }
+            float moved = Vector3.Distance(now, _lastPlayerPosition);
+            _lastPlayerPosition = now;
+
+            if (_playerController != null && _playerController.Moving)
+            {
+                // The keys are driving it: expected movement.
+                _driftFrames = 0;
+                _driftDistance = 0f;
+                return;
+            }
+            if (moved < 0.005f) return;
+
+            _driftFrames++;
+            _driftDistance += moved;
+            if (_driftReported || _driftFrames < 10 || _driftDistance < 0.5f) return;
+
+            _driftReported = true;
+            string what = DescribeBody(who);
+            AIInstance[] ais = who.GetComponentsInChildren<AIInstance>(true);
+            string aiNote = ais.Length == 0
+                ? "No myFSM AI is on the player."
+                : "myFSM AI component(s) on the player: " + ais.Length
+                  + " — an AI drives its own object towards its own goal every tick, "
+                  + "so remove it from the player.";
+            Debug.LogError("[stress] the player moved " + _driftDistance.ToString("F2")
+                           + " m while NO movement key was held. Something other than the "
+                           + "keys owns it. Body: " + what + ". " + aiNote
+                           + " Expected: a kinematic body (nothing can push it) and no AI."
+                           , who);
+        }
+
+        /// <summary>One line for the startup log: what the player's motion comes from.</summary>
+        private static string DescribeBody(Transform who)
+        {
+            if (who == null) return "nothing";
+            Rigidbody body = who.GetComponent<Rigidbody>();
+            if (body != null)
+                return body.isKinematic ? "kinematic Rigidbody (cannot be pushed)"
+                                        : "DYNAMIC Rigidbody (can be pushed — see the warning)";
+            if (who.GetComponent<CharacterController>() != null)
+                return "CharacterController (cannot be pushed)";
+            return "no body";
         }
 
         private void SetUpCamera()
@@ -284,6 +439,23 @@ namespace MyFSM.Tests
                 Debug.LogError("[stress] no readable keyboard input: " + StressInput.Backend + ". "
                                + StressInput.Fix, this);
 
+            if (ChaserAI.Player == null)
+            {
+                Debug.LogError("[stress] the chasers have NO target: the player object was "
+                               + "not found and not created. Every spawned cube would drive "
+                               + "towards the world origin (0,0,0) — the centre of the plane "
+                               + "— because getPosition() of an unbound handle is (0,0,0). "
+                               + "Give the 'player' field a Transform, or put an object named "
+                               + "'Player' in the scene.", this);
+            }
+            else
+            {
+                Debug.Log("[stress] player '" + ChaserAI.Player.name + "': "
+                          + DescribeBody(ChaserAI.Player)
+                          + ", WASD via PlayerController. The crowd chases it; nothing can "
+                          + "push it.", ChaserAI.Player);
+            }
+
             // Opt-in only (spawnOnStart is 0 by default): the test does not put AIs in
             // the scene behind your back, it only answers what you ask it to spawn.
             if (spawnOnStart > 0) Spawn(spawnOnStart);
@@ -306,6 +478,7 @@ namespace MyFSM.Tests
             }
 
             HandleInput();
+            WatchPlayerDrift();
             DetectSlowdown();
 
             _frameCounter++;

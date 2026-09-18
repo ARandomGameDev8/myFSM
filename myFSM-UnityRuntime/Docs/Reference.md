@@ -61,6 +61,18 @@ collision maths in the runtime at all:
 | `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |
 | nothing at all | none | no — the step goes to the transform |
 
+Dynamic bodies split the axes: **gravity keeps the vertical, the goal keeps
+the horizontal.** A body with gravity on (`useGravity`, or a non-zero
+`gravityScale` in 2D) has its XZ velocity driven towards the goal at the
+requested speed while its vertical velocity is left exactly as the solver
+left it — a body dropped from the air falls at Unity's gravity (9.81 m/s²
+by default), lands, and is never lifted to the goal's height. That is the
+same split a `NavMeshAgent` uses walking the ground, and arrival is measured
+in that same plane: a gravity-driven body has arrived when it is under the
+goal horizontally, so a grounded chaser settles around its target instead of
+pressing into its centre. With gravity off nothing else owns the vertical
+axis, so the goal drives all three — what a flying or hovering agent wants.
+
 Direct position changes are untouched: `setPosition`, `setRotation` and
 `setScale` still write the transform and teleport, exactly like
 `transform.position` does in Unity. Only goal-driven movement is routed
@@ -234,7 +246,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0601` | `findPath(Vector2 from, Vector2 to) -> int` | 1 |  |
 | `0x0602` | `getNextWaypoint(int path) -> Vector3` | 1 | Pops the next corner of a path id. Past the end it returns the last corner forever (no error). |
 | `0x0603` | `getPathLength(int path) -> float` | 1 | Total length of the stored polyline; 0 for an unknown path (logs an error). |
-| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. |
+| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is "there" when it is under the target. |
 | `0x0605` | `hasReachedDestination(NavMeshAgent agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0606` | `hasReachedDestination(Object3D agent, Vector3 tgt) -> bool` | 1 |  |
 | `0x0607` | `hasReachedDestination(Object3D agent, Object3D tgt) -> bool` | 1 |  |
@@ -266,7 +278,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0621` | `sprintTowards(Object3D agent, Object3D dest, float speedMult) -> void` | 3 |  |
 | `0x0622` | `sprintTowards(Object2D agent, Vector2 dest, float speedMult) -> void` | 3 |  |
 | `0x0623` | `sprintTowards(Object2D agent, Object2D dest, float speedMult) -> void` | 3 |  |
-| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. |
+| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). |
 | `0x0625` | `moveTowards(NavMeshAgent agent, Object3D dest, float speed) -> void` | 3 |  |
 | `0x0626` | `moveTowards(Object3D agent, Vector3 dest, float speed) -> void` | 3 |  |
 | `0x0627` | `moveTowards(Object3D agent, Object3D dest, float speed) -> void` | 3 |  |

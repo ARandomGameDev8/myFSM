@@ -96,7 +96,7 @@ everything:
 |---|---|---|
 | `NavMeshAgent` (enabled, on the mesh) | `SetDestination` | yes — via the NavMesh |
 | `CharacterController` | `Move(motion)` | **yes** — its own capsule sweep handles slopes, steps and walls |
-| `Rigidbody` / `Rigidbody2D`, **dynamic** | `velocity` is set each tick | **yes** — the physics solver resolves every contact, and mass, drag and gravity keep working (a 3D body keeps its vertical velocity) |
+| `Rigidbody` / `Rigidbody2D`, **dynamic** | `velocity` is set each tick | **yes** — the physics solver resolves every contact, and mass and drag keep working. **Gravity keeps the vertical axis:** with gravity on, the goal drives the horizontal plane only (velocity.y is never written) and arrival is measured there too, so a dropped body falls at Unity's gravity and lands; with gravity off the goal drives all three axes |
 | `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"* |
 | `Collider` / `Collider2D`, no body | *(none exists)* | **no** — a collider on its own is static geometry; the runtime warns once and says what to add |
 | nothing at all | *(none)* | no — the step is written to the transform |
@@ -107,6 +107,16 @@ rotation frozen, or a `CharacterController`. Those are the component sets Unity
 provides a collision-resolving move for. The dynamic body is the closest to "it
 just works": the runtime sets its velocity towards the goal each tick and Unity
 does the rest.
+
+**Gravity decides who owns the vertical axis.** With `useGravity` on, the goal
+never touches `velocity.y`: the body falls at Unity's gravity (9.81 m/s² by
+default), lands, and is never lifted to — or held at — the goal's height, and
+`hasReachedDestination` measures the horizontal plane. That is what a walker or
+a falling chaser wants. With gravity off nothing else drives the vertical axis,
+so the goal drives all three, which is what a flying or hovering agent wants. A
+body the goal must *not* move vertically should therefore keep gravity on; a
+body that must be held at a height should have gravity off and something else
+(gravity, drag, or a counter-force) providing the rest.
 
 `setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
 they write the transform directly and teleport, exactly like `transform.position`
