@@ -123,6 +123,9 @@ namespace MyFSM.Tests
         public float slowdownHoldSeconds = 1.5f;
         [Tooltip("Never pause before this many cubes exist.")]
         public int minimumCountForStop = 100;
+        [Tooltip("Print one line about the crowd (count, mean/nearest distance to the "
+                 + "player) every N seconds. 0 = never.")]
+        public float logCrowdEverySeconds = 5f;
 
         public class SpawnRecord
         {
@@ -171,6 +174,8 @@ namespace MyFSM.Tests
         private long _lastCalls;
         private int _lastRegistered;
         private bool _wroteFiles;
+        private PlayerController _wasd;
+        private float _nextCrowdLog;
         private bool _loggedPlayer;
         private int _verifyTries;
         private bool _verifiedTarget;
@@ -225,28 +230,45 @@ namespace MyFSM.Tests
         {
             if (player != null) return ConfigureKnownPlayer(player);
 
-            GameObject found = GameObject.Find("Player");
-            if (found == null)
+            GameObject named = GameObject.Find("Player");
+            PlayerController wasd = FindObjectOfType<PlayerController>();
+
+            // The object you drive is the object with the WASD controller on it. If a
+            // different object happens to be called "Player", say so loudly: chasing
+            // the one at the origin while you drive the other one is exactly what
+            // "everything is being pulled to the middle" looks like.
+            if (wasd != null)
             {
-                PlayerController existing = FindObjectOfType<PlayerController>();
-                if (existing != null)
+                if (named != null && named.transform != wasd.transform)
                 {
-                    Debug.Log("[stress] using the existing WASD object '" + existing.name
-                              + "' as the player.", existing);
-                    return ConfigureKnownPlayer(existing.transform);
+                    Debug.LogWarning("[stress] two player candidates: '" + named.name
+                                     + "' (named 'Player', NOT driven) and '" + wasd.name
+                                     + "' (has a PlayerController). Using the one you drive: '"
+                                     + wasd.name + "'. Rename or delete the other one.", wasd);
                 }
+                else
+                {
+                    Debug.Log("[stress] using the existing WASD object '" + wasd.name
+                              + "' as the player.", wasd);
+                }
+                return ConfigureKnownPlayer(wasd.transform);
             }
-            if (found == null)
+
+            if (named != null)
             {
-                if (!createPlayerIfMissing)
-                {
-                    Debug.LogError("[stress] no player: assign one, name it 'Player', or set "
-                                   + "createPlayerIfMissing.", this);
-                    return null;
-                }
-                found = CreatePlayer();
+                Debug.LogWarning("[stress] using the object named 'Player' ('" + named.name
+                                 + "') — it has no PlayerController, so nothing in this test "
+                                 + "will move it.", named);
+                return ConfigureKnownPlayer(named.transform);
             }
-            return ConfigureKnownPlayer(found.transform);
+
+            if (!createPlayerIfMissing)
+            {
+                Debug.LogError("[stress] no player: assign one, name it 'Player', or set "
+                               + "createPlayerIfMissing.", this);
+                return null;
+            }
+            return ConfigureKnownPlayer(CreatePlayer().transform);
         }
 
         private Transform ConfigureKnownPlayer(Transform who)
@@ -308,6 +330,7 @@ namespace MyFSM.Tests
             if (player != null && !_loggedPlayer)
             {
                 _loggedPlayer = true;
+                _wasd = player.GetComponent<PlayerController>();
                 Debug.Log("[stress] player '" + player.name + "': "
                           + DescribeBody(player) + ", driven by WASD only"
                           + (StressInput.Available
@@ -465,6 +488,7 @@ namespace MyFSM.Tests
             VerifyFirstChaser();
             HandleInput();
             DetectSlowdown();
+            LogCrowd();
 
             _frameCounter++;
             if (sampleEveryFrames > 0 && _frameCounter >= sampleEveryFrames)
@@ -547,6 +571,38 @@ namespace MyFSM.Tests
             Debug.Log("[stress] cube #1 chases '" + ai.BoundTarget.name + "' ("
                       + distance.ToString("F1") + " m away), slot 'player' bound and booted "
                       + "as instance " + ai.InstanceId + ".", _spawned[0]);
+        }
+
+        /// <summary>
+        /// One line every few seconds saying where the crowd is relative to the
+        /// player. Small and stable = the chase works; growing while you walk = the
+        /// crowd is not following, and the [chaser]/[stress] lines above say why.
+        /// </summary>
+        private void LogCrowd()
+        {
+            if (logCrowdEverySeconds <= 0f || player == null || _spawned.Count == 0) return;
+            if (Time.unscaledTime < _nextCrowdLog) return;
+            _nextCrowdLog = Time.unscaledTime + logCrowdEverySeconds;
+
+            Vector3 playerPosition = player.position;
+            float sum = 0f;
+            float nearest = float.MaxValue;
+            int counted = 0;
+            for (int i = 0; i < _spawned.Count; i++)
+            {
+                GameObject cube = _spawned[i];
+                if (cube == null) continue;
+                float distance = Vector3.Distance(cube.transform.position, playerPosition);
+                sum += distance;
+                if (distance < nearest) nearest = distance;
+                counted++;
+            }
+            if (counted == 0) return;
+
+            Debug.Log("[stress] crowd: " + counted + " cubes, mean "
+                      + (sum / counted).ToString("F1") + " m from the player, nearest "
+                      + nearest.ToString("F1") + " m"
+                      + (_wasd != null && _wasd.Moving ? " (you are walking)" : ""), this);
         }
 
         private void DetectSlowdown()

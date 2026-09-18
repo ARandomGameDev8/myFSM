@@ -17,7 +17,10 @@
 // lets Unity keep the vertical axis: the cube falls, lands and runs, and it is
 // never lifted or held at the player's height.
 
-const float chaseSpeed = 6.0f;
+// Faster than the player (PlayerController.speed = 8): a crowd that is slower than
+// what it chases never catches up, and the ones at the back stay jammed where they
+// were - which looks like everything being stuck to one spot.
+const float chaseSpeed = 10.0f;
 
 var Object3D self;    // slot 0 - the spawned cube
 var Object3D player;  // slot 1 - the WASD target (same type: bind both by hand)

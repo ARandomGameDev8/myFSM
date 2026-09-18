@@ -16,7 +16,7 @@
    [7]  FSM        0x000000DA .. 0x000000E8   14 B   1
 
  SECTION [1] GLOBAL VARIABLES (1)
-   #0  chaseSpeed      float         = 6f
+   #0  chaseSpeed      float         = 10f
 
  SECTION [2] RUNTIME VARIABLES (2)
    #0  self            Object3D              slot 0
