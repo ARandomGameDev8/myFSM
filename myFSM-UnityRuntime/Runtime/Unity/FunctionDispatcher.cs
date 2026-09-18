@@ -90,7 +90,14 @@ namespace MyFSM.Unity
             UnityEngine.Object o = Handles.Resolve(h.HandleId);
             if (o == null)
             {
-                exec.Log.Error(fn + ": null handle");
+                // Once per function per AI: an unbound slot is re-read every tick, and
+                // a scene with hundreds of AIs would bury the console otherwise. Note
+                // for callers — this returning null is NOT "the origin": functions that
+                // read a position return an invalid (NaN) vector so nothing can quietly
+                // aim at (0,0,0) (see ObjectFunctions.InvalidPosition).
+                ErrorOnce(exec, "nullhandle:" + fn,
+                          fn + ": the object handle is null — that slot was never bound, or the "
+                          + "object was destroyed. Nothing is applied to it.");
                 return null;
             }
             GameObject go = o as GameObject;
@@ -99,7 +106,10 @@ namespace MyFSM.Unity
                 Component c = o as Component;
                 if (c != null) go = c.gameObject;
             }
-            if (go == null) exec.Log.Error(fn + ": handle is not a scene object");
+            if (go == null)
+                ErrorOnce(exec, "notsceneobject:" + fn,
+                          fn + ": the bound object is not a scene object (bind a "
+                          + "GameObject or a Component).");
             return go;
         }
 
@@ -108,7 +118,14 @@ namespace MyFSM.Unity
             UnityEngine.Object o = Handles.Resolve(h.HandleId);
             if (o == null)
             {
-                exec.Log.Error(fn + ": null handle");
+                // Once per function per AI: an unbound slot is re-read every tick, and
+                // a scene with hundreds of AIs would bury the console otherwise. Note
+                // for callers — this returning null is NOT "the origin": functions that
+                // read a position hand back an invalid (NaN) vector, so nothing can
+                // quietly aim at (0,0,0) (see ObjectFunctions.InvalidPosition).
+                ErrorOnce(exec, "nullhandle:" + fn,
+                          fn + ": the object handle is null — that slot was never bound, or the "
+                          + "object was destroyed. Nothing is applied to it.");
                 return null;
             }
             Transform t = o as Transform;
@@ -117,8 +134,56 @@ namespace MyFSM.Unity
             if (go != null) return go.transform;
             Component c = o as Component;
             if (c != null) return c.transform;
-            exec.Log.Error(fn + ": handle has no transform");
+            ErrorOnce(exec, "notransform:" + fn,
+                      fn + ": the bound object has no Transform (bind a GameObject or a "
+                      + "Component, not a resource).");
             return null;
+        }
+
+        /// <summary>
+        /// A world-space position that has no answer because its source is not there
+        /// (unbound slot, destroyed object, unknown path id, no camera): an INVALID
+        /// (NaN) vector, never (0,0,0).
+        ///
+        /// (0,0,0) is the world origin — a perfectly good coordinate — so returning it
+        /// for "nothing there" silently aims the caller at the centre of the scene.
+        /// That is how an unbound slot becomes an invisible gravity well: every AI
+        /// holding one marched to the middle of the plane, and (when the same slot
+        /// drove a player-shaped object) so did that. NaN cannot be mistaken for a
+        /// place: it propagates through arithmetic, every comparison is false, and the
+        /// movement calls refuse it with an error of their own (see PostPoint), so the
+        /// object simply stays where it is.
+        ///
+        /// Logged once per function per AI — these fire every tick otherwise.
+        /// </summary>
+        public static FsmValue InvalidPosition3(AiExecution exec, string fn)
+        {
+            if (exec != null)
+                exec.ErrorOnce("invalidpos3:" + fn,
+                               fn + ": no live source to read a position from, so the position "
+                               + "is unknown. Returning an INVALID (NaN) vector rather than "
+                               + "(0,0,0), which is the WORLD ORIGIN — using it would send the "
+                               + "caller to the centre of the scene. Bind the slot (or check it) "
+                               + "before reading.");
+            return FsmValue.MakeVec3(float.NaN, float.NaN, float.NaN);
+        }
+
+        /// <summary>2D twin of <see cref="InvalidPosition3"/>.</summary>
+        public static FsmValue InvalidPosition2(AiExecution exec, string fn)
+        {
+            if (exec != null)
+                exec.ErrorOnce("invalidpos2:" + fn,
+                               fn + ": no live source to read a position from, so the position "
+                               + "is unknown. Returning an INVALID (NaN) vector rather than "
+                               + "(0,0), which is the WORLD ORIGIN. Bind the slot (or check it) "
+                               + "before reading.");
+            return FsmValue.MakeVec2(float.NaN, float.NaN);
+        }
+
+        /// <summary>Per-AI one-shot error (see AiExecution.ErrorOnce).</summary>
+        private static void ErrorOnce(AiExecution exec, string key, string message)
+        {
+            if (exec != null) exec.ErrorOnce(key, message);
         }
 
         /// <summary>
@@ -132,7 +197,14 @@ namespace MyFSM.Unity
             UnityEngine.Object o = Handles.Resolve(h.HandleId);
             if (o == null)
             {
-                exec.Log.Error(fn + ": null handle");
+                // Once per function per AI: an unbound slot is re-read every tick, and
+                // a scene with hundreds of AIs would bury the console otherwise. Note
+                // for callers — this returning null is NOT "the origin": functions that
+                // read a position hand back an invalid (NaN) vector, so nothing can
+                // quietly aim at (0,0,0) (see ObjectFunctions.InvalidPosition).
+                ErrorOnce(exec, "nullhandle:" + fn,
+                          fn + ": the object handle is null — that slot was never bound, or the "
+                          + "object was destroyed. Nothing is applied to it.");
                 return null;
             }
             T direct = o as T;

@@ -32,14 +32,14 @@ namespace MyFSM.Unity
         private static FsmValue GetPosition3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Camera cam = d.ResolveComponent<Camera>(args[0], exec, "getPosition");
-            if (cam == null) return FsmValue.MakeVec3(0f, 0f, 0f);
+            if (cam == null) return FunctionDispatcher.InvalidPosition3(exec, "getPosition");
             return FsmConvert.FromV3(cam.transform.position);
         }
 
         private static FsmValue GetPosition2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Camera cam = d.ResolveComponent<Camera>(args[0], exec, "getPosition");
-            if (cam == null) return FsmValue.MakeVec2(0f, 0f);
+            if (cam == null) return FunctionDispatcher.InvalidPosition2(exec, "getPosition");
             return FsmValue.MakeVec2(cam.transform.position.x, cam.transform.position.y);
         }
 
@@ -56,7 +56,7 @@ namespace MyFSM.Unity
         private static FsmValue ScreenToWorld3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Camera cam = d.ResolveComponent<Camera>(args[0], exec, "screenToWorld");
-            if (cam == null) return FsmValue.MakeVec3(0f, 0f, 0f);
+            if (cam == null) return FunctionDispatcher.InvalidPosition3(exec, "screenToWorld");
             Vector3 screen = new Vector3(args[1].X, args[1].Y, cam.nearClipPlane + 1f);
             return FsmConvert.FromV3(cam.ScreenToWorldPoint(screen));
         }
@@ -64,7 +64,7 @@ namespace MyFSM.Unity
         private static FsmValue ScreenToWorld2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Camera cam = d.ResolveComponent<Camera>(args[0], exec, "screenToWorld");
-            if (cam == null) return FsmValue.MakeVec2(0f, 0f);
+            if (cam == null) return FunctionDispatcher.InvalidPosition2(exec, "screenToWorld");
             Vector3 screen = new Vector3(args[1].X, args[1].Y, cam.nearClipPlane + 1f);
             Vector3 world = cam.ScreenToWorldPoint(screen);
             return FsmValue.MakeVec2(world.x, world.y);

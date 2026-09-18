@@ -254,7 +254,7 @@ namespace MyFSM.Unity
         private static FsmValue Pursuit3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "getPursuitPosition");
-            if (t == null) return FsmValue.MakeVec3(0f, 0f, 0f);
+            if (t == null) return FunctionDispatcher.InvalidPosition3(exec, "getPursuitPosition");
             // One-second lead on the target's velocity (zero when still or
             // when no positive closing speed is given).
             Vector3 vel = Vector3.zero;
@@ -268,7 +268,7 @@ namespace MyFSM.Unity
         private static FsmValue Pursuit2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "getPursuitPosition");
-            if (t == null) return FsmValue.MakeVec2(0f, 0f);
+            if (t == null) return FunctionDispatcher.InvalidPosition2(exec, "getPursuitPosition");
             Vector2 vel = Vector2.zero;
             Rigidbody2D rb = t.gameObject.GetComponent<Rigidbody2D>();
             if (rb != null) vel = rb.velocity;

@@ -30,10 +30,10 @@ NOTES = {
 "magnitude":"Length of a vector.","random":"UnityEngine.Random.value — [0, 1).",
 "randomRange":"UnityEngine.Random.Range(lo, hi) — [lo, hi).",
 # --- Object (0x0100-0x0115) ---
-"getPosition":"transform.position. The 2D overload drops z (Vector2).",
+"getPosition":"transform.position. The 2D overload drops z (Vector2). An unbound or destroyed object gives an **invalid (NaN) position**, never (0,0,0) — a zero vector is the WORLD ORIGIN, so returning it would send callers to the centre of the scene. Nothing moves on a NaN position: see §2.",
 "getRotation":"transform.rotation as a Quaternion (3D only).",
 "getScale":"transform.localScale; 2D overload returns (x, y).",
-"setPosition":"Writes transform.position (Tier 2). Use it sparingly — it teleports.",
+"setPosition":"Writes transform.position (Tier 2). Use it sparingly — it teleports. A non-finite value (NaN/Infinity, e.g. read from an unbound slot) is refused with an error instead of being written into the transform.",
 "setRotation":"Writes transform.rotation (Tier 2).",
 "setScale":"Writes transform.localScale (Tier 2).",
 "distanceTo":"Distance between two objects; 2D compares only x/y.",
@@ -73,16 +73,16 @@ NOTES = {
 "worldToScreen":"Camera.WorldToScreenPoint — a world point → screen pixels (z carries depth).",
 "getViewport":"Camera pixelWidth/pixelHeight as a Vector2.",
 # --- Navigation (0x0600-0x062C) ---
-"findPath":"Stores a corner list and returns its **path id** (int). NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid.",
+"findPath":"Stores a corner list and returns its **path id** (int). A start or end that is not a finite position (NaN/Infinity, e.g. read from an unbound slot) stores nothing and returns the invalid id 0. NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid.",
 "getNextWaypoint":"Pops the next corner of a path id. Past the end it returns the last corner forever (no error).",
 "getPathLength":"Total length of the stored polyline; 0 for an unknown path (logs an error).",
-"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is \"there\" when it is under the target.",
-"goTo":"Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves.",
+"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is \"there\" when it is under the target. With an invalid (NaN) target every comparison is false, so it reads false rather than arrived-at-the-origin.",
+"goTo":"Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. A non-finite destination is refused (see moveTowards).",
 "follow":"Posts a FollowObject goal: re-reads the target's position every tick, so it chases a moving object forever. Stops at **half** the agent's stopping distance — the tighter of the two follow calls.",
 "findShortestPathAndMove":"Posts a corner queue (PathCorners) and walks it.",
 "followTarget":"Same as `follow` but stops at the **full** stopping distance, so it keeps the agent's normal stand-off instead of closing in.",
 "sprintTowards":"Point goal at **base speed × multiplier** (multiplier is the 3rd argument; negative clamps to 0).",
-"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2).",
+"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is.",
 "stopMovement":"Clears the goal (and stops a NavMeshAgent).",
 # --- Perception (0x0700-0x070D) ---
 "lookAt":"Posts a LookAt goal: gradual rotation toward the target. The goal is **retired within 0.5°**, so re-post it every tick to track a moving target. 2D uses +X as forward and rotates around Z.",
@@ -94,7 +94,7 @@ NOTES = {
 "getAllInRadius":"Returns an **int count** of colliders in the radius — it cannot be iterated. Use getNearestOfTag for an object.",
 # --- Steering (0x0800-0x0809) ---
 "getFleeDirection":"Normalized (from − threat) — the direction to run.",
-"getPursuitPosition":"Target position + its rigidbody velocity (a one-second lead) when the `speed` argument is positive **and** the target is actually moving; otherwise just the target's position. Aim at the returned point to intercept.",
+"getPursuitPosition":"Target position + its rigidbody velocity (a one-second lead) when the `speed` argument is positive **and** the target is actually moving; otherwise just the target's position. Aim at the returned point to intercept. An unbound target gives an invalid (NaN) position, never the origin.",
 "getSeparationVector":"Normalized sum of away-vectors to the N nearest neighbours inside the default separation radius (N is the 2nd argument, ≤ 0 returns zero).",
 "getArrivalVector":"Direction to the target scaled by min(dist / slowRadius, 1) — feed it to setVelocity or moveTowards for a smooth stop.",
 "getWanderVector":"Random planar **offset** of the given radius; it ignores its `pos` argument, so add it to a position.",
@@ -266,6 +266,18 @@ A("in that same plane: a gravity-driven body has arrived when it is under the")
 A("goal horizontally, so a grounded chaser settles around its target instead of")
 A("pressing into its centre. With gravity off nothing else owns the vertical")
 A("axis, so the goal drives all three — what a flying or hovering agent wants.")
+A("")
+A("**An unbound slot is never the origin.** A handle that was never bound (or a")
+A("target that has been destroyed) has no position, and the runtime says so")
+A("instead of inventing one: world-space reads — `getPosition`, camera")
+A("`getPosition`, `screenToWorld`, `getPursuitPosition`, an unknown")
+A("`getNextWaypoint` — return an **invalid (NaN)** vector, `setPosition` refuses")
+A("to write it, and `goTo`/`moveTowards`/`sprintTowards` refuse to post a goal")
+A("from it, so the agent stays where it is. Returning `(0,0,0)` instead — which")
+A("is what used to happen — silently aims the caller at the **world origin, the")
+A("centre of the scene**: every AI with an unbound target marched there, and an")
+A("object driven that way looked as if something was pulling it to the middle.")
+A("Each of these is reported once per AI (they fire every tick otherwise).")
 A("")
 A("Direct position changes are untouched: `setPosition`, `setRotation` and")
 A("`setScale` still write the transform and teleport, exactly like")

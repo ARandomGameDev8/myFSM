@@ -65,6 +65,30 @@ namespace MyFSM.Core
         public readonly ITimeProvider Time;
         public readonly IExecutionLog Log;
 
+        /// <summary>
+        /// Keys already reported through <see cref="ErrorOnce"/>/<see cref="WarnOnce"/>.
+        /// A misconfigured AI hits the same problem on EVERY tick, and there are as
+        /// many AIs as the scene holds: reporting each key once per AI keeps the
+        /// console readable while still naming every distinct mistake.
+        /// </summary>
+        private readonly HashSet<string> _onceKeys = new HashSet<string>();
+
+        /// <summary>Logs an error once per key (per AI). Returns true if it logged.</summary>
+        public bool ErrorOnce(string key, string message)
+        {
+            if (!_onceKeys.Add(key)) return false;
+            Log.Error(message);
+            return true;
+        }
+
+        /// <summary>Logs a warning once per key (per AI). Returns true if it logged.</summary>
+        public bool WarnOnce(string key, string message)
+        {
+            if (!_onceKeys.Add(key)) return false;
+            Log.Warn(message);
+            return true;
+        }
+
         private readonly Dictionary<uint, int> _astByOffset =
             new Dictionary<uint, int>();
         private readonly Dictionary<uint, int> _stateByOffset =

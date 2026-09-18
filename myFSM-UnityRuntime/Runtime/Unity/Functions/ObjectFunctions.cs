@@ -40,17 +40,25 @@ namespace MyFSM.Unity
             }
         }
 
+        /// <summary>True when every component is a real, usable number.</summary>
+        private static bool Finite(Vector3 v)
+        {
+            return !float.IsNaN(v.x) && !float.IsInfinity(v.x)
+                && !float.IsNaN(v.y) && !float.IsInfinity(v.y)
+                && !float.IsNaN(v.z) && !float.IsInfinity(v.z);
+        }
+
         private static FsmValue GetPosition3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "getPosition");
-            if (t == null) return FsmValue.MakeVec3(0f, 0f, 0f);
+            if (t == null) return FunctionDispatcher.InvalidPosition3(exec, "getPosition");
             return FsmConvert.FromV3(t.position);
         }
 
         private static FsmValue GetPosition2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "getPosition");
-            if (t == null) return FsmValue.MakeVec2(0f, 0f);
+            if (t == null) return FunctionDispatcher.InvalidPosition2(exec, "getPosition");
             return FsmValue.MakeVec2(t.position.x, t.position.y);
         }
 
@@ -78,20 +86,36 @@ namespace MyFSM.Unity
         private static FsmValue SetPosition3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "setPosition");
-            if (t != null) t.position = FsmConvert.ToV3(args[1]);
+            if (t == null) return FsmValue.Void;
+            Vector3 p = FsmConvert.ToV3(args[1]);
+            if (!Finite(p))
+            {
+                exec.ErrorOnce("setPosition:invalid",
+                               "setPosition: the value is not a finite position (NaN/Infinity) — "
+                               + "it was most likely read from an unbound slot. Not applied: a "
+                               + "NaN transform breaks the object in Unity.");
+                return FsmValue.Void;
+            }
+            t.position = p;
             return FsmValue.Void;
         }
 
         private static FsmValue SetPosition2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
             Transform t = d.ResolveTransform(args[0], exec, "setPosition");
-            if (t != null)
+            if (t == null) return FsmValue.Void;
+            Vector3 p = t.position;
+            p.x = args[1].X;
+            p.y = args[1].Y;
+            if (!Finite(p))
             {
-                Vector3 p = t.position;
-                p.x = args[1].X;
-                p.y = args[1].Y;
-                t.position = p;
+                exec.ErrorOnce("setPosition:invalid",
+                               "setPosition: the value is not a finite position (NaN/Infinity) — "
+                               + "it was most likely read from an unbound slot. Not applied: a "
+                               + "NaN transform breaks the object in Unity.");
+                return FsmValue.Void;
             }
+            t.position = p;
             return FsmValue.Void;
         }
 

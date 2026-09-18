@@ -118,6 +118,17 @@ body the goal must *not* move vertically should therefore keep gravity on; a
 body that must be held at a height should have gravity off and something else
 (gravity, drag, or a counter-force) providing the rest.
 
+**An unbound slot is never the origin.** A handle that was never bound (or a
+target that has been destroyed) has no position, and world-space reads say so
+instead of inventing one: `getPosition`, the camera's `getPosition`,
+`screenToWorld`, `getPursuitPosition` and an unknown `getNextWaypoint` return an
+**invalid (NaN)** vector, `setPosition` refuses to write one, and a
+`goTo`/`moveTowards`/`sprintTowards` goal posted from one is refused. The agent
+stays where it is, and the reason is logged once per AI. Returning `(0,0,0)`
+instead — the old behaviour — aims the caller at the **world origin, the centre
+of the scene**, which is indistinguishable from "something is pulling everything
+to the middle of the map".
+
 `setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
 they write the transform directly and teleport, exactly like `transform.position`
 in Unity. Only the goal-driven tier-3 calls are routed through the moves above.

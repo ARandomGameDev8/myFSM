@@ -139,12 +139,42 @@ namespace MyFSM.Unity
 
         private static FsmValue FindPath3(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
+            if (!Finite3(FsmConvert.ToV3(args[0])) || !Finite3(FsmConvert.ToV3(args[1])))
+            {
+                // NaN reaches here when a start/end was read from an unbound slot
+                // (see ObjectFunctions / FunctionDispatcher.InvalidPosition3). Asking
+                // the engine to path-find between imaginary points would be worse
+                // than refusing: no path is stored, and the id 0 is already invalid
+                // for getPathLength / findShortestPathAndMove.
+                exec.ErrorOnce("findpath:invalid",
+                               "findPath: start or end is not a finite position (NaN/Infinity) — "
+                               + "it was most likely read from an unbound slot. No path stored "
+                               + "(returns 0, which the path functions reject).");
+                return FsmValue.MakeInt(0);
+            }
             List<Vector3> corners = ComputeCorners3(FsmConvert.ToV3(args[0]), FsmConvert.ToV3(args[1]));
             return FsmValue.MakeInt(d.Paths.Alloc(corners));
         }
 
+        /// <summary>Every component a real number (the guard for engine-bound math).</summary>
+        private static bool Finite3(Vector3 v)
+        {
+            return !float.IsNaN(v.x) && !float.IsInfinity(v.x)
+                && !float.IsNaN(v.y) && !float.IsInfinity(v.y)
+                && !float.IsNaN(v.z) && !float.IsInfinity(v.z);
+        }
+
         private static FsmValue FindPath2(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
         {
+            if (!Finite3(new Vector3(args[0].X, args[0].Y, 0f)) ||
+                !Finite3(new Vector3(args[1].X, args[1].Y, 0f)))
+            {
+                exec.ErrorOnce("findpath:invalid",
+                               "findPath: start or end is not a finite position (NaN/Infinity) — "
+                               + "it was most likely read from an unbound slot. No path stored "
+                               + "(returns 0, which the path functions reject).");
+                return FsmValue.MakeInt(0);
+            }
             List<Vector3> corners = new List<Vector3>();
             corners.Add(new Vector3(args[0].X, args[0].Y, 0f));
             corners.Add(new Vector3(args[1].X, args[1].Y, 0f));
@@ -156,8 +186,12 @@ namespace MyFSM.Unity
             StoredPath p;
             if (!d.Paths.TryGet(args[0].I, out p) || p.Corners.Count == 0)
             {
-                exec.Log.Error("getNextWaypoint: unknown path");
-                return FsmValue.MakeVec3(0f, 0f, 0f);
+                exec.ErrorOnce("waypoint:unknownpath",
+                               "getNextWaypoint: unknown path id (findPath was never called, "
+                               + "or the id is 0). Returning an invalid (NaN) position instead of "
+                               + "(0,0,0) — the world origin is the centre of the scene, and a "
+                               + "caller moving towards it would look pulled there.");
+                return FunctionDispatcher.InvalidPosition3(exec, "getNextWaypoint");
             }
             int i = p.NextIndex;
             if (i >= p.Corners.Count) i = p.Corners.Count - 1; // exhausted: hold last
@@ -228,9 +262,31 @@ namespace MyFSM.Unity
         // Goals
         // ----------------------------------------------------------
 
+        /// <summary>
+        /// Posts a Point goal, refusing an invalid destination.
+        ///
+        /// A destination that is not a finite position can only come from a slot
+        /// that was never bound (see ObjectFunctions.InvalidPosition). Posting it
+        /// would have the movement system chase garbage; the old behaviour of
+        /// reading (0,0,0) out of an unbound slot sent every such agent to the
+        /// WORLD ORIGIN — the centre of the scene — which is exactly the "why is
+        /// everything pulled to the middle" symptom. Nothing is posted, and the
+        /// agent stays where it is.
+        /// </summary>
         private static void PostPoint(FunctionDispatcher d, FsmValue agent, Vector3 dest,
-                                      float speed, bool is2D)
+                                      float speed, bool is2D, string fn, AiExecution exec)
         {
+            if (float.IsNaN(dest.x) || float.IsInfinity(dest.x) ||
+                float.IsNaN(dest.y) || float.IsInfinity(dest.y) ||
+                float.IsNaN(dest.z) || float.IsInfinity(dest.z))
+            {
+                exec.ErrorOnce("postpoint:" + fn,
+                               fn + ": the destination is not a finite position (NaN/Infinity), "
+                               + "so no goal was posted and the agent is NOT sent anywhere. The "
+                               + "usual cause is a destination read from an unbound slot with "
+                               + "getPosition — bind that slot, or check it before using it.");
+                return;
+            }
             MoveGoal g = new MoveGoal();
             g.Mode = MoveMode.Point;
             g.Agent = agent;
@@ -248,7 +304,7 @@ namespace MyFSM.Unity
             Vector3 dest = is2D
                 ? new Vector3(args[1].X, args[1].Y, 0f)
                 : FsmConvert.ToV3(args[1]);
-            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]), is2D);
+            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]), is2D, "goTo", exec);
             return FsmValue.Void;
         }
 
@@ -257,7 +313,8 @@ namespace MyFSM.Unity
             if (d.ResolveTransform(args[0], exec, "goTo") == null) return FsmValue.Void;
             Transform tt = d.ResolveTransform(args[1], exec, "goTo");
             if (tt == null) return FsmValue.Void;
-            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]), Is2DAgent(args[0]));
+            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]), Is2DAgent(args[0]),
+                      "goTo", exec);
             return FsmValue.Void;
         }
 
@@ -331,7 +388,7 @@ namespace MyFSM.Unity
             Vector3 dest = is2D
                 ? new Vector3(args[1].X, args[1].Y, 0f)
                 : FsmConvert.ToV3(args[1]);
-            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]) * mult, is2D);
+            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]) * mult, is2D, "sprintTowards", exec);
             return FsmValue.Void;
         }
 
@@ -346,7 +403,8 @@ namespace MyFSM.Unity
                 exec.Log.Warn("sprintTowards: negative multiplier clamped to 0");
                 mult = 0f;
             }
-            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]) * mult, Is2DAgent(args[0]));
+            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]) * mult, Is2DAgent(args[0]),
+                      "sprintTowards", exec);
             return FsmValue.Void;
         }
 
@@ -363,7 +421,7 @@ namespace MyFSM.Unity
             Vector3 dest = is2D
                 ? new Vector3(args[1].X, args[1].Y, 0f)
                 : FsmConvert.ToV3(args[1]);
-            PostPoint(d, args[0], dest, speed, is2D);
+            PostPoint(d, args[0], dest, speed, is2D, "moveTowards", exec);
             return FsmValue.Void;
         }
 
@@ -378,7 +436,7 @@ namespace MyFSM.Unity
                 exec.Log.Warn("moveTowards: negative speed clamped to 0");
                 speed = 0f;
             }
-            PostPoint(d, args[0], tt.position, speed, Is2DAgent(args[0]));
+            PostPoint(d, args[0], tt.position, speed, Is2DAgent(args[0]), "moveTowards", exec);
             return FsmValue.Void;
         }
 

@@ -73,6 +73,18 @@ goal horizontally, so a grounded chaser settles around its target instead of
 pressing into its centre. With gravity off nothing else owns the vertical
 axis, so the goal drives all three — what a flying or hovering agent wants.
 
+**An unbound slot is never the origin.** A handle that was never bound (or a
+target that has been destroyed) has no position, and the runtime says so
+instead of inventing one: world-space reads — `getPosition`, camera
+`getPosition`, `screenToWorld`, `getPursuitPosition`, an unknown
+`getNextWaypoint` — return an **invalid (NaN)** vector, `setPosition` refuses
+to write it, and `goTo`/`moveTowards`/`sprintTowards` refuse to post a goal
+from it, so the agent stays where it is. Returning `(0,0,0)` instead — which
+is what used to happen — silently aims the caller at the **world origin, the
+centre of the scene**: every AI with an unbound target marched there, and an
+object driven that way looked as if something was pulling it to the middle.
+Each of these is reported once per AI (they fire every tick otherwise).
+
 Direct position changes are untouched: `setPosition`, `setRotation` and
 `setScale` still write the transform and teleport, exactly like
 `transform.position` does in Unity. Only goal-driven movement is routed
@@ -127,12 +139,12 @@ The base object model: position, rotation, scale, activeness, tag, layer. This i
 
 | ID | Signature | Tier | Notes |
 |---|---|---|---|
-| `0x0100` | `getPosition(Object3D obj) -> Vector3` | 1 | transform.position. The 2D overload drops z (Vector2). |
+| `0x0100` | `getPosition(Object3D obj) -> Vector3` | 1 | transform.position. The 2D overload drops z (Vector2). An unbound or destroyed object gives an **invalid (NaN) position**, never (0,0,0) — a zero vector is the WORLD ORIGIN, so returning it would send callers to the centre of the scene. Nothing moves on a NaN position: see §2. |
 | `0x0101` | `getPosition(Object2D obj) -> Vector2` | 1 |  |
 | `0x0102` | `getRotation(Object3D obj) -> Quaternion` | 1 | transform.rotation as a Quaternion (3D only). |
 | `0x0103` | `getScale(Object3D obj) -> Vector3` | 1 | transform.localScale; 2D overload returns (x, y). |
 | `0x0104` | `getScale(Object2D obj) -> Vector2` | 1 |  |
-| `0x0105` | `setPosition(Object3D obj, Vector3 pos) -> void` | 2 | Writes transform.position (Tier 2). Use it sparingly — it teleports. |
+| `0x0105` | `setPosition(Object3D obj, Vector3 pos) -> void` | 2 | Writes transform.position (Tier 2). Use it sparingly — it teleports. A non-finite value (NaN/Infinity, e.g. read from an unbound slot) is refused with an error instead of being written into the transform. |
 | `0x0106` | `setPosition(Object2D obj, Vector2 pos) -> void` | 2 |  |
 | `0x0107` | `setRotation(Object3D obj, Quaternion rot) -> void` | 2 | Writes transform.rotation (Tier 2). |
 | `0x0108` | `setScale(Object3D obj, Vector3 scale) -> void` | 2 | Writes transform.localScale (Tier 2). |
@@ -225,7 +237,7 @@ Camera-space helpers: view tests and screen/world/viewport conversion.
 
 | ID | Signature | Tier | Notes |
 |---|---|---|---|
-| `0x0500` | `getPosition(Camera3D cam) -> Vector3` | 1 | transform.position. The 2D overload drops z (Vector2). |
+| `0x0500` | `getPosition(Camera3D cam) -> Vector3` | 1 | transform.position. The 2D overload drops z (Vector2). An unbound or destroyed object gives an **invalid (NaN) position**, never (0,0,0) — a zero vector is the WORLD ORIGIN, so returning it would send callers to the centre of the scene. Nothing moves on a NaN position: see §2. |
 | `0x0501` | `getPosition(Camera2D cam) -> Vector2` | 1 |  |
 | `0x0502` | `isInView(Camera3D cam, Object3D obj) -> bool` | 1 | WorldToViewportPoint: in front of the camera (z > 0) **and** inside [0,1]². |
 | `0x0503` | `isInView(Camera2D cam, Object2D obj) -> bool` | 1 |  |
@@ -242,17 +254,17 @@ Path queries and goal-posting movement — the largest category, and the only on
 
 | ID | Signature | Tier | Notes |
 |---|---|---|---|
-| `0x0600` | `findPath(Vector3 from, Vector3 to) -> int` | 1 | Stores a corner list and returns its **path id** (int). NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid. |
+| `0x0600` | `findPath(Vector3 from, Vector3 to) -> int` | 1 | Stores a corner list and returns its **path id** (int). A start or end that is not a finite position (NaN/Infinity, e.g. read from an unbound slot) stores nothing and returns the invalid id 0. NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid. |
 | `0x0601` | `findPath(Vector2 from, Vector2 to) -> int` | 1 |  |
 | `0x0602` | `getNextWaypoint(int path) -> Vector3` | 1 | Pops the next corner of a path id. Past the end it returns the last corner forever (no error). |
 | `0x0603` | `getPathLength(int path) -> float` | 1 | Total length of the stored polyline; 0 for an unknown path (logs an error). |
-| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is "there" when it is under the target. |
+| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is "there" when it is under the target. With an invalid (NaN) target every comparison is false, so it reads false rather than arrived-at-the-origin. |
 | `0x0605` | `hasReachedDestination(NavMeshAgent agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0606` | `hasReachedDestination(Object3D agent, Vector3 tgt) -> bool` | 1 |  |
 | `0x0607` | `hasReachedDestination(Object3D agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0608` | `hasReachedDestination(Object2D agent, Vector2 tgt) -> bool` | 1 |  |
 | `0x0609` | `hasReachedDestination(Object2D agent, Object2D tgt) -> bool` | 1 |  |
-| `0x060A` | `goTo(NavMeshAgent agent, Vector3 dest) -> void` | 3 | Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. |
+| `0x060A` | `goTo(NavMeshAgent agent, Vector3 dest) -> void` | 3 | Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. A non-finite destination is refused (see moveTowards). |
 | `0x060B` | `goTo(NavMeshAgent agent, Object3D dest) -> void` | 3 |  |
 | `0x060C` | `goTo(Object3D agent, Vector3 dest) -> void` | 3 |  |
 | `0x060D` | `goTo(Object3D agent, Object3D dest) -> void` | 3 |  |
@@ -278,7 +290,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0621` | `sprintTowards(Object3D agent, Object3D dest, float speedMult) -> void` | 3 |  |
 | `0x0622` | `sprintTowards(Object2D agent, Vector2 dest, float speedMult) -> void` | 3 |  |
 | `0x0623` | `sprintTowards(Object2D agent, Object2D dest, float speedMult) -> void` | 3 |  |
-| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). |
+| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
 | `0x0625` | `moveTowards(NavMeshAgent agent, Object3D dest, float speed) -> void` | 3 |  |
 | `0x0626` | `moveTowards(Object3D agent, Vector3 dest, float speed) -> void` | 3 |  |
 | `0x0627` | `moveTowards(Object3D agent, Object3D dest, float speed) -> void` | 3 |  |
@@ -317,7 +329,7 @@ Pure vector maths for classic steering behaviours: flee, pursuit, separation, ar
 |---|---|---|---|
 | `0x0800` | `getFleeDirection(Vector3 from, Vector3 threat) -> Vector3` | 1 | Normalized (from − threat) — the direction to run. |
 | `0x0801` | `getFleeDirection(Vector2 from, Vector2 threat) -> Vector2` | 1 |  |
-| `0x0802` | `getPursuitPosition(Object3D tgt, float speed) -> Vector3` | 1 | Target position + its rigidbody velocity (a one-second lead) when the `speed` argument is positive **and** the target is actually moving; otherwise just the target's position. Aim at the returned point to intercept. |
+| `0x0802` | `getPursuitPosition(Object3D tgt, float speed) -> Vector3` | 1 | Target position + its rigidbody velocity (a one-second lead) when the `speed` argument is positive **and** the target is actually moving; otherwise just the target's position. Aim at the returned point to intercept. An unbound target gives an invalid (NaN) position, never the origin. |
 | `0x0803` | `getPursuitPosition(Object2D tgt, float speed) -> Vector2` | 1 |  |
 | `0x0804` | `getSeparationVector(Object3D agent, int neighbors) -> Vector3` | 1 | Normalized sum of away-vectors to the N nearest neighbours inside the default separation radius (N is the 2nd argument, ≤ 0 returns zero). |
 | `0x0805` | `getSeparationVector(Object2D agent, int neighbors) -> Vector2` | 1 |  |
