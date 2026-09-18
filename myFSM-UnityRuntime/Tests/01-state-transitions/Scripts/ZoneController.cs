@@ -19,6 +19,11 @@
 //   W / Up-Arrow     +1     (tapping steps once, holding repeats slowly)
 //   S / Down-Arrow   -1     (zone never goes below 0)
 //   R                reset to 0
+//   C                re-frame the Main Camera on the 0-45 m test column
+//
+// A demo cycle runs on its own until the first key press (disable with
+// demoCycle = false), so the cube visibly moves even if you just want to
+// watch: 0 -> 15 -> 25 -> 0, every couple of seconds.
 //
 // While the variable changes, the controller also verifies the OUTCOME a few
 // ticks later: the AI's state must be the expected state, and the objects must
@@ -55,6 +60,16 @@ namespace MyFSM.Tests
         public int minZone = 0;
         public int maxZone = 1000;
 
+        [Header("Demo cycle (proves movement without touching the keyboard)")]
+        [Tooltip("Step `zone` through the three states by itself until you press a key.")]
+        public bool demoCycle = true;
+        [Tooltip("Seconds between demo steps.")]
+        public float demoInterval = 2.5f;
+        [Tooltip("Zone values the demo walks through (0 = home, 15 = +10 m, 25 = +40 m).")]
+        public int[] demoZones = { 15, 25, 0 };
+        [Tooltip("Key that re-frames the Main Camera on the 0-45 m column.")]
+        public KeyCode frameCameraKey = KeyCode.C;
+
         [Header("Hold behaviour (deliberately slower than a tap)")]
         [Tooltip("Seconds a key must be held before it starts repeating.")]
         public float repeatDelay = 0.40f;
@@ -87,6 +102,9 @@ namespace MyFSM.Tests
         private int _frameAccumulator;
         private int _lastDirection;
         private bool _unresolvedMarkerWarned;
+        private bool _demoStopped;
+        private int _demoIndex = -1;
+        private float _demoNext;
         private float _untilRepeat;
         private bool _wroteCsv;
 
@@ -125,9 +143,12 @@ namespace MyFSM.Tests
         private void Awake()
         {
             if (ai == null) ai = GetComponent<ZoneBridgeAI>();
+            if (ai == null) ai = FindObjectOfType<ZoneBridgeAI>(); // setup may live elsewhere
             if (ai == null)
             {
-                Debug.LogWarning("[zone] no ZoneBridgeAI found — controller disabled: " + name, this);
+                Debug.LogWarning("[zone] no ZoneBridgeAI in the scene — controller disabled: " + name
+                                 + ". Add ZoneTestSetup (which creates the AI + cube) or put this "
+                                 + "component on the same object as a ZoneBridgeAI.", this);
                 enabled = false;
                 return;
             }
@@ -169,10 +190,23 @@ namespace MyFSM.Tests
             _home = ReadHome();
             _homeKnown = true;
             PushZone(); // make the FSM and this controller agree from frame one
-            Debug.Log("[zone] home = " + _home + " — W/Up +1, S/Down -1, R resets."
-                      + " Expecting " + ExpectedState(zone) + " at zone " + zone
+            Debug.Log("[zone] home = " + _home + " — W/Up +1, S/Down -1, R resets, C re-frames"
+                      + " the camera. Expecting " + ExpectedState(zone) + " at zone " + zone
                       + ". The marker object (slot 1) pins the home position;"
                       + " nothing needs assigning.", this);
+            if (demoCycle)
+            {
+                _demoNext = Time.time + demoInterval;
+                Debug.Log("[zone] demo cycle ON: zone walks " + DemoPlan() + " every "
+                          + demoInterval.ToString("F1") + " s so you can SEE the cube move. It stops"
+                          + " for good at your first key press. Unity only delivers key input while"
+                          + " the Game view has focus — click inside it first.", this);
+            }
+            else
+            {
+                Debug.Log("[zone] demo cycle off — drive it with the keys (click the Game view first:"
+                          + " Unity ignores input while another window has focus).", this);
+            }
         }
 
         private Vector3 ReadHome()
@@ -226,6 +260,18 @@ namespace MyFSM.Tests
 
         private void HandleInput()
         {
+            if (Input.GetKeyDown(frameCameraKey)) ZoneTestSetup.FrameCamera(_home);
+
+            bool anyKey = Input.GetKeyDown(increaseKey) || Input.GetKeyDown(increaseKeyAlt)
+                       || Input.GetKeyDown(decreaseKey) || Input.GetKeyDown(decreaseKeyAlt)
+                       || Input.GetKeyDown(resetKey);
+            if (anyKey && demoCycle && !_demoStopped)
+            {
+                _demoStopped = true;
+                Debug.Log("[zone] key pressed — demo cycle stopped, you are driving.", this);
+            }
+            if (demoCycle && !_demoStopped) RunDemo();
+
             if (Input.GetKeyDown(resetKey)) { ResetZone(); return; }
 
             int direction = Direction();
@@ -254,6 +300,27 @@ namespace MyFSM.Tests
         private void Step(int direction)
         {
             SetZone(zone + direction);
+        }
+
+        /// <summary>
+        /// Walks the zone through the three bands by itself. It only stops for
+        /// good when a key is pressed, which is also what tells the tester the
+        /// difference between "the machine is broken" and "nobody pressed W".
+        /// </summary>
+        private void RunDemo()
+        {
+            if (demoZones == null || demoZones.Length == 0) { demoCycle = false; return; }
+            if (Time.time < _demoNext) return;
+            _demoNext = Time.time + demoInterval;
+            _demoIndex = (_demoIndex + 1) % demoZones.Length;
+            SetZone(demoZones[_demoIndex]);
+        }
+
+        private string DemoPlan()
+        {
+            StringBuilder sb = new StringBuilder("0");
+            for (int i = 0; i < demoZones.Length; i++) sb.Append(" -> ").Append(demoZones[i]);
+            return sb.ToString();
         }
 
         // ------------------------------------------------------------------

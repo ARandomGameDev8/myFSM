@@ -20,6 +20,9 @@ namespace MyFSM.Tests
 {
     public static class ZoneMarker
     {
+        /// <summary>Name used when no marker object is assigned anywhere.</summary>
+        public const string DefaultName = "ZoneMarker";
+
         /// <summary>
         /// Returns the scene object called <paramref name="name"/>, creating it
         /// (a small green sphere with no collider) at <paramref name="position"/>
@@ -27,6 +30,7 @@ namespace MyFSM.Tests
         /// </summary>
         public static Transform Ensure(string name, Vector3 position, UnityEngine.Object context = null)
         {
+            if (string.IsNullOrEmpty(name)) name = DefaultName;
             GameObject found = GameObject.Find(name);
             if (found != null) return found.transform;
 

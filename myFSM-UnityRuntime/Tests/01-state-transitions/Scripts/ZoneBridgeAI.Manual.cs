@@ -40,6 +40,20 @@ public sealed partial class ZoneBridgeAI
 
     partial void OnBindingsManual()
     {
+        // ---- is anything driving this AI? -------------------------------
+        // The module never reads the keyboard: it only reacts to its `zone`
+        // variable, which ZoneController writes. An AI component on its own is
+        // therefore a machine nobody drives - it boots, sits in AtHome and looks
+        // broken while being perfectly alive. Say so, loudly, once.
+        if (FindObjectOfType<ZoneController>() == null && FindObjectOfType<ZoneTestSetup>() == null)
+        {
+            Debug.LogWarning("[zone] this AI has NO driver: 'zone' will stay 0, so the FSM stays in "
+                             + "AtHome and nothing will appear to happen. Add ZoneTestSetup to any "
+                             + "GameObject (it builds the visible cube, the keyboard controller and "
+                             + "the recorder), or drive zone yourself with "
+                             + "SetBoundValue(Slot_zone, FsmValue.MakeInt(...)).", this);
+        }
+
         // ---- handle slots -------------------------------------------------
         // Slot order/type comes from the .fsm: slot 0 Object3D self,
         // slot 1 Object3D marker.

@@ -33,7 +33,7 @@ inspector). So the whole procedure is:
 
    | test | component to add | it builds, on its own |
    | --- | --- | --- |
-   | 01 | `ZoneTestSetup` | the AI (required component, added automatically), the keyboard controller, the marker object, the transition recorder |
+   | 01 | `ZoneTestSetup` | a **visible cube with the AI on it** (or the AI you already placed), a 45 m height ruler with ticks at +10 m/+40 m, the keyboard controller, the marker pin, the recorder, and a camera framing that fits the whole column |
    | 02 | `SpawnStressTest` | ground plane, WASD player, and one chaser cube per `Space` press |
    | 03 | `MazeTestSetup` | ground plane, random maze + entry/exit, baked NavMesh, runner capsule + agent + AI + recorder |
    | 04 | `ChaseTestSetup` | the same maze, plus a walked-out chaser and a walking target |
@@ -169,9 +169,22 @@ hook simply does nothing) — it just runs with those slots unbound.
 **Goal**: a runtime variable drives the state, and per-state Traversal evaluation
 puts the head in the state that variable asks for.
 
-Scene: an empty GameObject with **`ZoneTestSetup`** on it. It adds `ZoneBridgeAI`
-(the generated class), `ZoneController`, and `StateTransitionRecorder` (told to
-log `zone` with every transition). **Nothing is filled in anywhere.**
+Scene: an empty GameObject with **`ZoneTestSetup`** on it. **Nothing is filled in
+anywhere**, and you do not create the cube either. The setup finds the AI — on the
+object it is attached to, else anywhere in the scene (an AI you added by hand is
+used, not duplicated) — and if the scene has no AI at all it adds `ZoneBridgeAI`
+to the object you attached it to. Then, when that object has no mesh of its own,
+it adds a visible cube child, so an "empty GameObject" still gives you something
+you can watch. `ZoneController` (keyboard) and `StateTransitionRecorder` go on
+the AI's own object.
+
+**The cube moves by itself as soon as you press Play**: a demo cycle walks `zone`
+through 0 → 15 → 25 → 0 every 2.5 s until your first key press, so "is it alive?"
+never depends on getting keyboard focus right. It also builds a 45 m height ruler
+(thin pole, tick at +10 m and +40 m) and frames the Main Camera on the column —
+the machine teleports the cube 10 m and 40 m up, which a default camera at eye
+height cannot show. Set `frameCameraOnStart`/`demoCycle` to false to keep your own
+camera and drive it purely by hand (`C` re-frames the camera at any time).
 
 ### What the `marker` slot is (and why it needs nothing from you)
 
@@ -207,6 +220,11 @@ means +40 m. Change one comparison in the `.fsm` if you want 20 in the upper ban
 Controls: `W` / `Up` = +1, `S` / `Down` = −1 (a tap steps once, a hold repeats
 after 0.4 s and then every 0.15 s), `R` = reset to 0, and the value never drops
 below 0.
+
+The demo cycle and the visible cube are not decoration: with an AI on an empty
+GameObject the state machine transitions and logs perfectly while *nothing on
+screen changes*, which reads as a broken test. The cube, the ruler and the frame
+exist so the screen agrees with the console.
 
 What it records:
 
@@ -332,6 +350,9 @@ the live route length and the chaser's state — the curve that shows the chase)
 | `CS0246: The type or namespace name 'StateTransitionRecorder' could not be found` in `ZoneTestSetup.cs` | the recorder script is not in the project — test 01 needs it | copy `Tests/01-state-transitions/Scripts/StateTransitionRecorder.cs` somewhere under `Assets/` (any folder; Unity compiles every script under `Assets/`) |
 | `CS0103: The name 'FsmValue' does not exist in the current context` in a `*.Manual.cs` | that file writes value slots, and `FsmValue` lives in `MyFSM.Core` — a `using` applies to ONE file, so `using MyFSM.Unity;` does not bring it in | add `using MyFSM.Core;` (fixed in the shipped files; if you copied them earlier, re-copy or add the line) |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
+| test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
+| test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding now logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube (keys then drive it, or the demo cycle does) |
+| test 01: keys do nothing while the demo runs | Unity only delivers `Input` to the Game view, and the demo stops at your first key press | click inside the Game view, then press `W`/`S` or the arrow keys |
 
 `Tests/Tools/check_project.py` finds all three situations before Unity does, and
 `Sandbox/check.py` (repo-side) now also fails on the second one: it verifies that
