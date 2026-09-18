@@ -9,25 +9,33 @@
 // and this file implements it — the same pattern the Unity runtime documents in
 // Docs/AIInstance.md ("Bindings must be applied before boot").
 //
-// Why manual bindings are REQUIRED here: the module declares two Object3D slots
-// (`self` and `marker`). Auto-binding maps a slot to this GameObject by its type
-// tag, so with two slots sharing a tag it cannot know which is which — the
-// generator prints "AMBIGUOUS (2x) — Bind(Slot_x, ...)" and leaves the decision
-// to you. The value slots (Vector3 `home`, int `zone`) are also set here so the
-// module starts with the numbers the test expects.
+// WHY bindings are code here and not inspector fields: the module declares two
+// Object3D slots (`self` and `marker`). Auto-binding maps a slot to this
+// GameObject by its type tag, so with two slots sharing a tag it cannot know
+// which is which — the generator prints "AMBIGUOUS (2x) — Bind(Slot_x, ...)"
+// and leaves the decision to you.
+//
+// THIS FILE NEEDS NOTHING FILLED IN. Both of its fields are optional overrides:
+// with the defaults, `self` is this GameObject and the marker is found (or
+// created) by name — see the comments on the fields below.
 
+using UnityEngine;
 // MyFSM.Core is where FsmValue lives: the SetBoundValue() calls below name it,
 // and a using is per file - importing MyFSM.Unity does not bring MyFSM.Core in.
-using UnityEngine;
 using MyFSM.Core;
 using MyFSM.Unity;
+using MyFSM.Tests; // ZoneMarker (the find-or-create helper for slot 1)
 
 public sealed partial class ZoneBridgeAI
 {
-    [Header("ZoneBridge bindings (manual)")]
-    [Tooltip("Object the module teleports around. Empty: the scene object named 'ZoneMarker'.")]
+    [Header("ZoneBridge bindings (manual) - both fields are OPTIONAL")]
+    [Tooltip("Slot 1, the module's 'home pin'. LEAVE EMPTY and the test finds or creates " +
+             "an object named 'ZoneMarker': the marker is scenery that shows where home is " +
+             "while this object rises. Drag any GameObject here only if you want a specific " +
+             "one to be the pin.")]
     public Transform marker;
-    [Tooltip("Name used to find or create the marker when none is assigned.")]
+
+    [Tooltip("Name used to find (or create) the marker when the field above is empty.")]
     public string markerName = "ZoneMarker";
 
     partial void OnBindingsManual()
@@ -35,19 +43,20 @@ public sealed partial class ZoneBridgeAI
         // ---- handle slots -------------------------------------------------
         // Slot order/type comes from the .fsm: slot 0 Object3D self,
         // slot 1 Object3D marker.
+
+        // `self` is the object the module moves around; that is this GameObject.
         Bind(Slot_self, gameObject);
 
+        // The marker is NOT the fallback for a missing marker: every state in
+        // zonebridge.fsm runs `setPosition(marker, home)` right after moving
+        // `self`, so binding slot 1 to this same GameObject would teleport the
+        // lifted object straight back down to home and the state would look
+        // broken. Find-or-create a real, separate pin instead (any GameObject
+        // would do; ZoneMarker makes a small green sphere if the scene has none).
         Transform markerTarget = marker;
         if (markerTarget == null)
-        {
-            GameObject found = GameObject.Find(markerName);
-            if (found != null) markerTarget = found.transform;
-        }
-        if (markerTarget == null)
-            Debug.LogWarning("[zone] no marker object — binding Slot_marker to this GameObject. "
-                             + "ZoneController creates one named '" + markerName + "' for you.",
-                             this);
-        Bind(Slot_marker, markerTarget != null ? markerTarget.gameObject : gameObject);
+            markerTarget = ZoneMarker.Ensure(markerName, transform.position, this);
+        Bind(Slot_marker, markerTarget.gameObject);
 
         // ---- value slots --------------------------------------------------
         // `home` is the position this object was placed at; the module computes

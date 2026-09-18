@@ -42,10 +42,9 @@ namespace MyFSM.Tests
         [Tooltip("Left empty: found on this GameObject.")]
         public ZoneBridgeAI ai;
 
-        [Tooltip("The module's Slot_marker object. Empty: found by name, or created here.")]
+        [Tooltip("OPTIONAL. Leave empty: the marker is read back from the module's own slot 1 " +
+                 "(the object the FSM actually teleports), which is what this controller verifies.")]
         public Transform marker;
-        [Tooltip("Name used to find or create the marker when none is assigned.")]
-        public string markerName = "ZoneMarker";
 
         [Header("Input")]
         public KeyCode increaseKey = KeyCode.UpArrow;
@@ -87,6 +86,7 @@ namespace MyFSM.Tests
         private int _settle;
         private int _frameAccumulator;
         private int _lastDirection;
+        private bool _unresolvedMarkerWarned;
         private float _untilRepeat;
         private bool _wroteCsv;
 
@@ -131,42 +131,48 @@ namespace MyFSM.Tests
                 enabled = false;
                 return;
             }
-            // The marker is what the module teleports to show where each state
-            // is. Create one if the scene has none, BEFORE the AI's Start() runs
-            // its bindings — Awake always runs first, so the binding finds it.
-            if (marker == null)
-            {
-                GameObject found = GameObject.Find(markerName);
-                marker = found != null ? found.transform : CreateMarker();
-            }
         }
 
-        private Transform CreateMarker()
+        // No marker creation here: the BINDING (ZoneBridgeAI.Manual.cs) must bind
+        // something to slot 1 anyway and creates the pin when the scene has none.
+        // This controller only reads that result back (see MarkerObject), so
+        // there is nothing to assign in the inspector.
+
+        /// <summary>
+        /// The object the module itself holds in slot 1 — the marker it teleports.
+        /// Resolved from the runtime slot rather than from a second inspector
+        /// field, so the verification below checks the object the FSM really
+        /// moved, not whatever we think it moved. `marker` overrides it when set.
+        /// </summary>
+        public Transform MarkerObject
         {
-            GameObject markerObject = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            markerObject.name = markerName;
-            markerObject.transform.position = ai.transform.position;
-            markerObject.transform.localScale = new Vector3(0.4f, 0.4f, 0.4f);
-            // Physics neutrality: the marker is a visual aid, not an obstacle.
-            Collider collider = markerObject.GetComponent<Collider>();
-            if (collider != null) Destroy(collider);
-            Renderer renderer = markerObject.GetComponent<Renderer>();
-            if (renderer != null) renderer.material.color = new Color(0.3f, 0.9f, 0.4f);
-            Debug.Log("[zone] created a marker object '" + markerName + "'.", this);
-            return markerObject.transform;
+            get
+            {
+                if (marker != null) return marker;
+                if (ai == null) return null;
+                FsmValue value;
+                if (!ai.TryGetVariable("marker", out value) || value.Kind != FsmValueKind.Handle)
+                    return null;
+                UnityEngine.Object bound = ai.Handles.Resolve(value.HandleId);
+                if (bound is GameObject) return ((GameObject)bound).transform;
+                if (bound is Component) return ((Component)bound).transform;
+                return null;
+            }
         }
 
         private void Start()
         {
-            // `marker` is our own serialized reference — this controller never
+            // Both fields here are optional overrides; the marker is read from
+            // the module's own slot 1 (see MarkerObject). This controller never
             // touches fields that only exist in the hand-written partial file,
-            // so dropping ZoneBridgeAI.Manual.cs (auto-bind variant) still
-            // compiles. Assign the marker object in the inspector.
+            // so dropping ZoneBridgeAI.Manual.cs still compiles.
             _home = ReadHome();
             _homeKnown = true;
             PushZone(); // make the FSM and this controller agree from frame one
             Debug.Log("[zone] home = " + _home + " — W/Up +1, S/Down -1, R resets."
-                      + " Expecting " + ExpectedState(zone) + " at zone " + zone, this);
+                      + " Expecting " + ExpectedState(zone) + " at zone " + zone
+                      + ". The marker object (slot 1) pins the home position;"
+                      + " nothing needs assigning.", this);
         }
 
         private Vector3 ReadHome()
@@ -267,10 +273,17 @@ namespace MyFSM.Tests
 
             bool markerOk = true;
             float markerError = 0f;
-            if (marker != null && _homeKnown)
+            Transform pin = MarkerObject;
+            if (pin != null && _homeKnown)
             {
-                markerError = Vector3.Distance(marker.position, _home);
+                markerError = Vector3.Distance(pin.position, _home);
                 markerOk = markerError <= positionTolerance;
+            }
+            else if (pin == null && _unresolvedMarkerWarned == false)
+            {
+                _unresolvedMarkerWarned = true;
+                Debug.LogWarning("[zone] slot 1 (marker) is not bound yet — cannot verify the "
+                                 + "home pin. It is bound by ZoneBridgeAI.Manual.cs.", this);
             }
 
             bool ok = stateOk && selfOk && markerOk;
@@ -294,7 +307,7 @@ namespace MyFSM.Tests
                                  + " but found " + actualState
                                  + " | expected y " + expectedPosition.y.ToString("F3")
                                  + " but found " + ai.transform.position.y.ToString("F3")
-                                 + (marker != null
+                                 + (pin != null
                                      ? " | marker off home by " + markerError.ToString("F3") + " m"
                                      : "")
                                  + " (" + when + ")", this);

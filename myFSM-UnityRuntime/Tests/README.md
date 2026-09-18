@@ -170,9 +170,29 @@ hook simply does nothing) — it just runs with those slots unbound.
 puts the head in the state that variable asks for.
 
 Scene: an empty GameObject with **`ZoneTestSetup`** on it. It adds `ZoneBridgeAI`
-(the generated class), `ZoneController`, and the shared `StateTransitionRecorder`
-(told to log `zone` with every transition). `ZoneController` creates the marker
-object (`ZoneMarker`) the module teleports.
+(the generated class), `ZoneController`, and `StateTransitionRecorder` (told to
+log `zone` with every transition). **Nothing is filled in anywhere.**
+
+### What the `marker` slot is (and why it needs nothing from you)
+
+The module declares two `Object3D` slots: `self` (the object that rises) and
+`marker` (slot 1). Every state teleports the marker to `home`, so it is a visible
+pin showing where home is while `self` moves to +10 m or +40 m — scenery that
+makes the current state obvious, and something the controller can verify (the pin
+must be back at home in every state, because the FSM says so).
+
+Both fields that mention it are **optional overrides**:
+
+| field | where | leave empty ⇒ |
+| --- | --- | --- |
+| `marker` (Transform) | `ZoneBridgeAI.Manual.cs` | the binding finds or creates an object named `ZoneMarker` (small green sphere, no collider) |
+| `marker` (Transform) | `ZoneController` | the controller reads slot 1 back out of the module and verifies *that* object |
+
+Fill either one only if you want a specific object (any GameObject, cube, empty,
+your own prop) to be the pin. There is deliberately **no fallback to `self`**: the
+states run `setPosition(self, …lift…)` and then `setPosition(marker, home)`, so a
+marker bound to the same object would drag the lifted object back down and make
+the test look broken.
 
 | `zone` | state | what the state does on entry |
 | --- | --- | --- |
