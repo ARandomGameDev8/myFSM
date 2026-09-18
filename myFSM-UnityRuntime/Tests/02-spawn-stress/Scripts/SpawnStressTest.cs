@@ -158,6 +158,11 @@ namespace MyFSM.Tests
             public int alive;
             public int registered;
             public long totalCalls;
+            /// <summary>Mean distance (metres) from the live cubes to the point they aim
+            /// at; -1 when there was no crowd to measure.</summary>
+            public float crowdMeanToTarget = -1f;
+            /// <summary>Distance from the point they aim at to the closest cube (-1 = none).</summary>
+            public float crowdNearestToTarget = -1f;
         }
 
         public readonly List<SpawnRecord> Spawns = new List<SpawnRecord>();
@@ -423,6 +428,27 @@ namespace MyFSM.Tests
         {
             if (player != null) return player;
             GameObject found = GameObject.Find("Player");
+
+            // A WASD object that already exists in the scene IS the player: if one
+            // was set up by hand, do not create a second cylinder and aim the whole
+            // crowd at the wrong object (that reads as "everything is stuck in the
+            // middle" while the object you drive gets ignored).
+            PlayerController wasd = FindObjectOfType<PlayerController>();
+            if (found == null && wasd != null)
+            {
+                Debug.Log("[stress] no object named 'Player': using the existing WASD object '"
+                          + wasd.name + "' as the player.", wasd);
+                return wasd.transform;
+            }
+            if (found != null && wasd != null && wasd.transform != found.transform)
+            {
+                Debug.LogWarning("[stress] two candidates for the player: '" + found.name
+                                 + "' (named Player) and '" + wasd.name + "' (has a "
+                                 + "PlayerController). The crowd chases '" + found.name
+                                 + "' — delete or rename one of them if the crowd is hunting "
+                                 + "the wrong object.", found);
+            }
+
             if (found == null && createPlayerIfMissing)
             {
                 // A cylinder, standing on the ground: Unity's cylinder primitive is
@@ -739,6 +765,34 @@ namespace MyFSM.Tests
             }
             sample.totalCalls = _lastCalls;
             sample.registered = _lastRegistered;
+
+            // Where the crowd actually is, relative to what it aims at. A working
+            // chase keeps the mean small however far the player walks; a crowd that
+            // never got a goal (or is jammed on a pile) shows the mean growing with
+            // the player's distance from it — which is what "the cubes orbit the
+            // middle of the plane" looks like in numbers.
+            Transform aim = _chaseTarget != null ? _chaseTarget : player;
+            if (aim != null && _spawned.Count > 0)
+            {
+                Vector3 aimPos = aim.position;
+                float sum = 0f;
+                float nearest = float.MaxValue;
+                int counted = 0;
+                for (int i = 0; i < _spawned.Count; i++)
+                {
+                    GameObject go = _spawned[i];
+                    if (go == null) continue;
+                    float d = Vector3.Distance(go.transform.position, aimPos);
+                    sum += d;
+                    if (d < nearest) nearest = d;
+                    counted++;
+                }
+                if (counted > 0)
+                {
+                    sample.crowdMeanToTarget = sum / counted;
+                    sample.crowdNearestToTarget = nearest;
+                }
+            }
             Frames.Add(sample);
         }
 
@@ -792,7 +846,8 @@ namespace MyFSM.Tests
             File.WriteAllText(SpawnCsvPath, spawns.ToString());
 
             StringBuilder frames = new StringBuilder();
-            frames.Append("frame,time,deltaMs,smoothedMs,fps,alive,registered,totalCalls\n");
+            frames.Append("frame,time,deltaMs,smoothedMs,fps,alive,registered,totalCalls,"
+                          + "crowdMeanToTarget,crowdNearestToTarget\n");
             for (int i = 0; i < Frames.Count; i++)
             {
                 FrameSample s = Frames[i];
@@ -803,7 +858,9 @@ namespace MyFSM.Tests
                       .Append((1000f / Mathf.Max(0.0001f, s.smoothedMs)).ToString("F1")).Append(',')
                       .Append(s.alive).Append(',')
                       .Append(s.registered).Append(',')
-                      .Append(s.totalCalls).Append('\n');
+                      .Append(s.totalCalls).Append(',')
+                      .Append(s.crowdMeanToTarget.ToString("F2")).Append(',')
+                      .Append(s.crowdNearestToTarget.ToString("F2")).Append('\n');
             }
             File.WriteAllText(FrameCsvPath, frames.ToString());
 
@@ -820,6 +877,19 @@ namespace MyFSM.Tests
             summary.Append("input backend      : ").Append(StressInput.Backend).Append('\n');
             summary.Append("final smoothed ms  : ").Append(_smoothedMs.ToString("F2")).Append('\n');
             summary.Append("final fps          : ").Append((1000f / Mathf.Max(0.0001f, _smoothedMs)).ToString("F1")).Append('\n');
+            summary.Append("crowd to target    : ");
+            if (Frames.Count > 0)
+            {
+                FrameSample last = Frames[Frames.Count - 1];
+                summary.Append("mean ").Append(last.crowdMeanToTarget.ToString("F2"))
+                       .Append(" m, nearest ").Append(last.crowdNearestToTarget.ToString("F2"))
+                       .Append(" m (a small mean means the crowd is on the target; a mean "
+                               + "that grows with the player's walk means the crowd is stuck)\n");
+            }
+            else
+            {
+                summary.Append("no frames sampled\n");
+            }
             summary.Append("registered AIs     : ").Append(_lastRegistered > 0 ? _lastRegistered : RegisteredCount()).Append('\n');
             summary.Append("total FSM calls    : ").Append(_lastCalls > 0 ? _lastCalls : TotalCalls()).Append('\n');
             File.WriteAllText(SummaryPath, summary.ToString());

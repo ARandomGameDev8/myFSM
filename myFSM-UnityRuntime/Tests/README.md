@@ -299,6 +299,8 @@ for you:
 | camera | `TopDownFollowCamera` on the Main Camera: parked 45 m above and 18 m behind the player, looking down, following it in `LateUpdate` |
 | cubes | only when you ask: `Space` = +1, `B` = +100 |
 
+The last two columns of `spawn_stress_frames.csv` answer "is the crowd chasing me or stuck?": a working chase keeps the mean distance small however far the player walks, while a crowd that never got a goal (or is jammed against a pile) shows the mean growing with the player's walk; the summary file repeats the final pair as **crowd to target**.
+
 **Each cube is a dynamic Rigidbody with gravity on** (rotations locked to X/Z so
 it stays upright) **dropped from `spawnHeight` = 15 m above the centre of the
 plane**: it falls, lands, and then chases the player in the XZ plane. Successive
@@ -331,7 +333,7 @@ Files:
 | file | row per | columns |
 | --- | --- | --- |
 | `spawn_stress_spawns.csv` | spawn | index, frame, `instantiateMs`, the frame the spawn landed in, the frame **after** it (when the new AI has booted and ticked), alive-after, instance id |
-| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive AIs, **AIs registered in the runtime's DB**, total FSM calls served |
+| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive AIs, **AIs registered in the runtime's DB**, total FSM calls served, **mean and nearest distance from the crowd to the point it aims at** (-1 = no crowd to measure) |
 | `spawn_stress_summary.txt` | run | the one-line answer: spawned, alive, practical maximum, final fps, registry size |
 
 The practical maximum is declared by the test itself: when the smoothed frame
