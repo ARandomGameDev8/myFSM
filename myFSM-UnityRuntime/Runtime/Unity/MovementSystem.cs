@@ -425,7 +425,7 @@ namespace MyFSM.Unity
         /// </summary>
         private void MoveBody(int handleId, MotionContext ctx, Vector3 step)
         {
-            Vector3 total = PendingStep(handleId, step);
+            Vector3 total = AddStep(handleId, step);
             if (ctx.Body != null)
             {
                 ctx.Body.MovePosition(ctx.Body.position + total);
@@ -435,7 +435,7 @@ namespace MyFSM.Unity
         }
 
         /// <summary>This physics step's accumulated move for one agent.</summary>
-        private Vector3 PendingStep(int handleId, Vector3 step)
+        private Vector3 AddStep(int handleId, Vector3 step)
         {
             PendingStep pending;
             if (!_pendingSteps.TryGetValue(handleId, out pending))

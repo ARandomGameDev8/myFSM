@@ -81,7 +81,11 @@ These are scene tests, not unit tests. They print to the console and write CSVs;
 nothing here fails a build. The property-style checks live in
 `Sandbox/SmokeTest.cs`, and `Sandbox/check.py` syntax-parses everything under
 `Tests/` (along with Runtime/Sandbox/Samples) plus the catalog/dispatch
-invariants, so a malformed test script is caught without opening Unity.
+invariants and the **names a type is not allowed to hold twice** (`CS0102`: a
+nested type sharing a name with one of its own methods, fields or properties,
+duplicate members, `CS0111`/`CS0542`) — errors Unity only reports when it
+compiles, which is why the checker looks for them first. It is not a compiler:
+signature-level type errors still need Unity or `dotnet`.
 
 Every folder is SELF-CONTAINED — a test never compiles against another test's
 scripts, so you can copy one case into a project on its own.

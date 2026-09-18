@@ -272,6 +272,124 @@ def collect_declared_and_used(tree, src):
     return declared, {u for u in used if u[:1].isupper()}
 
 
+NESTED_TYPE_KINDS = frozenset((
+    "class_declaration", "struct_declaration", "interface_declaration",
+    "enum_declaration", "delegate_declaration", "record_declaration",
+))
+
+
+def _method_signature(node, src):
+    """(name, parameter-list text, type-parameter count) - the identity C# uses
+    for CS0111. Overloads differ in this tuple, so they are not reported."""
+    field = node.child_by_field_name("name")
+    if field is None:
+        return None
+    params = node.child_by_field_name("parameters")
+    param_text = " ".join(_text(params, src).split()) if params is not None else "()"
+    tparams = node.child_by_field_name("type_parameters")
+    arity = 0
+    if tparams is not None:
+        arity = sum(1 for c in tparams.children if c.type == "type_parameter")
+    return (_text(field, src), param_text, arity)
+
+
+def scan_member_collisions(parser, files):
+    """The CS0102 / CS0111 / CS0542 family: names one type cannot hold twice.
+
+    Unity only reports these when it compiles, and a nested type sharing a name
+    with one of its own methods is easy to write by accident - that shipped once
+    (`PendingStep` was both a method and a private class in MovementSystem.cs).
+    Checked per file and per declared type, so partial types in other files
+    cannot produce false positives.
+    """
+    problems = []
+
+    def visit(node, src, rel):
+        if node.type in ("class_declaration", "struct_declaration", "interface_declaration",
+                         "record_declaration"):
+            type_name = _name_of(node, src)
+            body = node.child_by_field_name("body")
+            if body is None:
+                for child in node.children:
+                    if child.type == "declaration_list":
+                        body = child
+                        break
+            if body is not None and type_name:
+                members = {}   # name -> [(kind, signature or None)]
+                nested = {}    # name -> [kind]
+                for member in body.children:
+                    kind = member.type
+                    if kind in NESTED_TYPE_KINDS:
+                        name = _name_of(member, src)
+                        if name:
+                            nested.setdefault(name, []).append(kind)
+                        continue
+                    if kind == "method_declaration":
+                        sig = _method_signature(member, src)
+                        if sig:
+                            members.setdefault(sig[0], []).append(("method", sig))
+                        continue
+                    if kind == "field_declaration":
+                        for decl in member.children:
+                            if decl.type != "variable_declaration":
+                                continue
+                            for v in decl.children:
+                                if v.type == "variable_declarator":
+                                    name_node = v.child_by_field_name("name")
+                                    if name_node is not None:
+                                        members.setdefault(_text(name_node, src), []).append(
+                                            ("field", None))
+                        continue
+                    if kind in ("property_declaration", "event_declaration",
+                                "event_field_declaration"):
+                        name_node = member.child_by_field_name("name")
+                        if name_node is not None:
+                            members.setdefault(_text(name_node, src), []).append(
+                                (kind.split("_")[0], None))
+                        continue
+                    # constructors and destructors are SUPPOSED to be named after
+                    # the type, so they are skipped on purpose.
+
+                for name, kinds in sorted(nested.items()):
+                    if len(kinds) > 1:
+                        problems.append(
+                            "%s: '%s' is declared as a nested type %d times in '%s' (CS0102)"
+                            % (rel, name, len(kinds), type_name))
+                    if name in members:
+                        problems.append(
+                            "%s: '%s' is both a %s and a nested type in '%s' (CS0102 - "
+                            "rename one of them)"
+                            % (rel, name, members[name][0][0], type_name))
+                for name, entries in sorted(members.items()):
+                    if name == type_name and any(e[0] != "constructor" for e in entries):
+                        problems.append(
+                            "%s: a %s in '%s' is named after its own type (CS0542)"
+                            % (rel, entries[0][0], type_name))
+                    placeholders = [e for e in entries if e[0] in ("field", "property", "event")]
+                    if len(placeholders) > 1:
+                        problems.append(
+                            "%s: '%s' is declared %d times as a %s in '%s' (CS0102)"
+                            % (rel, name, len(placeholders), placeholders[0][0], type_name))
+                    seen = set()
+                    for kind, sig in entries:
+                        if sig is None:
+                            continue
+                        if sig in seen:
+                            problems.append(
+                                "%s: '%s%s' is declared twice with the same signature in "
+                                "'%s' (CS0111)" % (rel, sig[0], sig[1], type_name))
+                        seen.add(sig)
+        for child in node.children:
+            visit(child, src, rel)
+
+    for path in files:
+        errs, code, tree, src = parse_file(parser, path)
+        if errs:
+            continue
+        visit(tree.root_node, src, os.path.relpath(path, ROOT))
+    return problems
+
+
 def load_baseline(path):
     """Engine/framework names the repository is allowed to use without declaring."""
     names = set()
@@ -494,6 +612,16 @@ def main():
         print("names ok: every type/static receiver used here is declared here or listed as "
               "external (%d declared, %d external)"
               % (len(declared_all), external_baseline_size()))
+
+    # 3b. names a type cannot hold twice (the CS0102 family: Unity-only errors)
+    collisions = scan_member_collisions(parser, collect_cs_files())
+    if collisions:
+        fails += len(collisions)
+        for problem in collisions:
+            print("MEMBER FAIL " + problem)
+    else:
+        print("members ok: no nested type shares a name with a method, field or "
+              "property of the same type")
 
     # 4. catalog rows
     with open(os.path.join(RUNTIME, "Core/FunctionCatalog.cs")) as f:
