@@ -6,6 +6,60 @@ carries that module inside a C# file, and a **manual-binding half**, because the
 two halves of an FSM's life are different jobs: the module is compiled from the
 `.fsm`, and the object bindings are hand-written and must survive recompiles.
 
+## Quick start (attach one component, press Play)
+
+You do **not** wire anything manually. Each test has a setup component that
+builds the whole scene for you — ground, player, maze, actors, markers — and the
+object bindings are C# in each `*.Manual.cs` file (compiled in, not dragged in the
+inspector). So the whole procedure is:
+
+1. **Install once.** Put the runtime *and* these tests in the project:
+   ```bash
+   # from the repo root; Tests/ is part of the payload
+   python3 installers/unity/install.py --source local --local-path . \
+       --project "/path/to/YourUnityProject" --yes
+   # (or: --source git --git-url https://github.com/ARandomGameDev8/myFSM.git \
+   #      --branch arena/01a0af62-myfsm --project ... --yes)
+   ```
+   This lands them in `Assets/MyFSM/` — `Assets/MyFSM/Tests/01-...` etc.
+   (verified locally: 79 files copied, 34 of them under `Tests/`). The
+   installer's default source is the `test` branch, which predates the runtime
+   fixes and these tests, so pass `--source local` or the branch above.
+2. **Let Unity compile** (a few seconds; the console should be clean). Nothing
+   to add in the inspector, no scene asset to open — the setup component builds
+   its own scene at Play time.
+3. **New scene** (or any scene) → `GameObject > Create Empty` → **Add
+   Component** → the one component of the test you want:
+
+   | test | component to add | it builds, on its own |
+   | --- | --- | --- |
+   | 01 | `ZoneTestSetup` | the AI (required component, added automatically), the keyboard controller, the marker object, the transition recorder |
+   | 02 | `SpawnStressTest` | ground plane, WASD player, and one chaser cube per `Space` press |
+   | 03 | `MazeTestSetup` | ground plane, random maze + entry/exit, baked NavMesh, runner capsule + agent + AI + recorder |
+   | 04 | `ChaseTestSetup` | the same maze, plus a walked-out chaser and a walking target |
+
+4. **Press Play.** The component logs what it built and what to watch for; the
+   CSVs appear under `Application.persistentDataPath` (Unity logs the full path
+   whenever it writes one).
+
+Nothing else is required — no prefabs, no inspector references, no `.fsmb`
+assets to assign (each generated class carries its module bytes), no
+`com.unity.*` packages (`NavMeshAgent`/`NavMeshBuilder` are built-in modules),
+and not even the `fsmc` compiler: the modules are already compiled into the
+generated classes. `fsmc` is only needed if you edit a `.fsm` and want to
+recompile it.
+
+### When you *would* wire things manually
+
+Only to replace the defaults, never to make a test run. Each setup component
+looks for the objects it needs first and only creates what is missing, so you can
+drop your own in: a `MazeGeneratorController` with your own grid/seed, a runner
+you built yourself (capsule + `NavMeshAgent` + the generated AI class), a
+`cubePrefab` for test 02, or a marker/exit/target assigned in the inspector. The
+`*.Manual.cs` files are the place for bindings that need code — test 02, for
+example, hands the player reference to every runtime-spawned chaser through a
+static field, which no inspector could do.
+
 These are scene tests, not unit tests. They print to the console and write CSVs;
 nothing here fails a build. The property-style checks live in
 `Sandbox/SmokeTest.cs`, and `Sandbox/check.py` syntax-parses everything under
@@ -197,8 +251,9 @@ Files: `maze_run.csv` (the verdict row and its numbers) and `maze_trail.csv`
 (per-sample position, distance to the exit, FSM state). The walked route is also
 drawn in the scene with a LineRenderer.
 
-Requires the **AI Navigation** package (`com.unity.ai.navigation`) for the runtime
-bake; with a NavMesh baked in the editor instead, clear `buildNavMesh`.
+Needs no extra package: the bake is `UnityEngine.AI.NavMeshBuilder`, part of the
+built-in `UnityEngine.AIModule`. With a NavMesh baked in the editor instead,
+clear `buildNavMesh`.
 
 ## Test 04 — shortest path to a *moving* target
 
@@ -249,9 +304,11 @@ a route, and test 04 flags a target that barely moved.
 ## Requirements
 
 * The runtime scripts (`myFSM-UnityRuntime/Runtime/Unity/...`) in the project —
-  `installers/unity/install.py` does that (use `--branch <this branch>`; the
-  default `test` branch predates several fixes).
-* `com.unity.ai.navigation` for tests 03 and 04 (runtime NavMesh baking).
+  `installers/unity/install.py` does that (`Tests/` ships with the payload, so
+  the installer puts these test folders under `Assets/MyFSM/Tests/`). Use
+  `--branch arena/01a0af62-myfsm` or `--source local`: the installer's default
+  `test` branch predates several fixes and these tests.
+* Nothing else. `NavMeshAgent`/`NavMeshBuilder` are built-in Unity modules.
 * No editor-time step: the modules are already compiled into the generated class
   files, so nothing needs assigning in the inspector — attach the setup
   component and press Play.

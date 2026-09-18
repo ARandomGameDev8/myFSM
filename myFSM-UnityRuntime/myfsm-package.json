@@ -12,7 +12,9 @@
     "Plugins/",
     "Samples/",
     "README.md",
-    "myfsm-package.json"
+    "myfsm-package.json",
+    "Tests/",
+    "Docs/"
   ],
   "exclude": [
     "Sandbox/"

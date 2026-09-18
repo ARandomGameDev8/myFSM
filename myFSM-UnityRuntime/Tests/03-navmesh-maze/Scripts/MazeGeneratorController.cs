@@ -13,11 +13,12 @@
 // height (GroundY) and is built from there, so raising/lowering the plane moves
 // the maze with it and nothing floats or sinks.
 //
-// NavMesh: runtime baking uses the AI Navigation package's NavMeshComponents
-// API (NavMeshBuilder.CollectSources + BuildNavMeshData + NavMesh.AddNavMeshData)
-// exactly as documented there. Set buildNavMesh = false to skip it and rely on
-// a NavMesh baked in the editor over the same layout (then press Bake in the
-// Navigation window after building the maze in edit mode).
+// NavMesh: the runtime bake uses UnityEngine.AI.NavMeshBuilder (CollectSources
+// + BuildNavMeshData + NavMesh.AddNavMeshData) straight from the built-in
+// UnityEngine.AIModule — the same API the AI Navigation package wraps in its
+// NavMeshSurface component, and no extra package needed. Set buildNavMesh =
+// false to skip it and rely on a NavMesh baked in the editor instead (press
+// Bake in the Navigation window after building the maze in edit mode).
 //
 //   G  rebuild a new random maze (new seed, new NavMesh) at runtime
 //   B  re-bake the NavMesh over the current layout
@@ -417,7 +418,7 @@ namespace MyFSM.Tests
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Bakes a NavMesh over the maze at runtime (AI Navigation package:
+        /// Bakes a NavMesh over the maze at runtime (built-in UnityEngine.AI:
         /// collect the colliders in the maze bounds, build the data, add it).
         /// </summary>
         public void BakeNavMesh()
@@ -450,9 +451,10 @@ namespace MyFSM.Tests
 
             if (data == null)
             {
-                Debug.LogWarning("[maze] NavMesh build returned nothing — is the AI Navigation "
-                                 + "package installed? Press G to rebuild or bake in the Navigation "
-                                 + "window and clear buildNavMesh.", this);
+                Debug.LogWarning("[maze] NavMesh build returned nothing — check agentRadius/height "
+                                 + "against the cell size (" + cellSize + " m) and the bake bounds. "
+                                 + "Press G to rebuild, or clear buildNavMesh and bake in the "
+                                 + "Navigation window instead.", this);
                 return;
             }
 
