@@ -21,7 +21,7 @@
 // by setting velocity, so Unity's own solver does the falling, the colliding and
 // the pile-ups — that physics load is part of what this test measures.
 //
-// Controls are read through InputCompat, which works with either Unity input
+// Controls are read through StressInput, which works with either Unity input
 // backend (legacy Input Manager or the Input System package).
 //
 // Files (Application.persistentDataPath):
@@ -272,7 +272,7 @@ namespace MyFSM.Tests
                       + spawnPerPress + " AI, B = +" + burstSize + ", P = pause spawning, "
                       + "L = write the CSVs, Backspace = clear. Chasers hunt '"
                       + (ChaserAI.Player != null ? ChaserAI.Player.name : "NOTHING")
-                      + "'. Input backend: " + InputCompat.Backend
+                      + "'. Input backend: " + StressInput.Backend
                       + ". Placement: " + placement
                       + (placement == SpawnPlacement.CenterInAir
                          ? " (from " + spawnHeight + " m up, gravity "
@@ -280,9 +280,9 @@ namespace MyFSM.Tests
                          : " (on the ground at " + spawnY + " m)")
                       + ", ground plane " + groundSize + " m.", this);
 
-            if (!InputCompat.Available)
-                Debug.LogError("[stress] no readable keyboard input: " + InputCompat.Backend + ". "
-                               + InputCompat.Fix, this);
+            if (!StressInput.Available)
+                Debug.LogError("[stress] no readable keyboard input: " + StressInput.Backend + ". "
+                               + StressInput.Fix, this);
 
             // Opt-in only (spawnOnStart is 0 by default): the test does not put AIs in
             // the scene behind your back, it only answers what you ask it to spawn.
@@ -318,22 +318,22 @@ namespace MyFSM.Tests
 
         private void HandleInput()
         {
-            if (InputCompat.GetKeyDown(clearKey)) { ClearAll(); return; }
-            if (InputCompat.GetKeyDown(pauseKey))
+            if (StressInput.GetKeyDown(clearKey)) { ClearAll(); return; }
+            if (StressInput.GetKeyDown(pauseKey))
             {
                 Paused = !Paused;
                 Debug.Log("[stress] spawning " + (Paused ? "paused" : "resumed")
                           + " at " + AliveCount + " AIs", this);
             }
-            if (InputCompat.GetKeyDown(reportKey))
+            if (StressInput.GetKeyDown(reportKey))
             {
                 WriteFiles();
                 Debug.Log("[stress] report written at " + AliveCount + " AIs", this);
             }
             if (Paused) return;
 
-            if (InputCompat.GetKeyDown(spawnKey)) Spawn(spawnPerPress);
-            if (InputCompat.GetKeyDown(burstKey)) Spawn(burstSize);
+            if (StressInput.GetKeyDown(spawnKey)) Spawn(spawnPerPress);
+            if (StressInput.GetKeyDown(burstKey)) Spawn(burstSize);
         }
 
         private void DetectSlowdown()
@@ -603,7 +603,7 @@ namespace MyFSM.Tests
             summary.Append("cube gravity       : ").Append(gravityEnabled ? "ON (physics solver included in these numbers)" : "off").Append('\n');
             summary.Append("spawn placement    : ").Append(placement).Append(placement == SpawnPlacement.CenterInAir
                               ? " at " + spawnHeight.ToString("F0") + " m" : "").Append('\n');
-            summary.Append("input backend      : ").Append(InputCompat.Backend).Append('\n');
+            summary.Append("input backend      : ").Append(StressInput.Backend).Append('\n');
             summary.Append("final smoothed ms  : ").Append(_smoothedMs.ToString("F2")).Append('\n');
             summary.Append("final fps          : ").Append((1000f / Mathf.Max(0.0001f, _smoothedMs)).ToString("F1")).Append('\n');
             summary.Append("registered AIs     : ").Append(_lastRegistered > 0 ? _lastRegistered : RegisteredCount()).Append('\n');
