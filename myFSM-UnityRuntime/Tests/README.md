@@ -334,6 +334,17 @@ no static state. One line in the console then says what the first cube ended up
 chasing (`[stress] cube #1 chases 'Player' …`), so "why is the crowd going the
 wrong way?" is answered instead of guessed.
 
+The player is watched, not trusted. At startup the console lists **every script on
+the player** (`[stress] scripts on the player 'Player': PlayerController …`), and
+anything that is not `PlayerController` is an error — a second movement script on
+the player is the classic way for "the player gets dragged somewhere" to happen
+while the FSM side is perfectly fine. During the run, if the player moves sideways
+while **no movement key is held**, that is a console error
+(`[stress] THE PLAYER MOVED … m sideways while NO movement key was held`) and the
+summary counts it: the keys are the only thing allowed to move the player, and the
+test says so instead of leaving you to notice it by eye. Vertical movement is
+ignored, so falling is never mistaken for drift.
+
 Unity's solver does the falling, the colliding and the pile-ups: **that physics
 load is part of the number this test reports**, which is why the summary records
 `cube gravity`, `spawn placement` and the plane size — runs with different
@@ -350,13 +361,15 @@ Files:
 | file | row per | columns |
 | --- | --- | --- |
 | `spawn_stress_spawns.csv` | spawn | index, frame, `instantiateMs`, the frame the spawn landed in, alive-after, instance id |
-| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive cubes, **AIs registered in the runtime's DB**, total FSM calls served, **mean and nearest distance from the crowd to the player** (-1 = no crowd to measure) |
-| `spawn_stress_summary.txt` | run | player and its body, spawned, alive, practical maximum, final fps, `crowd to player`, registry size, total FSM calls |
+| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive cubes, **AIs registered in the runtime's DB**, total FSM calls served, **mean and nearest distance from the crowd to the player** (-1 = no crowd to measure), then the **player's own X/Y/Z and whether a movement key was held** (1/0) |
+| `spawn_stress_summary.txt` | run | player and its body, `player drift` (sideways moves with no key held), spawned, alive, practical maximum, final fps, `crowd to player`, registry size, total FSM calls |
 
-The last two columns of `spawn_stress_frames.csv` answer "is the crowd chasing me
-or stuck?": a working chase keeps the mean distance small however far the player
+The crowd columns of `spawn_stress_frames.csv` answer "is the crowd chasing me or
+stuck?": a working chase keeps the mean distance small however far the player
 walks, while a crowd that never got a target (or is jammed) shows the mean growing
-with the player's walk.
+with the player's walk. The player columns answer the other half — "did the keys
+move him, or did something else?": `playerMoving` is 0 exactly when no key was
+held, so any change of X/Z on a 0 row is not the controller.
 
 The practical maximum is declared by the test itself: when the smoothed frame time
 stays above `slowdownFrameMs` (33.3 ms = 30 fps) for `slowdownHoldSeconds` (1.5 s)
@@ -451,7 +464,7 @@ the live route length and the chaser's state — the curve that shows the chase)
 | `CS0103: The name 'FsmValue' does not exist in the current context` in a `*.Manual.cs` | that file writes value slots, and `FsmValue` lives in `MyFSM.Core` — a `using` applies to ONE file, so `using MyFSM.Unity;` does not bring it in | add `using MyFSM.Core;` (fixed in the shipped files; if you copied them earlier, re-copy or add the line) |
 | `CS0103: The name 'StressInput' / 'MazeInput' / 'ChaseInput' does not exist` | that script is from this repo but its per-folder input helper is missing from the project (each test folder carries its own copy) | copy the helper file from the same folder (`Tests/<case>/Scripts/<Name>Input.cs`) — `Tests/Tools/check_project.py` lists exactly what is missing. All four helpers are in namespace `MyFSM.Tests`, so no `using` is involved any more |
 | `CS0103: The name 'X' does not exist` where `X` does not exist ANYWHERE in the current checkout (for example `InputCompat`) | your project mixes two versions: that script is from an older commit than the helper it calls. This shipped once — `SpawnStressTest.cs` kept calling `InputCompat` after the helper became `StressInput`. `Tests/Tools/check_project.py` reports the file as `STALE` because it compares contents, but only when run from the fixed checkout — and if the checkout itself holds the mistake, no content comparison can see it | re-copy the whole folder (`Tests/<case>/Scripts/`) or re-run the installer, then prove it without opening Unity: `python3 Sandbox/check.py --baseline <project>/Assets/MyFSM` names the exact missing type |
-| test 02: the **player** slides on its own, or the crowd pushes him to the middle | something other than the keys is driving the player: either a dynamic Rigidbody (physics can then shove it) or an FSM AI standing on the player object (an AI ticks every frame and drags its own object towards its own goal) | the setup forces a **kinematic** body on the player (Unity: collisions do not affect a kinematic body, so the crowd blocks it but cannot move it) and prints `[stress] player '<name>': …`. If an AI is on the player it logs an error naming the component — remove it; the player is driven by keys only |
+| test 02: the **player** slides on its own, or the crowd pushes him to the middle | something other than the keys is driving the player: either a dynamic Rigidbody (physics can then shove it), an FSM AI standing on the player object (an AI ticks every frame and drags its own object towards its own goal), or any other script that writes a position | the setup forces a **kinematic** body on the player (Unity: collisions do not affect a kinematic body, so the crowd blocks it but cannot move it) and prints `[stress] player '<name>': …`, then the **complete list of scripts on the player**, with anything that is not `PlayerController` logged as an error. During the run `[stress] THE PLAYER MOVED … while NO movement key was held` names the distance and the summary line `player drift` counts it — the test reports the drag instead of leaving it to be inferred |
 | every cube (or an object the FSM drives) walks to the **centre of the plane** | the AI's target slot is unbound. World-space reads of an unbound handle used to return `(0,0,0)`, and `(0,0,0)` is the world origin — the middle of the plane — so every such AI marched there | fixed in the runtime: such a read is now an **invalid (NaN)** position and the movement calls refuse it, so the agent stays where it is and logs `getPosition: no live source to read a position from …` once per AI. Bind the slot (or create the object it expects) — in test 02 the chaser's `player` target comes from `ChaserAI.Player` / an object named `Player` |
 | an agent hovers, or climbs towards a target above it | a body whose gravity is on has its step taken in the ground plane: Unity keeps the vertical axis (`GravityOwnsVertical`). A body with gravity **off** or a kinematic body has nothing else driving it, so the goal owns all three axes and flies to the target's height | that is the walker/flyer split: `useGravity` on = ground agent (test 02), off = flyer |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |

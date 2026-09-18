@@ -26,10 +26,14 @@
 // OUTPUT (Application.persistentDataPath)
 //
 //   spawn_stress_spawns.csv    one row per spawn: instantiate / step / settle ms
-//   spawn_stress_frames.csv    sampled frames: ms, fps, alive, FSM calls, and the
-//                              mean and nearest distance from the crowd to the
-//                              player (-1 = no crowd)
+//   spawn_stress_frames.csv    sampled frames: ms, fps, alive, FSM calls, the
+//                              mean/nearest crowd distance to the player, and the
+//                              player's own position + key state (-1 = no crowd)
 //   spawn_stress_summary.txt   the same numbers at the end
+//
+// The player is watched, not trusted: its scripts are listed at startup, and if it
+// moves sideways while no movement key is held that is a console ERROR with the
+// distance - the runtime never quietly lets the player be dragged anywhere.
 //
 // Nothing here hardens or converts anything at runtime: the player is created the
 // way it should be (controller + WASD), each cube is created the way it should be
@@ -127,6 +131,11 @@ namespace MyFSM.Tests
                  + "player) every N seconds. 0 = never.")]
         public float logCrowdEverySeconds = 5f;
 
+        [Header("Player watch")]
+        [Tooltip("Metres of sideways movement with NO key held that count as the player "
+                 + "being moved by something else, and get logged as an error. 0 = off.")]
+        public float driftWarnDistance = 0.05f;
+
         public class SpawnRecord
         {
             public int index;
@@ -150,6 +159,10 @@ namespace MyFSM.Tests
             public float crowdMeanToPlayer = -1f;
             /// <summary>Distance (m) from the player to the closest cube; -1 = no crowd.</summary>
             public float crowdNearestToPlayer = -1f;
+            /// <summary>Where the player was when this frame was sampled.</summary>
+            public Vector3 playerPosition;
+            /// <summary>True when a movement key was held at sample time.</summary>
+            public bool playerMoving;
         }
 
         public readonly List<SpawnRecord> Spawns = new List<SpawnRecord>();
@@ -176,6 +189,12 @@ namespace MyFSM.Tests
         private bool _wroteFiles;
         private PlayerController _wasd;
         private float _nextCrowdLog;
+        private Vector3 _lastPlayerPosition;
+        private bool _havePlayerPosition;
+        private bool _wasdMovingLastFrame;
+        private float _driftTotal;
+        private int _driftEvents;
+        private float _nextDriftLog;
         private bool _loggedPlayer;
         private int _verifyTries;
         private bool _verifiedTarget;
@@ -348,6 +367,21 @@ namespace MyFSM.Tests
                              : "A DIFFERENT OBJECT. Point this component's Player field at "
                                + "the object you drive."), player);
             }
+            if (player != null)
+            {
+                int foreign;
+                string loadout = PlayerLoadout(out foreign);
+                if (foreign > 0)
+                    Debug.LogError("[stress] the player '" + player.name + "' carries "
+                                   + foreign + " script(s) that are NOT PlayerController: "
+                                   + loadout + ". Anything here that writes a position can "
+                                   + "move the player - remove it, or point it elsewhere.",
+                                   player);
+                else
+                    Debug.Log("[stress] scripts on the player '" + player.name + "': "
+                              + loadout + " - the complete list of things that can move it.",
+                              player);
+            }
             Debug.Log("[stress] ground " + groundSize + " m, cubes "
                       + (cubeGravity ? "with gravity" : "without gravity")
                       + ", spawn placement " + placement
@@ -497,6 +531,7 @@ namespace MyFSM.Tests
 
             VerifyFirstChaser();
             HandleInput();
+            WatchPlayerDrift();
             DetectSlowdown();
             LogCrowd();
 
@@ -542,6 +577,7 @@ namespace MyFSM.Tests
             if (controller != null) controller.enabled = true;
             Rigidbody body = player.GetComponent<Rigidbody>();
             if (body != null && !body.isKinematic) body.velocity = Vector3.zero;
+            SnapPlayerWatch();
             Debug.Log("[stress] player reset to the origin.", player);
         }
 
@@ -615,6 +651,92 @@ namespace MyFSM.Tests
                       + (_wasd != null && _wasd.Moving ? " (you are walking)" : ""), this);
         }
 
+        /// <summary>
+        /// The player moves only while a movement key is held, so if it moves
+        /// sideways with NO key held, that is said out loud as an error with the
+        /// distance - never left for the player to notice by eye. Vertical motion is
+        /// ignored (gravity moves the player down legitimately), and the frame the key
+        /// is released is skipped so a last step is not misread as drift.
+        /// </summary>
+        private void WatchPlayerDrift()
+        {
+            if (player == null) return;
+            Vector3 now = player.position;
+            if (!_havePlayerPosition)
+            {
+                _havePlayerPosition = true;
+                _lastPlayerPosition = now;
+                return;
+            }
+            Vector3 moved = now - _lastPlayerPosition;
+            _lastPlayerPosition = now;
+
+            if (driftWarnDistance <= 0f) return;
+            bool walking = _wasd != null && _wasd.Moving;
+            bool wasWalking = _wasdMovingLastFrame;
+            _wasdMovingLastFrame = walking;
+            if (walking || wasWalking) return;   // a key was held: normal movement
+
+            float sideways = new Vector2(moved.x, moved.z).magnitude;
+            if (sideways <= driftWarnDistance) return;
+
+            _driftEvents++;
+            _driftTotal += sideways;
+            if (Time.unscaledTime < _nextDriftLog) return;
+            _nextDriftLog = Time.unscaledTime + 1f;
+            Debug.LogError("[stress] THE PLAYER MOVED " + sideways.ToString("F3")
+                           + " m sideways while NO movement key was held ("
+                           + _driftEvents + " time(s) so far, "
+                           + _driftTotal.ToString("F2") + " m total). "
+                           + (_wasd != null
+                              ? "PlayerController moves this object only while a key is "
+                                + "held, so something else is driving it."
+                              : "This object has no PlayerController at all.")
+                           + " The complete list of scripts on the player is in the setup "
+                           + "lines above.", player);
+        }
+
+        /// <summary>
+        /// Re-baseline the drift watch after the test itself teleports the player
+        /// (the R key), so a deliberate reset is not reported as drift.
+        /// </summary>
+        private void SnapPlayerWatch()
+        {
+            if (player == null) return;
+            _lastPlayerPosition = player.position;
+            _havePlayerPosition = true;
+        }
+
+        /// <summary>
+        /// Every script on the player object, by name; `foreign` counts the ones that
+        /// are not PlayerController. A second movement script on the player is the
+        /// classic way for "the player gets dragged somewhere" to happen while the AI
+        /// side is perfectly fine, so this list is printed at startup and anything
+        /// extra is an error.
+        /// </summary>
+        private string PlayerLoadout(out int foreign)
+        {
+            foreign = 0;
+            StringBuilder text = new StringBuilder();
+            MonoBehaviour[] scripts = player.GetComponents<MonoBehaviour>();
+            for (int i = 0; i < scripts.Length; i++)
+            {
+                MonoBehaviour script = scripts[i];
+                if (script == null) continue;
+                if (text.Length > 0) text.Append(", ");
+                if (script is PlayerController)
+                {
+                    text.Append(script.GetType().Name);
+                }
+                else
+                {
+                    text.Append(script.GetType().Name).Append(" (NOT PlayerController)");
+                    foreign++;
+                }
+            }
+            return text.Length == 0 ? "none at all - nothing here reads WASD" : text.ToString();
+        }
+
         private void DetectSlowdown()
         {
             if (!stopWhenSlow || Paused || AliveCount < minimumCountForStop) return;
@@ -640,7 +762,9 @@ namespace MyFSM.Tests
                 time = Time.unscaledTime,
                 deltaMs = deltaMs,
                 smoothedMs = _smoothedMs,
-                alive = AliveCount
+                alive = AliveCount,
+                playerPosition = player != null ? player.position : Vector3.zero,
+                playerMoving = _wasd != null && _wasd.Moving
             };
             // Counting every AI's calls is O(N): refresh it every 5th sample and
             // report the last known number in between (never a fake zero).
@@ -745,7 +869,8 @@ namespace MyFSM.Tests
 
             StringBuilder frames = new StringBuilder();
             frames.Append("frame,time,deltaMs,smoothedMs,fps,alive,registered,totalCalls,"
-                          + "crowdMeanToPlayer,crowdNearestToPlayer\n");
+                          + "crowdMeanToPlayer,crowdNearestToPlayer,"
+                          + "playerX,playerY,playerZ,playerMoving\n");
             for (int i = 0; i < Frames.Count; i++)
             {
                 FrameSample sample = Frames[i];
@@ -759,7 +884,11 @@ namespace MyFSM.Tests
                       .Append(sample.registered).Append(',')
                       .Append(sample.totalCalls).Append(',')
                       .Append(sample.crowdMeanToPlayer.ToString("F2")).Append(',')
-                      .Append(sample.crowdNearestToPlayer.ToString("F2")).Append('\n');
+                      .Append(sample.crowdNearestToPlayer.ToString("F2")).Append(',')
+                      .Append(sample.playerPosition.x.ToString("F2")).Append(',')
+                      .Append(sample.playerPosition.y.ToString("F2")).Append(',')
+                      .Append(sample.playerPosition.z.ToString("F2")).Append(',')
+                      .Append(sample.playerMoving ? 1 : 0).Append('\n');
             }
             File.WriteAllText(FrameCsvPath, frames.ToString());
 
@@ -768,6 +897,13 @@ namespace MyFSM.Tests
             summary.Append("player            : ")
                    .Append(player != null ? player.name + " (" + DescribeBody(player) + ")" : "NONE")
                    .Append('\n');
+            summary.Append("player drift      : ")
+                   .Append(_driftEvents == 0
+                           ? "none - the player only moved while a movement key was held\n"
+                           : _driftEvents + " move(s) with NO key held, "
+                             + _driftTotal.ToString("F2") + " m total (with no "
+                             + "PlayerController-drivable explanation; see the console "
+                             + "errors)\n");
             summary.Append("spawned total     : ").Append(SpawnedTotal).Append('\n');
             summary.Append("alive at stop     : ").Append(AliveCount).Append('\n');
             summary.Append("practical maximum : ")
