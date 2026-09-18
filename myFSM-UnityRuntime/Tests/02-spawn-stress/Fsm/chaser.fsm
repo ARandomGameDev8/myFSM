@@ -3,13 +3,18 @@
 // The point of this module is to be tiny, so the spawn-stress test measures the
 // RUNTIME (N AIs ticking, each posting a goal every tick), not the FSM.
 //
-// moveTowards takes a destination POINT and the goal is retired on arrival, so
-// it is re-posted every tick: the cube keeps chasing a player who can walk away
-// with WASD. Speed is explicit here (the runtime uses it directly), which is
-// what makes the stress numbers comparable between runs.
+// moveTowards takes a destination: given an OBJECT it re-reads that object every
+// tick, so it tracks a target that moves; given a point (getPosition(...)) it is
+// re-posted here every tick, which tracks just as well and keeps the module tiny.
+// Speed is explicit (the runtime uses it directly), which is what makes the
+// stress numbers comparable between runs.
 //
-// The spawned cube carries a dynamic Rigidbody, so the runtime drives it by
-// setting velocity and Unity's solver does the colliding.
+// The spawned cube carries a dynamic Rigidbody, so each tick the runtime takes
+// one step of `position += direction * speed * time` and hands it to
+// Rigidbody.MovePosition: Unity moves the cube and resolves the contacts.
+//
+// The target is a point at the cube's own height that follows the player (the
+// test publishes it), so the chase stays horizontal.
 
 const float chaseSpeed = 6.0f;
 

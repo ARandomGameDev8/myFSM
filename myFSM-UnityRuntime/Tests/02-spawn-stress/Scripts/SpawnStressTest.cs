@@ -17,9 +17,11 @@
 //
 // Each spawned cube is a dynamic Rigidbody WITH GRAVITY (rotations locked to X/Z
 // so it stays upright), dropped from the air above the centre of the plane: it
-// falls, lands, and then chases the player in the XZ plane. The runtime moves it
-// by setting velocity, so Unity's own solver does the falling, the colliding and
-// the pile-ups — that physics load is part of what this test measures.
+// falls, lands, and then chases the player. Each tick the runtime takes one step
+// of `position += direction * speed * time` and hands it to Rigidbody.MovePosition,
+// so Unity moves the cube and its solver does the colliding and the pile-ups —
+// that physics load is part of what this test measures. Gravity, drag and mass
+// keep acting whenever no goal is driving the cube.
 //
 // Controls are read through StressInput, which works with either Unity input
 // backend (legacy Input Manager or the Input System package).
@@ -56,6 +58,10 @@ namespace MyFSM.Tests
         public bool createPlayerIfMissing = true;
         [Tooltip("The player is a cylinder: 2 m tall, standing on the ground.")]
         public float playerHeight = 2f;
+        [Tooltip("Height of the point the chasers aim at (world y). Default 0.5 = the centre " +
+                 "of a 1 m cube resting on the ground, so the crowd runs along the floor " +
+                 "instead of climbing to the player's centre.")]
+        public float chaseTargetHeight = 0.5f;
         public Color playerColour = new Color(0.2f, 0.7f, 1f);
         public bool createGroundIfMissing = true;
         [Tooltip("Side length of the ground plane in metres. Big enough for thousands of " +
@@ -177,6 +183,7 @@ namespace MyFSM.Tests
         private bool _warnedNoGravity;
         private Transform _ground;
         private PlayerController _playerController;
+        private Transform _chaseTarget;
         private Vector3 _lastPlayerPosition;
         private bool _hasLastPlayerPosition;
         private int _driftFrames;
@@ -190,11 +197,44 @@ namespace MyFSM.Tests
         private void Awake()
         {
             EnsureGround();
-            ChaserAI.Player = ResolvePlayer();
+            player = ResolvePlayer();
             ConfigurePlayerBounds();
             HardenPlayer();
+            EnsureChaseTarget();
             SetUpCamera();
             if (player != null) _playerController = player.GetComponent<PlayerController>();
+        }
+
+        /// <summary>
+        /// The point the chasers aim at: a child of the player at the height of a
+        /// cube centre resting on the ground.
+        ///
+        /// moveTowards moves along the direction to its target (position +=
+        /// direction * speed * time), so aiming at the player's CENTRE would pull the
+        /// cubes half a metre into the air — the direction has an upward component and
+        /// they would hover there. Aiming at a point on the floor keeps the chase
+        /// horizontal, and because it is parented to the player it moves with it, so
+        /// the target is constantly moving without the test updating anything per frame.
+        /// </summary>
+        private void EnsureChaseTarget()
+        {
+            if (player == null) { ChaserAI.Player = null; return; }
+
+            Transform existing = player.Find("ChaserTarget");
+            if (existing == null)
+            {
+                GameObject go = new GameObject("ChaserTarget");
+                existing = go.transform;
+                existing.SetParent(player, false);
+            }
+            // PlayerController pins the player's centre at playerHeight * 0.5, so
+            // the offset that puts the aim point at `chaseTargetHeight` in world
+            // space can be computed once. If the player is ever carried up, the
+            // child rides along and the crowd aims at the same height above it.
+            existing.localPosition =
+                new Vector3(0f, chaseTargetHeight - playerHeight * 0.5f, 0f);
+            _chaseTarget = existing;
+            ChaserAI.Player = existing;
         }
 
         /// <summary>
@@ -303,7 +343,7 @@ namespace MyFSM.Tests
         /// </summary>
         private void WatchPlayerDrift()
         {
-            Transform who = ChaserAI.Player;
+            Transform who = player;
             if (who == null) return;
 
             Vector3 now = who.position;
@@ -450,10 +490,11 @@ namespace MyFSM.Tests
             }
             else
             {
-                Debug.Log("[stress] player '" + ChaserAI.Player.name + "': "
-                          + DescribeBody(ChaserAI.Player)
-                          + ", WASD via PlayerController. The crowd chases it; nothing can "
-                          + "push it.", ChaserAI.Player);
+                Debug.Log("[stress] player '" + player.name + "': " + DescribeBody(player)
+                          + ", WASD via PlayerController. The crowd chases '"
+                          + _chaseTarget.name + "' at y = " + chaseTargetHeight.ToString("F2")
+                          + " (a child of the player), so it runs along the ground; nothing can "
+                          + "push the player.", _chaseTarget);
             }
 
             // Opt-in only (spawnOnStart is 0 by default): the test does not put AIs in

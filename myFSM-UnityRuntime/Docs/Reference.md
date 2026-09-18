@@ -56,33 +56,28 @@ collision maths in the runtime at all:
 |---|---|---|
 | `NavMeshAgent` (enabled, on a mesh) | `SetDestination` | yes, by the NavMesh |
 | `CharacterController` | `Move` | yes — the controller's own capsule sweep |
-| `Rigidbody`/`Rigidbody2D`, dynamic | `velocity` is set (or `AddForce`) | yes — the physics solver |
-| `Rigidbody`/`Rigidbody2D`, kinematic | `MovePosition` | **no** — Unity: "collisions won't affect the rigidbody itself" |
+| `Rigidbody`/`Rigidbody2D`, **dynamic** | `MovePosition` — the step becomes the velocity for that physics step | **yes** — the solver resolves every contact |
+| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity: "If the rigidbody is kinematic then any collisions won't affect the rigidbody itself". Use a dynamic body when walls must stop it |
 | `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |
 | nothing at all | none | no — the step goes to the transform |
 
-Dynamic bodies split the axes: **gravity keeps the vertical, the goal keeps
-the horizontal.** A body with gravity on (`useGravity`, or a non-zero
-`gravityScale` in 2D) has its XZ velocity driven towards the goal at the
-requested speed while its vertical velocity is left exactly as the solver
-left it — a body dropped from the air falls at Unity's gravity (9.81 m/s²
-by default), lands, and is never lifted to the goal's height. That is the
-same split a `NavMeshAgent` uses walking the ground, and arrival is measured
-in that same plane: a gravity-driven body has arrived when it is under the
-goal horizontally, so a grounded chaser settles around its target instead of
-pressing into its centre. With gravity off nothing else owns the vertical
-axis, so the goal drives all three — what a flying or hovering agent wants.
+Every goal-driven move is the same formula: **position += direction x speed
+x time**, handed to the Unity call for the component the agent carries.
+Nothing in the runtime writes `velocity` and nothing here resolves a contact:
+Unity moves the body, and for a dynamic body the physics step is what makes
+walls, piles and other bodies matter. `MovePosition` is a move, not a teleport
+(Unity: use `Rigidbody.position` to teleport), so interpolation stays smooth;
+and because a rigidbody moves in physics steps while an AI ticks once per
+frame, the steps of the frames inside one physics step are summed and
+requested as a single move — the body then travels at exactly the requested
+speed no matter what the frame rate is doing.
 
-**An unbound slot is never the origin.** A handle that was never bound (or a
-target that has been destroyed) has no position, and the runtime says so
-instead of inventing one: world-space reads — `getPosition`, camera
-`getPosition`, `screenToWorld`, `getPursuitPosition`, an unknown
-`getNextWaypoint` — return an **invalid (NaN)** vector, `setPosition` refuses
-to write it, and `goTo`/`moveTowards`/`sprintTowards` refuse to post a goal
-from it, so the agent stays where it is. Returning `(0,0,0)` instead — which
-is what used to happen — silently aims the caller at the **world origin, the
-centre of the scene**: every AI with an unbound target marched there, and an
-object driven that way looked as if something was pulling it to the middle.
+**Gravity, drag and mass** keep working on a body that no goal is driving;
+while a goal is active, the goal's step is what moves it — that is what
+`moveTowards` asks for. A goal posted towards an **object** re-reads that
+object's position every tick, so the agent tracks a target that moves and
+settles on one that stands still.
+
 Each of these is reported once per AI (they fire every tick otherwise).
 
 Direct position changes are untouched: `setPosition`, `setRotation` and
@@ -258,7 +253,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0601` | `findPath(Vector2 from, Vector2 to) -> int` | 1 |  |
 | `0x0602` | `getNextWaypoint(int path) -> Vector3` | 1 | Pops the next corner of a path id. Past the end it returns the last corner forever (no error). |
 | `0x0603` | `getPathLength(int path) -> float` | 1 | Total length of the stored polyline; 0 for an unknown path (logs an error). |
-| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is "there" when it is under the target. With an invalid (NaN) target every comparison is false, so it reads false rather than arrived-at-the-origin. |
+| `0x0604` | `hasReachedDestination(NavMeshAgent agent, Vector3 tgt) -> bool` | 1 | Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. |
 | `0x0605` | `hasReachedDestination(NavMeshAgent agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0606` | `hasReachedDestination(Object3D agent, Vector3 tgt) -> bool` | 1 |  |
 | `0x0607` | `hasReachedDestination(Object3D agent, Object3D tgt) -> bool` | 1 |  |
@@ -290,7 +285,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0621` | `sprintTowards(Object3D agent, Object3D dest, float speedMult) -> void` | 3 |  |
 | `0x0622` | `sprintTowards(Object2D agent, Vector2 dest, float speedMult) -> void` | 3 |  |
 | `0x0623` | `sprintTowards(Object2D agent, Object2D dest, float speedMult) -> void` | 3 |  |
-| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
+| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body (`MovePosition`, `Move` for a CharacterController). With an **object** argument the target is re-read every tick, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
 | `0x0625` | `moveTowards(NavMeshAgent agent, Object3D dest, float speed) -> void` | 3 |  |
 | `0x0626` | `moveTowards(Object3D agent, Vector3 dest, float speed) -> void` | 3 |  |
 | `0x0627` | `moveTowards(Object3D agent, Object3D dest, float speed) -> void` | 3 |  |

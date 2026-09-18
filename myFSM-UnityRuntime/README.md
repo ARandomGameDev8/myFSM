@@ -170,9 +170,10 @@ calls above. `AIInstance`'s **Collision Aware** toggle is the escape hatch for
 objects whose transform something else owns.
 
 Each agent logs the call it uses when that changes
-(`movement: Marcher -> Rigidbody.velocity (physics resolves collisions)`), which
-makes the path taken visible instead of guessed. Object destinations snapshot at
-call time for go/sprint/move; `follow`/`followTarget` re-target live; `lookAt`
+(`movement: Marcher -> Rigidbody.MovePosition (physics resolves collisions)`), which
+makes the path taken visible instead of guessed. `moveTowards` with an OBJECT
+destination re-reads it every tick, as `follow`/`followTarget` do; `goTo` and
+`sprintTowards` take a Vector3 (or an object's position at call time); `lookAt`
 rotates gradually (through `MoveRotation` when the object has a body); movement
 never changes facing. The other 150+ overloads are direct engine mappings;
 engine-state failures (null handles, missing components) log and yield defaults,
@@ -213,8 +214,9 @@ Ambiguities in the design brief, resolved as follows:
   (so `waitUntil(hasReachedDestination(...))` can become true). `waitUntil`
   re-evaluates its condition AST every tick.
 - **`follow` vs `followTarget`**: both live-track; `follow` stops closer
-  (0.5x stop distance). `goTo`/`sprintTowards`/`moveTowards` snapshot object
-  destinations at call time.
+  (0.5x stop distance). `moveTowards` given an OBJECT also live-tracks it (the
+  goal re-reads the object each tick); given a Vector3 it walks to that fixed
+  point. `goTo`/`sprintTowards` always take a point.
 - **`getPursuitPosition`**: one-second lead on the target's rigidbody
   velocity (`pos + vel`), else the current position.
 - **`getSeparationVector`**: samples up to `neighbors` nearby colliders

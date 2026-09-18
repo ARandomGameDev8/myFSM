@@ -76,13 +76,13 @@ NOTES = {
 "findPath":"Stores a corner list and returns its **path id** (int). A start or end that is not a finite position (NaN/Infinity, e.g. read from an unbound slot) stores nothing and returns the invalid id 0. NavMesh corners when available, straight line otherwise. Ids are per-AI; 0 is invalid.",
 "getNextWaypoint":"Pops the next corner of a path id. Past the end it returns the last corner forever (no error).",
 "getPathLength":"Total length of the stored polyline; 0 for an unknown path (logs an error).",
-"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2. On a dynamic body with gravity on, the distance is measured in the horizontal plane (see §2) — a grounded agent is \"there\" when it is under the target. With an invalid (NaN) target every comparison is false, so it reads false rather than arrived-at-the-origin.",
+"hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2.",
 "goTo":"Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. A non-finite destination is refused (see moveTowards).",
 "follow":"Posts a FollowObject goal: re-reads the target's position every tick, so it chases a moving object forever. Stops at **half** the agent's stopping distance — the tighter of the two follow calls.",
 "findShortestPathAndMove":"Posts a corner queue (PathCorners) and walks it.",
 "followTarget":"Same as `follow` but stops at the **full** stopping distance, so it keeps the agent's normal stand-off instead of closing in.",
 "sprintTowards":"Point goal at **base speed × multiplier** (multiplier is the 3rd argument; negative clamps to 0).",
-"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. On a dynamic body with gravity ON, only the horizontal plane is driven — the vertical axis belongs to the solver (see §2). A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is.",
+"moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body (`MovePosition`, `Move` for a CharacterController). With an **object** argument the target is re-read every tick, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is.",
 "stopMovement":"Clears the goal (and stops a NavMeshAgent).",
 # --- Perception (0x0700-0x070D) ---
 "lookAt":"Posts a LookAt goal: gradual rotation toward the target. The goal is **retired within 0.5°**, so re-post it every tick to track a moving target. 2D uses +X as forward and rotates around Z.",
@@ -250,33 +250,28 @@ A("| On the agent | Unity call | Stopped by walls? |")
 A("|---|---|---|")
 A("| `NavMeshAgent` (enabled, on a mesh) | `SetDestination` | yes, by the NavMesh |")
 A("| `CharacterController` | `Move` | yes — the controller's own capsule sweep |")
-A("| `Rigidbody`/`Rigidbody2D`, dynamic | `velocity` is set (or `AddForce`) | yes — the physics solver |")
-A("| `Rigidbody`/`Rigidbody2D`, kinematic | `MovePosition` | **no** — Unity: \"collisions won't affect the rigidbody itself\" |")
+A("| `Rigidbody`/`Rigidbody2D`, **dynamic** | `MovePosition` — the step becomes the velocity for that physics step | **yes** — the solver resolves every contact |")
+A("| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity: \"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself\". Use a dynamic body when walls must stop it |")
 A("| `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |")
 A("| nothing at all | none | no — the step goes to the transform |")
 A("")
-A("Dynamic bodies split the axes: **gravity keeps the vertical, the goal keeps")
-A("the horizontal.** A body with gravity on (`useGravity`, or a non-zero")
-A("`gravityScale` in 2D) has its XZ velocity driven towards the goal at the")
-A("requested speed while its vertical velocity is left exactly as the solver")
-A("left it — a body dropped from the air falls at Unity's gravity (9.81 m/s²")
-A("by default), lands, and is never lifted to the goal's height. That is the")
-A("same split a `NavMeshAgent` uses walking the ground, and arrival is measured")
-A("in that same plane: a gravity-driven body has arrived when it is under the")
-A("goal horizontally, so a grounded chaser settles around its target instead of")
-A("pressing into its centre. With gravity off nothing else owns the vertical")
-A("axis, so the goal drives all three — what a flying or hovering agent wants.")
+A("Every goal-driven move is the same formula: **position += direction x speed")
+A("x time**, handed to the Unity call for the component the agent carries.")
+A("Nothing in the runtime writes `velocity` and nothing here resolves a contact:")
+A("Unity moves the body, and for a dynamic body the physics step is what makes")
+A("walls, piles and other bodies matter. `MovePosition` is a move, not a teleport")
+A("(Unity: use `Rigidbody.position` to teleport), so interpolation stays smooth;")
+A("and because a rigidbody moves in physics steps while an AI ticks once per")
+A("frame, the steps of the frames inside one physics step are summed and")
+A("requested as a single move — the body then travels at exactly the requested")
+A("speed no matter what the frame rate is doing.")
 A("")
-A("**An unbound slot is never the origin.** A handle that was never bound (or a")
-A("target that has been destroyed) has no position, and the runtime says so")
-A("instead of inventing one: world-space reads — `getPosition`, camera")
-A("`getPosition`, `screenToWorld`, `getPursuitPosition`, an unknown")
-A("`getNextWaypoint` — return an **invalid (NaN)** vector, `setPosition` refuses")
-A("to write it, and `goTo`/`moveTowards`/`sprintTowards` refuse to post a goal")
-A("from it, so the agent stays where it is. Returning `(0,0,0)` instead — which")
-A("is what used to happen — silently aims the caller at the **world origin, the")
-A("centre of the scene**: every AI with an unbound target marched there, and an")
-A("object driven that way looked as if something was pulling it to the middle.")
+A("**Gravity, drag and mass** keep working on a body that no goal is driving;")
+A("while a goal is active, the goal's step is what moves it — that is what")
+A("`moveTowards` asks for. A goal posted towards an **object** re-reads that")
+A("object's position every tick, so the agent tracks a target that moves and")
+A("settles on one that stands still.")
+A("")
 A("Each of these is reported once per AI (they fire every tick otherwise).")
 A("")
 A("Direct position changes are untouched: `setPosition`, `setRotation` and")

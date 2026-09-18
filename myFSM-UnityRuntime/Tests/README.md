@@ -132,26 +132,29 @@ python3 Tests/Tools/gen_class.py Tests/01-state-transitions/Fsm/zonebridge.fsmd 
 
 ### Movement on a Rigidbody (what "normal" means here)
 
-An AI whose object carries a dynamic `Rigidbody` is moved the way any Unity
-character is: the runtime writes the body's **velocity** towards the target each
-tick, and Unity's solver does everything else — walls stop it, drag slows it,
-mass and contacts decide the rest. Two rules go with that:
+Every goal-driven move is one step of the plain formula — **position += direction
+x speed x time** — handed to Unity's move call for the component the object
+carries. Nothing writes `velocity`, and the runtime contains no collision maths:
 
-* **Gravity owns the vertical axis.** With `useGravity` on, `velocity.y` is never
-  written and the goal is measured in the horizontal plane (arrival = under the
-  target), so a dropped AI falls at 9.81 m/s², lands, and never gets lifted to —
-  or held at — the target's height. With gravity **off** nothing else drives the
-  vertical axis, so the goal drives all three axes: that is the flying/hovering
-  case.
-* **An unbound slot is never the origin.** `getPosition` of a handle that was
-  never bound (or of a destroyed object) is an **invalid (NaN)** position, not
-  `(0,0,0)` — because `(0,0,0)` is the world origin, i.e. the **centre of the
-  scene**. `moveTowards`/`goTo`/`sprintTowards` refuse a non-finite destination
-  (no goal is posted, the agent stays put), and `setPosition` refuses to write
-  one. Before this rule, an AI with an unbound target marched to the middle of
-  the plane — which looks exactly like the scene having its own gravity well, and
-  that is the bug this rule exists to make impossible. Each refusal is logged
-  **once per AI**, with the function name.
+* **Rigidbody / Rigidbody2D** → `MovePosition` (Unity's documented way to move a
+  body by a step; its own example is
+  `rb.MovePosition(transform.position + input * dt * speed)`), so a **dynamic**
+  body is stopped by walls, piles and other bodies, and interpolation stays
+  smooth. A **kinematic** body is moved the same way but Unity documents that
+  collisions do not affect it — use a dynamic body when walls must stop it.
+* **CharacterController** → `Move(step)` (its own capsule sweep).
+* **NavMeshAgent** → `SetDestination` (the mesh pathfinds).
+* **Nothing to move it** → the step is written to the transform, and the first
+  time a bare `Collider` is found the runtime warns and names what to add.
+
+Rigidbodies are moved by Unity in **physics steps** while an AI ticks once per
+frame, and `MovePosition` keeps the last request of a step — so the steps of the
+frames inside one physics step are summed and requested as one move. Without
+that a body would travel at (render fps / physics fps) of the requested speed.
+
+`moveTowards` towards an **object** re-reads that object every tick, so a target
+that keeps moving is tracked and one that stands still is reached normally.
+Gravity, drag and mass keep acting on a body that no goal is driving.
 
 ### Checking that the committed pieces agree
 
@@ -304,16 +307,17 @@ cubes spread out on a golden-angle spiral whose radius grows with the live count
 cluster instead of 100 boxes inside each other — overlapping spawns make the
 solver fire them off in every direction and ruin the measurement.
 
-The runtime moves each cube by setting **velocity**, and it splits the axes:
-the FSM goal drives the **horizontal plane** towards the player, while the
-**vertical axis belongs to Unity's gravity** — `velocity.y` is never touched, so a
-dropped cube falls at 9.81 m/s², lands, and is never lifted or held at the
-player's height. Unity's solver does the falling, the colliding and the pile-ups:
+The FSM aims each cube at a point **0.5 m above the ground that follows the
+player** (`chaseTargetHeight`, a child transform), so the chase is horizontal and
+the crowd runs along the floor instead of climbing to the player's centre. The
+runtime then takes one step of `position += direction x speed x time` per tick
+through Unity's `MovePosition`, so each cube's contacts are resolved by the
+physics step. Unity's solver does the falling, the colliding and the pile-ups:
 **that physics load is part of the number this test reports**, which is why the
 summary file records `cube gravity`, `spawn placement` and the plane size — runs
-with different settings are not comparable. (Turn `useGravity` off on a body and
-nothing else owns the vertical axis, so the goal drives all three — that is the
-mode for a flying or hovering agent.)
+with different settings are not comparable. Gravity, drag and mass keep
+acting on a cube that no goal is driving; while a goal is active, the goal's step
+is what moves it.)
 
 Controls: `Space` = +`spawnPerPress` AI (default 1), `B` = +100, `P` = pause
 spawning, `L` = write the reports now, `Backspace` = clear. Move the player with
@@ -426,7 +430,7 @@ the live route length and the chaser's state — the curve that shows the chase)
 | `CS0103: The name 'X' does not exist` where `X` does not exist ANYWHERE in the current checkout (for example `InputCompat`) | your project mixes two versions: that script is from an older commit than the helper it calls. This shipped once — `SpawnStressTest.cs` kept calling `InputCompat` after the helper became `StressInput`. `Tests/Tools/check_project.py` reports the file as `STALE` because it compares contents, but only when run from the fixed checkout — and if the checkout itself holds the mistake, no content comparison can see it | re-copy the whole folder (`Tests/<case>/Scripts/`) or re-run the installer, then prove it without opening Unity: `python3 Sandbox/check.py --baseline <project>/Assets/MyFSM` names the exact missing type |
 | test 02: the **player** slides on its own, or the crowd pushes him to the middle | something other than the keys is driving the player: either a dynamic Rigidbody (physics can then shove it) or an FSM AI standing on the player object (an AI ticks every frame and drags its own object towards its own goal) | the setup forces a **kinematic** body on the player (Unity: collisions do not affect a kinematic body, so the crowd blocks it but cannot move it) and prints `[stress] player '<name>': …`. If an AI is on the player it logs an error naming the component — remove it; the player is driven by keys only |
 | every cube (or an object the FSM drives) walks to the **centre of the plane** | the AI's target slot is unbound. World-space reads of an unbound handle used to return `(0,0,0)`, and `(0,0,0)` is the world origin — the middle of the plane — so every such AI marched there | fixed in the runtime: such a read is now an **invalid (NaN)** position and the movement calls refuse it, so the agent stays where it is and logs `getPosition: no live source to read a position from …` once per AI. Bind the slot (or create the object it expects) — in test 02 the chaser's `player` target comes from `ChaserAI.Player` / an object named `Player` |
-| test 02: cubes stop mid-air / never fall, or a gravity-free agent never rises | `Rigidbody``.useGravity` decides who owns the vertical axis: with gravity **on** the goal drives XZ only, with gravity **off** the goal drives all three axes | nothing to fix if that is what you want: gravity on = walkers and fallers, gravity off = flyers. Set `gravityEnabled` on the test to match what you are measuring |
+| an agent hovers, or climbs towards a target above it | `moveTowards` moves along the direction to its target (`position += direction x speed x time`), so aiming at an object's **centre** pulls a ground agent up to that height | aim at a point at the agent's own level. Test 02 does this with `chaseTargetHeight` (0.5 m), a child of the player the crowd runs at |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
 | test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
 | test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube; the keys then drive it (nothing moves by itself) |

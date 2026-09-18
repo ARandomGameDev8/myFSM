@@ -96,8 +96,8 @@ everything:
 |---|---|---|
 | `NavMeshAgent` (enabled, on the mesh) | `SetDestination` | yes — via the NavMesh |
 | `CharacterController` | `Move(motion)` | **yes** — its own capsule sweep handles slopes, steps and walls |
-| `Rigidbody` / `Rigidbody2D`, **dynamic** | `velocity` is set each tick | **yes** — the physics solver resolves every contact, and mass and drag keep working. **Gravity keeps the vertical axis:** with gravity on, the goal drives the horizontal plane only (velocity.y is never written) and arrival is measured there too, so a dropped body falls at Unity's gravity and lands; with gravity off the goal drives all three axes |
-| `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"* |
+| `Rigidbody` / `Rigidbody2D`, **dynamic** | `MovePosition` — the step becomes that physics step's velocity | **yes** — the solver resolves every contact, so walls, piles and other bodies all matter |
+| `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"*; use a dynamic body when walls must stop it |
 | `Collider` / `Collider2D`, no body | *(none exists)* | **no** — a collider on its own is static geometry; the runtime warns once and says what to add |
 | nothing at all | *(none)* | no — the step is written to the transform |
 
@@ -105,29 +105,23 @@ everything:
 `Rigidbody`(2D) with gravity off (`useGravity = false` / `gravityScale = 0`) and
 rotation frozen, or a `CharacterController`. Those are the component sets Unity
 provides a collision-resolving move for. The dynamic body is the closest to "it
-just works": the runtime sets its velocity towards the goal each tick and Unity
-does the rest.
+just works": the runtime takes one step of `position += direction x speed x time`
+per tick and calls `MovePosition`, and Unity resolves the contacts.
 
-**Gravity decides who owns the vertical axis.** With `useGravity` on, the goal
-never touches `velocity.y`: the body falls at Unity's gravity (9.81 m/s² by
-default), lands, and is never lifted to — or held at — the goal's height, and
-`hasReachedDestination` measures the horizontal plane. That is what a walker or
-a falling chaser wants. With gravity off nothing else drives the vertical axis,
-so the goal drives all three, which is what a flying or hovering agent wants. A
-body the goal must *not* move vertically should therefore keep gravity on; a
-body that must be held at a height should have gravity off and something else
-(gravity, drag, or a counter-force) providing the rest.
+**Every goal-driven move is the same formula:** `position += direction x speed x
+time`, one step per tick, handed to the Unity call for the component the agent
+carries. Nothing writes `velocity` and nothing resolves a contact in the
+runtime; Unity moves the body. `MovePosition` is a move rather than a teleport
+(Unity: use `Rigidbody.position` to teleport), so interpolation stays smooth and
+a dynamic body's contacts are resolved by the physics step. Rigidbodies move in
+physics steps while an AI ticks once per frame, so the steps of the frames inside
+one physics step are summed and requested as a single move: the body travels at
+exactly the requested speed whatever the frame rate is doing.
 
-**An unbound slot is never the origin.** A handle that was never bound (or a
-target that has been destroyed) has no position, and world-space reads say so
-instead of inventing one: `getPosition`, the camera's `getPosition`,
-`screenToWorld`, `getPursuitPosition` and an unknown `getNextWaypoint` return an
-**invalid (NaN)** vector, `setPosition` refuses to write one, and a
-`goTo`/`moveTowards`/`sprintTowards` goal posted from one is refused. The agent
-stays where it is, and the reason is logged once per AI. Returning `(0,0,0)`
-instead — the old behaviour — aims the caller at the **world origin, the centre
-of the scene**, which is indistinguishable from "something is pulling everything
-to the middle of the map".
+Gravity, drag and mass keep working on a body that no goal is driving — while a
+goal is active, the goal's step is what moves it. A goal posted towards an
+**object** re-reads that object's position every tick, so the agent tracks a
+target that moves and settles on one that stands still.
 
 `setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
 they write the transform directly and teleport, exactly like `transform.position`
@@ -142,7 +136,7 @@ either way.
 changes — one line goes to the log:
 
 ```
-movement: Marcher -> Rigidbody.velocity (physics resolves collisions)
+movement: Marcher -> Rigidbody.MovePosition (physics resolves collisions)
 movement: Marcher -> transform (collider without a body: nothing can stop it)
 ```
 
