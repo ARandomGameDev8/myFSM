@@ -17,6 +17,7 @@
 
 using UnityEngine;
 using UnityEngine.AI;
+using MyFSM.Tests.Chase; // the per-folder input helper
 
 namespace MyFSM.Tests
 {
@@ -110,7 +111,7 @@ namespace MyFSM.Tests
 
         private void Update()
         {
-            if (Input.GetKeyDown(manualKey))
+            if (InputCompat.GetKeyDown(manualKey))
             {
                 mode = mode == Mode.Manual ? Mode.PingPong : Mode.Manual;
                 if (mode == Mode.Manual) _agent.ResetPath();
@@ -132,10 +133,10 @@ namespace MyFSM.Tests
         {
             float x = 0f;
             float z = 0f;
-            if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow)) x -= 1f;
-            if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow)) x += 1f;
-            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) z -= 1f;
-            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) z += 1f;
+            if (InputCompat.GetKey(KeyCode.A) || InputCompat.GetKey(KeyCode.LeftArrow)) x -= 1f;
+            if (InputCompat.GetKey(KeyCode.D) || InputCompat.GetKey(KeyCode.RightArrow)) x += 1f;
+            if (InputCompat.GetKey(KeyCode.S) || InputCompat.GetKey(KeyCode.DownArrow)) z -= 1f;
+            if (InputCompat.GetKey(KeyCode.W) || InputCompat.GetKey(KeyCode.UpArrow)) z += 1f;
 
             Vector3 direction = new Vector3(x, 0f, z);
             if (direction.sqrMagnitude < 0.0001f) return;

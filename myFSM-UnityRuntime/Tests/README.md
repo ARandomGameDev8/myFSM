@@ -34,7 +34,7 @@ inspector). So the whole procedure is:
    | test | component to add | it builds, on its own |
    | --- | --- | --- |
    | 01 | `ZoneTestSetup` | a **visible cube with the AI on it** (or the AI you already placed), a 45 m height ruler with ticks at +10 m/+40 m, the keyboard controller, the marker pin, the recorder, and a camera framing that fits the whole column. It drives nothing: the cube moves when you press a key |
-   | 02 | `SpawnStressTest` | ground plane, WASD player, and one chaser cube per `Space` press |
+   | 02 | `SpawnStressTest` | a 400 m ground plane, a **cylinder** player you drive with WASD, a **top-down camera that follows it**, and one falling chaser cube per `Space` press (nothing spawns by itself) |
    | 03 | `MazeTestSetup` | ground plane, random maze + entry/exit, baked NavMesh, runner capsule + agent + AI + recorder |
    | 04 | `ChaseTestSetup` | the same maze, plus a walked-out chaser and a walking target |
 
@@ -61,6 +61,10 @@ assets to assign (each generated class carries its module bytes), no
 and not even the `fsmc` compiler: the modules are already compiled into the
 generated classes. `fsmc` is only needed if you edit a `.fsm` and want to
 recompile it.
+
+Test 02 is the exception to "nothing spawns by itself": the *scene* (plane, player,
+camera) is automatic, but the **cubes are always your call** — `Space`, `B`, or
+`spawnOnStart` if you set it.
 
 ### When you *would* wire things manually
 
@@ -254,15 +258,36 @@ What it records:
 
 **Goal**: find the practical maximum number of ticking AIs on this machine.
 
-Scene: an empty GameObject with **`SpawnStressTest`** on it. It creates the
-ground plane, a WASD `PlayerController` object if the scene has none, and one
-dynamic Rigidbody cube per spawn (gravity off, Y frozen, rotations frozen) that
-carries `ChaserAI` — the pre-compiled `chaser.fsm`, which re-posts
-`moveTowards(self, getPosition(player), 6)` every tick.
+Scene: an empty GameObject with **`SpawnStressTest`** on it. Everything is built
+for you:
+
+| what | how it is made |
+| --- | --- |
+| ground | a **400 × 400 m** plane (Unity's plane primitive scaled), centred on the origin — room for thousands of cubes |
+| player | a **2 m cylinder** standing on the ground, with `PlayerController` for WASD. Its walkable square is derived from the plane size, so it cannot walk off the cubes' ground |
+| camera | `TopDownFollowCamera` on the Main Camera: parked 45 m above and 18 m behind the player, looking down, following it in `LateUpdate` |
+| cubes | only when you ask: `Space` = +1, `B` = +100 |
+
+**Each cube is a dynamic Rigidbody with gravity on** (rotations locked to X/Z so
+it stays upright) **dropped from `spawnHeight` = 15 m above the centre of the
+plane**: it falls, lands, and then chases the player in the XZ plane. Successive
+cubes spread out on a golden-angle spiral whose radius grows with the live count
+(`spawnJitter` + `spawnSpread` × √alive), so a 100-cube burst lands as a loose
+cluster instead of 100 boxes inside each other — overlapping spawns make the
+solver fire them off in every direction and ruin the measurement.
+
+The runtime moves each cube by setting velocity, so Unity's own solver does the
+falling, the colliding and the pile-ups: **that physics load is part of the number
+this test reports**, which is why the summary file records `cube gravity`,
+`spawn placement` and the plane size — runs with different settings are not
+comparable.
 
 Controls: `Space` = +`spawnPerPress` AI (default 1), `B` = +100, `P` = pause
 spawning, `L` = write the reports now, `Backspace` = clear. Move the player with
 WASD: the chasers follow, so the load is real movement, not idle ticking.
+`spawnOnStart` (0 by default) exists if you want a starting population without
+touching the keyboard; keys are read through `InputCompat`, so they work with
+either Unity input backend.
 
 Files:
 

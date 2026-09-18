@@ -11,10 +11,18 @@
 // for a full second. Press Space to add AIs one at a time, B for a burst, P to
 // pause spawning (so you can watch a fixed count), L to dump the CSVs early.
 //
-// The spawned cube is a dynamic Rigidbody (gravity off, XZ only), so the runtime
-// moves it by setting velocity and Unity's own solver does the colliding — the
-// same path a real game AI takes. The chasers hunt the PlayerController object,
-// which you drive with WASD.
+// The scene builds itself: a large ground plane, a cylinder player you drive with
+// WASD, and a top-down camera that follows the player. The cubes exist only after
+// you press Space (or B) — nothing spawns on its own.
+//
+// Each spawned cube is a dynamic Rigidbody WITH GRAVITY (rotations locked to X/Z
+// so it stays upright), dropped from the air above the centre of the plane: it
+// falls, lands, and then chases the player in the XZ plane. The runtime moves it
+// by setting velocity, so Unity's own solver does the falling, the colliding and
+// the pile-ups — that physics load is part of what this test measures.
+//
+// Controls are read through InputCompat, which works with either Unity input
+// backend (legacy Input Manager or the Input System package).
 //
 // Files (Application.persistentDataPath):
 //   spawn_stress_spawns.csv, spawn_stress_frames.csv, spawn_stress_summary.txt
@@ -34,24 +42,67 @@ namespace MyFSM.Tests
     [DefaultExecutionOrder(100)] // after the AIs have ticked in this frame
     public class SpawnStressTest : MonoBehaviour
     {
-        [Header("Scene")]
+        public enum SpawnPlacement
+        {
+            /// <summary>Drop them from the air above the centre of the plane.</summary>
+            CenterInAir,
+            /// <summary>Put them on the ground around the player.</summary>
+            AroundPlayer
+        }
+
+        [Header("Scene (built automatically)")]
         [Tooltip("The object the chasers hunt (a PlayerController). Created if empty.")]
         public Transform player;
         public bool createPlayerIfMissing = true;
+        [Tooltip("The player is a cylinder: 2 m tall, standing on the ground.")]
+        public float playerHeight = 2f;
+        public Color playerColour = new Color(0.2f, 0.7f, 1f);
         public bool createGroundIfMissing = true;
-        public float groundSize = 100f;
+        [Tooltip("Side length of the ground plane in metres. Big enough for thousands of " +
+                 "cubes: 400 leaves room for 1000+ without stacking at the edge.")]
+        public float groundSize = 400f;
 
-        [Header("Spawn area")]
+        [Header("Camera")]
+        [Tooltip("Park the Main Camera above the player, looking down, and make it follow.")]
+        public bool setUpTopDownCamera = true;
+        [Tooltip("Metres above the player (45 keeps the whole spawn column in frame).")]
+        public float cameraHeight = 45f;
+        public float cameraBackDistance = 18f;
+
+        [Header("Where spawned cubes appear")]
+        [Tooltip("CenterInAir (default): cubes fall from the air above the middle of the " +
+                 "plane, with gravity on. AroundPlayer: old behaviour, placed on the ground " +
+                 "around the player.")]
+        public SpawnPlacement placement = SpawnPlacement.CenterInAir;
+        [Tooltip("CentreInAir: metres above the ground they are dropped from.")]
+        public float spawnHeight = 15f;
+        [Tooltip("CentreInAir: random horizontal offset from the centre, so they do not " +
+                 "all start inside each other.")]
+        public float spawnJitter = 1.5f;
+        [Tooltip("CentreInAir: how far the drop disc widens as more cubes are alive " +
+                 "(radius = jitter + spread * sqrt(alive)). Spreads a big crowd out " +
+                 "instead of piling it on one spot.")]
+        public float spawnSpread = 0.8f;
+        [Tooltip("AroundPlayer: radius of the placement disc/ring around the player.")]
         public float spawnRadius = 20f;
-        public bool spawnOnRing = false;      // false = uniform disc
-        public float spawnY = 0.55f;          // cube half-height + a little
+        [Tooltip("AroundPlayer: place them on a ring instead of filling the disc.")]
+        public bool spawnOnRing = false;
+        [Tooltip("AroundPlayer: height of the cube centre when it is standing on the ground.")]
+        public float spawnY = 0.55f;
+        [Tooltip("AroundPlayer: keep this far away from the player.")]
         public float minimumDistanceFromPlayer = 2f;
 
         [Header("What to spawn")]
+        [Tooltip("Cubes fall and pile up under gravity (Unity's solver is then part of the load " +
+                 "being measured). Off: gravity-free cubes that only slide, which is cheaper.")]
+        public bool gravityEnabled = true;
         [Tooltip("Optional prefab with Rigidbody + ChaserAI. Empty: built from a primitive cube.")]
         public GameObject cubePrefab;
         public int spawnPerPress = 1;
         public int burstSize = 100;
+        [Tooltip("Spawn this many cubes as soon as Play starts. 0 (default) = nothing " +
+                 "spawns until you press the spawn key.")]
+        public int spawnOnStart = 0;
         public int maxAlive = 5000;
 
         [Header("Keys")]
@@ -123,6 +174,8 @@ namespace MyFSM.Tests
         private int _frameCounter;
         private int _sampleCounter;
         private int _lastRegistered;
+        private bool _warnedNoGravity;
+        private Transform _ground;
         private long _lastCalls;
         private bool _wroteFiles;
 
@@ -130,8 +183,45 @@ namespace MyFSM.Tests
 
         private void Awake()
         {
-            ChaserAI.Player = ResolvePlayer();
             EnsureGround();
+            ChaserAI.Player = ResolvePlayer();
+            ConfigurePlayerBounds();
+            SetUpCamera();
+        }
+
+        /// <summary>
+        /// Keeps the player's clamp square inside the plane, so walking cannot take
+        /// it off the edge of the ground the cubes are standing on.
+        /// </summary>
+        private void ConfigurePlayerBounds()
+        {
+            if (player == null || !createGroundIfMissing) return;
+            PlayerController controller = player.GetComponent<PlayerController>();
+            if (controller == null) return;
+            controller.halfExtent = Mathf.Max(5f, groundSize * 0.5f - 5f);
+            controller.height = playerHeight * 0.5f;
+        }
+
+        private void SetUpCamera()
+        {
+            if (!setUpTopDownCamera) return;
+            Camera camera = Camera.main;
+            if (camera == null)
+            {
+                Debug.LogWarning("[stress] no Main Camera (nothing tagged MainCamera) — skipping "
+                                 + "the follow rig. Add a camera tagged MainCamera, or drag a "
+                                 + "TopDownFollowCamera onto one yourself.", this);
+                return;
+            }
+            TopDownFollowCamera rig = camera.GetComponent<TopDownFollowCamera>();
+            if (rig == null) rig = camera.gameObject.AddComponent<TopDownFollowCamera>();
+            rig.height = cameraHeight;
+            rig.backDistance = cameraBackDistance;
+            rig.target = player;
+            rig.SnapToTarget();
+            Debug.Log("[stress] camera rig: '" + camera.name + "' parked " + cameraHeight
+                      + " m above and " + cameraBackDistance + " m behind the player, following it.",
+                      camera);
         }
 
         private Transform ResolvePlayer()
@@ -140,33 +230,63 @@ namespace MyFSM.Tests
             GameObject found = GameObject.Find("Player");
             if (found == null && createPlayerIfMissing)
             {
-                found = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                // A cylinder, standing on the ground: Unity's cylinder primitive is
+                // 2 m tall with its origin at the centre, so y = half its height.
+                found = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
                 found.name = "Player";
-                found.transform.position = new Vector3(0f, 0.5f, 0f);
-                found.transform.localScale = new Vector3(1f, 1f, 1f);
+                found.transform.position = new Vector3(0f, playerHeight * 0.5f, 0f);
+                found.transform.localScale = new Vector3(1f, playerHeight * 0.5f, 1f);
                 found.AddComponent<PlayerController>();
                 Renderer renderer = found.GetComponent<Renderer>();
-                if (renderer != null) renderer.material.color = new Color(0.2f, 0.6f, 1f);
+                if (renderer != null) renderer.material.color = playerColour;
+                Debug.Log("[stress] created the player: a " + playerHeight + " m cylinder you "
+                          + "drive with WASD.", found);
             }
             return found != null ? found.transform : null;
         }
 
         private void EnsureGround()
         {
+            GameObject existing = GameObject.Find("StressGround");
+            if (existing != null)
+            {
+                _ground = existing.transform;
+                return;
+            }
             if (!createGroundIfMissing) return;
-            if (GameObject.Find("StressGround") != null) return;
+
             GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
             ground.name = "StressGround";
             ground.transform.position = Vector3.zero;
+            // Unity's plane primitive is 10x10 m, so the scale is size/10.
             ground.transform.localScale = new Vector3(groundSize / 10f, 1f, groundSize / 10f);
+            _ground = ground.transform;
+            Debug.Log("[stress] ground plane " + groundSize + " x " + groundSize + " m created "
+                      + "(room for thousands of cubes), centred on " + ground.transform.position
+                      + ".", ground);
         }
 
         private void Start()
         {
-            Debug.Log("[stress] Space = +" + spawnPerPress + " AI, B = +" + burstSize
-                      + ", P = pause spawning, L = write CSVs, Backspace = clear."
-                      + " Chasers hunt '" + (ChaserAI.Player != null ? ChaserAI.Player.name : "NOTHING")
-                      + "'.", this);
+            Debug.Log("[stress] ready — nothing has spawned yet: you press the keys. Space = +"
+                      + spawnPerPress + " AI, B = +" + burstSize + ", P = pause spawning, "
+                      + "L = write the CSVs, Backspace = clear. Chasers hunt '"
+                      + (ChaserAI.Player != null ? ChaserAI.Player.name : "NOTHING")
+                      + "'. Input backend: " + InputCompat.Backend
+                      + ". Placement: " + placement
+                      + (placement == SpawnPlacement.CenterInAir
+                         ? " (from " + spawnHeight + " m up, gravity "
+                           + (gravityEnabled ? "on" : "OFF") + ")"
+                         : " (on the ground at " + spawnY + " m)")
+                      + ", ground plane " + groundSize + " m.", this);
+
+            if (!InputCompat.Available)
+                Debug.LogError("[stress] no readable keyboard input: " + InputCompat.Backend + ". "
+                               + InputCompat.Fix, this);
+
+            // Opt-in only (spawnOnStart is 0 by default): the test does not put AIs in
+            // the scene behind your back, it only answers what you ask it to spawn.
+            if (spawnOnStart > 0) Spawn(spawnOnStart);
         }
 
         private void Update()
@@ -198,22 +318,22 @@ namespace MyFSM.Tests
 
         private void HandleInput()
         {
-            if (Input.GetKeyDown(clearKey)) { ClearAll(); return; }
-            if (Input.GetKeyDown(pauseKey))
+            if (InputCompat.GetKeyDown(clearKey)) { ClearAll(); return; }
+            if (InputCompat.GetKeyDown(pauseKey))
             {
                 Paused = !Paused;
                 Debug.Log("[stress] spawning " + (Paused ? "paused" : "resumed")
                           + " at " + AliveCount + " AIs", this);
             }
-            if (Input.GetKeyDown(reportKey))
+            if (InputCompat.GetKeyDown(reportKey))
             {
                 WriteFiles();
                 Debug.Log("[stress] report written at " + AliveCount + " AIs", this);
             }
             if (Paused) return;
 
-            if (Input.GetKeyDown(spawnKey)) Spawn(spawnPerPress);
-            if (Input.GetKeyDown(burstKey)) Spawn(burstSize);
+            if (InputCompat.GetKeyDown(spawnKey)) Spawn(spawnPerPress);
+            if (InputCompat.GetKeyDown(burstKey)) Spawn(burstSize);
         }
 
         private void DetectSlowdown()
@@ -254,7 +374,7 @@ namespace MyFSM.Tests
                     return;
                 }
 
-                Vector3 position = RandomSpawnPosition();
+                Vector3 position = NextSpawnPosition();
                 _watch.Reset();
                 _watch.Start();
                 GameObject go = CreateChaser(position);
@@ -287,21 +407,73 @@ namespace MyFSM.Tests
             go.transform.position = position;
 
             Rigidbody body = go.AddComponent<Rigidbody>();
-            // Dynamic body so Unity's solver does the colliding, but gravity off
-            // and no tumbling: the chasers chase in the XZ plane.
-            body.useGravity = false;
-            body.constraints = RigidbodyConstraints.FreezePositionY
-                               | RigidbodyConstraints.FreezeRotationX
+            // Dynamic body WITH gravity, so Unity's solver does the falling, the
+            // landing, the colliding and the pile-ups. Only the tumbling is locked
+            // (X/Z rotation) so a cube stays upright and can be pushed around.
+            body.useGravity = gravityEnabled;
+            body.constraints = RigidbodyConstraints.FreezeRotationX
                                | RigidbodyConstraints.FreezeRotationZ;
+            if (!gravityEnabled)
+            {
+                // No gravity: keep the cubes at the height they were dropped at,
+                // otherwise they would drift down forever with nothing pulling back.
+                body.constraints |= RigidbodyConstraints.FreezePositionY;
+            }
             body.interpolation = RigidbodyInterpolation.Interpolate;
 
             go.AddComponent<ChaserAI>(); // boots in its own Start() this frame
             return go;
         }
 
-        private Vector3 RandomSpawnPosition()
+        /// <summary>
+        /// Where the next cube appears. The default drops it from the air above the
+        /// centre of the plane (spawnHeight, widening a little as the crowd grows);
+        /// AroundPlayer keeps the old ground-level ring/disc around the player.
+        /// </summary>
+        public Vector3 NextSpawnPosition()
+        {
+            if (placement == SpawnPlacement.CenterInAir) return AirSpawnPosition();
+            return GroundSpawnPosition();
+        }
+
+        /// <summary>
+        /// Above the centre of the plane, in the air, so the cube falls and lands.
+        /// Successive cubes spread out on a golden-angle spiral whose radius grows
+        /// with the live population (jitter + spread * sqrt(alive)): 100 cubes land
+        /// in a loose cluster instead of all inside each other, which would make the
+        /// solver fire them off in every direction and ruin the measurement.
+        /// </summary>
+        private Vector3 AirSpawnPosition()
+        {
+            if (!gravityEnabled && !_warnedNoGravity)
+            {
+                _warnedNoGravity = true;
+                Debug.LogWarning("[stress] gravityEnabled is OFF but cubes are being dropped from "
+                                 + spawnHeight.ToString("F0") + " m: with Y frozen they will hang in "
+                                 + "the air there. Set placement = AroundPlayer, or turn gravity on.",
+                                 this);
+            }
+            int index = _spawned.Count;
+            float radius = spawnJitter + spawnSpread * Mathf.Sqrt(index);
+            float angle = index * 2.39996323f; // golden angle: even coverage, no runs
+            float height = spawnHeight + Random.Range(-0.5f, 0.5f);
+
+            Vector3 centre = GroundCentre();
+            return new Vector3(centre.x + Mathf.Cos(angle) * radius,
+                               centre.y + height,
+                               centre.z + Mathf.Sin(angle) * radius);
+        }
+
+        /// <summary>Centre of the ground plane: the object was cached in EnsureGround.</summary>
+        private Vector3 GroundCentre()
+        {
+            return _ground != null ? _ground.position : Vector3.zero;
+        }
+
+        private Vector3 GroundSpawnPosition()
         {
             Vector3 centre = ChaserAI.Player != null ? ChaserAI.Player.position : Vector3.zero;
+            centre.y = 0f;
             for (int attempt = 0; attempt < 8; attempt++)
             {
                 float angle = Random.value * Mathf.PI * 2f;
@@ -427,6 +599,11 @@ namespace MyFSM.Tests
             summary.Append("alive at stop      : ").Append(AliveCount).Append('\n');
             summary.Append("practical maximum  : ").Append(PracticalMaximum < 0 ? "not reached" : PracticalMaximum.ToString()).Append('\n');
             summary.Append("slowdown budget    : ").Append(slowdownFrameMs.ToString("F1")).Append(" ms smoothed\n");
+            summary.Append("ground plane       : ").Append(groundSize).Append(" x ").Append(groundSize).Append(" m\n");
+            summary.Append("cube gravity       : ").Append(gravityEnabled ? "ON (physics solver included in these numbers)" : "off").Append('\n');
+            summary.Append("spawn placement    : ").Append(placement).Append(placement == SpawnPlacement.CenterInAir
+                              ? " at " + spawnHeight.ToString("F0") + " m" : "").Append('\n');
+            summary.Append("input backend      : ").Append(InputCompat.Backend).Append('\n');
             summary.Append("final smoothed ms  : ").Append(_smoothedMs.ToString("F2")).Append('\n');
             summary.Append("final fps          : ").Append((1000f / Mathf.Max(0.0001f, _smoothedMs)).ToString("F1")).Append('\n');
             summary.Append("registered AIs     : ").Append(_lastRegistered > 0 ? _lastRegistered : RegisteredCount()).Append('\n');
