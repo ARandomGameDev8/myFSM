@@ -34,7 +34,7 @@ inspector). So the whole procedure is:
    | test | component to add | it builds, on its own |
    | --- | --- | --- |
    | 01 | `ZoneTestSetup` | a **visible cube with the AI on it** (or the AI you already placed), a 45 m height ruler with ticks at +10 m/+40 m, the keyboard controller, the marker pin, the recorder, and a camera framing that fits the whole column. It drives nothing: the cube moves when you press a key |
-   | 02 | `SpawnStressTest` | a 400 m ground plane, a **cylinder** player you drive with WASD, a **top-down camera that follows it**, and one falling chaser cube per `Space` press (nothing spawns by itself) |
+   | 02 | `SpawnStressTest` | a 400 m ground plane, a **cylinder** player on a CharacterController you drive with WASD, a **top-down camera that follows it**, and one falling chaser cube per `Space` press (nothing spawns by itself) |
    | 03 | `MazeTestSetup` | ground plane, random maze + entry/exit, baked NavMesh, runner capsule + agent + AI + recorder |
    | 04 | `ChaseTestSetup` | the same maze, plus a walked-out chaser and a walking target |
 
@@ -158,7 +158,10 @@ that a body would travel at (render fps / physics fps) of the requested speed.
 
 `moveTowards` towards an **object** re-reads that object every tick, so a target
 that keeps moving is tracked and one that stands still is reached normally.
-Gravity, drag and mass keep acting on a body that no goal is driving.
+**Gravity keeps the vertical axis.** A body that gravity is holding down (dynamic
+with gravity on, or a CharacterController) gets its step in the ground plane, so
+the goal never fights the fall; a body with gravity off or a kinematic body flies
+to the target on all three axes.
 
 ### Checking that the committed pieces agree
 
@@ -299,52 +302,58 @@ for you:
 | what | how it is made |
 | --- | --- |
 | ground | a **400 × 400 m** plane (Unity's plane primitive scaled), centred on the origin — room for thousands of cubes |
-| player | a **2 m cylinder** standing on the ground, with `PlayerController` for WASD and a **kinematic Rigidbody** added by the test: the crowd can block it but never push it. Its walkable square is derived from the plane size, so it cannot walk off the cubes' ground |
+| player | a **2 m cylinder** with a **CharacterController** and `PlayerController`: ordinary WASD movement (`Move` + gravity, keys read in `Update`, applied in `FixedUpdate`). Rigidbodies cannot push a controller, so the crowd blocks the player and never drags it; walking into the crowd pushes cubes, because that is what a solid object moving through them does |
 | camera | `TopDownFollowCamera` on the Main Camera: parked 45 m above and 18 m behind the player, looking down, following it in `LateUpdate` |
 | cubes | only when you ask: `Space` = +1, `B` = +100 |
 
-The last two columns of `spawn_stress_frames.csv` answer "is the crowd chasing me or stuck?": a working chase keeps the mean distance small however far the player walks, while a crowd that never got a goal (or is jammed against a pile) shows the mean growing with the player's walk; the summary file repeats the final pair as **crowd to target**.
-
 **Each cube is a dynamic Rigidbody with gravity on** (rotations locked to X/Z so
-it stays upright) **dropped from `spawnHeight` = 15 m above the centre of the
-plane**: it falls, lands, and then chases the player in the XZ plane. Successive
-cubes spread out on a golden-angle spiral whose radius grows with the live count
-(`spawnJitter` + `spawnSpread` × √alive), so a 100-cube burst lands as a loose
-cluster instead of 100 boxes inside each other — overlapping spawns make the
-solver fire them off in every direction and ruin the measurement.
+it stays upright), dropped from `spawnHeight` = 15 m over the plane. The default
+placement spreads the drop points over the whole plane (`spreadFraction` 0.45), so
+the crowd arrives from every direction — no pile at the middle to mistake for a
+gravity well. `CentreInAir` and `AroundPlayer` are there if you want the older
+shapes.
 
-The FSM aims each cube at a point **0.5 m above the ground that follows the
-player** (`chaseTargetHeight`, a child transform), so the chase is horizontal and
-the crowd runs along the floor instead of climbing to the player's centre. The
-runtime then takes one step of `position += direction x speed x time` per tick
-through Unity's `MovePosition`, so each cube's contacts are resolved by the
-physics step. Unity's solver does the falling, the colliding and the pile-ups:
-**that physics load is part of the number this test reports**, which is why the
-summary file records `cube gravity`, `spawn placement` and the plane size — runs
-with different settings are not comparable. Gravity, drag and mass keep
-acting on a cube that no goal is driving; while a goal is active, the goal's step
-is what moves it.)
+The chaser FSM walks the cube at the player's position. The runtime turns that
+into one step of `position += direction x speed x time` per tick through Unity's
+`MovePosition` — and because the cube has gravity, **the runtime aims the step
+along the ground plane and lets Unity keep the vertical axis**: the cube falls,
+lands, runs, and is never lifted or held at the player's height. Overlapping
+spawns or a pile-up can push a cube up; it falls back instead of hovering.
 
-Controls: `Space` = +`spawnPerPress` AI (default 1), `B` = +100, `P` = pause
-spawning, `L` = write the reports now, `Backspace` = clear. Move the player with
-WASD: the chasers follow, so the load is real movement, not idle ticking.
-`spawnOnStart` (0 by default) exists if you want a starting population without
-touching the keyboard; keys are read through `StressInput`, so they work with
-either Unity input backend.
+The target is bound on the spot: `SpawnStressTest` sets `ChaserAI.Target` right
+after `AddComponent`, before the component's `Start` binds its slots — per cube,
+no static state. One line in the console then says what the first cube ended up
+chasing (`[stress] cube #1 chases 'Player' …`), so "why is the crowd going the
+wrong way?" is answered instead of guessed.
+
+Unity's solver does the falling, the colliding and the pile-ups: **that physics
+load is part of the number this test reports**, which is why the summary records
+`cube gravity`, `spawn placement` and the plane size — runs with different
+settings are not comparable.
+
+Controls: `Space` = +`batchSmall` cube (1), `B` = +`batchLarge` (100), `P` = pause
+spawning, `L` = write the reports now, `Backspace` = clear, `R` = player back to
+the origin. Move the player with WASD: the chasers follow, so the load is real
+movement, not idle ticking. Nothing spawns on its own (`spawnOnStart` is 0); keys
+are read through `StressInput`, so they work with either Unity input backend.
 
 Files:
 
 | file | row per | columns |
 | --- | --- | --- |
-| `spawn_stress_spawns.csv` | spawn | index, frame, `instantiateMs`, the frame the spawn landed in, the frame **after** it (when the new AI has booted and ticked), alive-after, instance id |
-| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive AIs, **AIs registered in the runtime's DB**, total FSM calls served, **mean and nearest distance from the crowd to the point it aims at** (-1 = no crowd to measure) |
-| `spawn_stress_summary.txt` | run | the one-line answer: spawned, alive, practical maximum, final fps, registry size |
+| `spawn_stress_spawns.csv` | spawn | index, frame, `instantiateMs`, the frame the spawn landed in, alive-after, instance id |
+| `spawn_stress_frames.csv` | every 10 frames | frame, time, delta, smoothed delta, fps, alive cubes, **AIs registered in the runtime's DB**, total FSM calls served, **mean and nearest distance from the crowd to the player** (-1 = no crowd to measure) |
+| `spawn_stress_summary.txt` | run | player and its body, spawned, alive, practical maximum, final fps, `crowd to player`, registry size, total FSM calls |
 
-The practical maximum is declared by the test itself: when the smoothed frame
-time stays above `slowdownFrameMs` (33.3 ms = 30 fps) for a full second with at
-least `minimumCountForStop` (25) AIs alive, it stops spawning and logs
-`PRACTICAL MAXIMUM reached: N AIs`. Raise `maxAlive` if your machine takes more
-than the default 5000.
+The last two columns of `spawn_stress_frames.csv` answer "is the crowd chasing me
+or stuck?": a working chase keeps the mean distance small however far the player
+walks, while a crowd that never got a target (or is jammed) shows the mean growing
+with the player's walk.
+
+The practical maximum is declared by the test itself: when the smoothed frame time
+stays above `slowdownFrameMs` (33.3 ms = 30 fps) for `slowdownHoldSeconds` (1.5 s)
+with at least `minimumCountForStop` cubes alive, spawning pauses and the console
+says so. Set `stopWhenSlow` off to keep spawning regardless.
 
 ## Test 03 — shortest path through a maze
 
@@ -436,7 +445,7 @@ the live route length and the chaser's state — the curve that shows the chase)
 | `CS0103: The name 'X' does not exist` where `X` does not exist ANYWHERE in the current checkout (for example `InputCompat`) | your project mixes two versions: that script is from an older commit than the helper it calls. This shipped once — `SpawnStressTest.cs` kept calling `InputCompat` after the helper became `StressInput`. `Tests/Tools/check_project.py` reports the file as `STALE` because it compares contents, but only when run from the fixed checkout — and if the checkout itself holds the mistake, no content comparison can see it | re-copy the whole folder (`Tests/<case>/Scripts/`) or re-run the installer, then prove it without opening Unity: `python3 Sandbox/check.py --baseline <project>/Assets/MyFSM` names the exact missing type |
 | test 02: the **player** slides on its own, or the crowd pushes him to the middle | something other than the keys is driving the player: either a dynamic Rigidbody (physics can then shove it) or an FSM AI standing on the player object (an AI ticks every frame and drags its own object towards its own goal) | the setup forces a **kinematic** body on the player (Unity: collisions do not affect a kinematic body, so the crowd blocks it but cannot move it) and prints `[stress] player '<name>': …`. If an AI is on the player it logs an error naming the component — remove it; the player is driven by keys only |
 | every cube (or an object the FSM drives) walks to the **centre of the plane** | the AI's target slot is unbound. World-space reads of an unbound handle used to return `(0,0,0)`, and `(0,0,0)` is the world origin — the middle of the plane — so every such AI marched there | fixed in the runtime: such a read is now an **invalid (NaN)** position and the movement calls refuse it, so the agent stays where it is and logs `getPosition: no live source to read a position from …` once per AI. Bind the slot (or create the object it expects) — in test 02 the chaser's `player` target comes from `ChaserAI.Player` / an object named `Player` |
-| an agent hovers, or climbs towards a target above it | `moveTowards` moves along the direction to its target (`position += direction x speed x time`), so aiming at an object's **centre** pulls a ground agent up to that height | aim at a point at the agent's own level. Test 02 does this with `chaseTargetHeight` (0.5 m), a child of the player the crowd runs at |
+| an agent hovers, or climbs towards a target above it | a body whose gravity is on has its step taken in the ground plane: Unity keeps the vertical axis (`GravityOwnsVertical`). A body with gravity **off** or a kinematic body has nothing else driving it, so the goal owns all three axes and flies to the target's height | that is the walker/flyer split: `useGravity` on = ground agent (test 02), off = flyer |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
 | test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
 | test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube; the keys then drive it (nothing moves by itself) |

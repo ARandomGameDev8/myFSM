@@ -1,150 +1,135 @@
-// Test 02 — how many AIs can the runtime tick before the frame budget breaks?
+// Test 02 — spawn stress: many chasing AIs, one WASD player, real collisions.
 //
-// Everything is recorded, nothing is assumed:
-//   * one row per SPAWN  (instantiate cost, the frame it landed in, the cost of
-//     the frame after it — when the new AI's Start/boot has actually run), and
-//   * one row every N FRAMES for the whole run (frame time, fps, how many AIs
-//     are alive, how many the runtime has registered, total FSM calls served).
+// WHAT IT BUILDS (put this component on any GameObject in an otherwise empty scene)
 //
-// With autoStopOnSlowdown on, the test also reports the practical maximum: the
-// alive count at the moment the smoothed frame time has stayed above the budget
-// for a full second. Press Space to add AIs one at a time, B for a burst, P to
-// pause spawning (so you can watch a fixed count), L to dump the CSVs early.
+//   StressGround   a plane at the origin, `groundSize` metres square
+//   Player         a 2 m cylinder with a CharacterController — ordinary WASD
+//                  movement (keys -> Move -> gravity), and a body the crowd can
+//                  block but never push
+//   the camera     moved above and behind the player, following it
 //
-// The scene builds itself: a large ground plane, a cylinder player you drive with
-// WASD, and a top-down camera that follows the player. The cubes exist only after
-// you press Space (or B) — nothing spawns on its own.
+// WHAT IT SPAWNS (only when you ask; nothing spawns on its own)
 //
-// Each spawned cube is a dynamic Rigidbody WITH GRAVITY (rotations locked to X/Z
-// so it stays upright), dropped from the air above the centre of the plane: it
-// falls, lands, and then chases the player. Each tick the runtime takes one step
-// of `position += direction * speed * time` and hands it to Rigidbody.MovePosition,
-// so Unity moves the cube and its solver does the colliding and the pile-ups —
-// that physics load is part of what this test measures. Gravity, drag and mass
-// keep acting whenever no goal is driving the cube.
+//   A cube: dynamic Rigidbody (gravity on, X/Z rotation frozen) dropped in the
+//   air, plus one chaser AI. The AI walks towards the player with moveTowards,
+//   which the runtime turns into one step of `position += direction * speed *
+//   time` through Unity's move call for that body, so the physics step resolves
+//   every contact: cubes push each other, are stopped by each other, and pile up.
+//   Gravity keeps the vertical axis — a cube falls, lands and runs, and is never
+//   lifted or held at the player's height.
 //
-// Controls are read through StressInput, which works with either Unity input
-// backend (legacy Input Manager or the Input System package).
+// KEYS
 //
-// Files (Application.persistentDataPath):
-//   spawn_stress_spawns.csv, spawn_stress_frames.csv, spawn_stress_summary.txt
+//   Space  +1 cube          B  +100 cubes        P  pause spawning
+//   L      write the CSVs   Backspace  clear     R  player back to the origin
+//
+// OUTPUT (Application.persistentDataPath)
+//
+//   spawn_stress_spawns.csv    one row per spawn: instantiate / step / settle ms
+//   spawn_stress_frames.csv    sampled frames: ms, fps, alive, FSM calls, and the
+//                              mean and nearest distance from the crowd to the
+//                              player (-1 = no crowd)
+//   spawn_stress_summary.txt   the same numbers at the end
+//
+// Nothing here hardens or converts anything at runtime: the player is created the
+// way it should be (controller + WASD), each cube is created the way it should be
+// (body + target bound on the spot), and what the console says is what happened.
 
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using UnityEngine;
-// Alias, not `using System.Diagnostics`: that would make Debug ambiguous with
-// UnityEngine.Debug and break every log line in this file (CS0104).
-using Stopwatch = System.Diagnostics.Stopwatch;
-using MyFSM.Core;
 using MyFSM.Unity;
+using Stopwatch = System.Diagnostics.Stopwatch;
+using UnityEngine;
 
 namespace MyFSM.Tests
 {
-    [DefaultExecutionOrder(100)] // after the AIs have ticked in this frame
     public class SpawnStressTest : MonoBehaviour
     {
         public enum SpawnPlacement
         {
-            /// <summary>Drop them from the air above the centre of the plane.</summary>
-            CenterInAir,
-            /// <summary>Put them on the ground around the player.</summary>
-            AroundPlayer
+            /// <summary>Drop points spread over the whole plane (default: no pile at
+            /// the middle, so the crowd visibly comes from everywhere).</summary>
+            SpreadOverPlane,
+            /// <summary>Above the centre of the plane, widening as the crowd grows.</summary>
+            CentreInAir,
+            /// <summary>On the ground in a ring/disc around the player.</summary>
+            AroundPlayer,
         }
 
         [Header("Scene (built automatically)")]
-        [Tooltip("The object the chasers hunt (a PlayerController). Created if empty.")]
+        [Tooltip("The WASD object the crowd chases. Empty: an object named 'Player', "
+                 + "or the object carrying a PlayerController, or a new cylinder.")]
         public Transform player;
         public bool createPlayerIfMissing = true;
-        [Tooltip("The player is a cylinder: 2 m tall, standing on the ground.")]
+        [Tooltip("Height of the player cylinder in metres (its centre sits at half of it).")]
         public float playerHeight = 2f;
-        [Tooltip("Height of the point the chasers aim at (world y). Default 0.5 = the centre " +
-                 "of a 1 m cube resting on the ground, so the crowd runs along the floor " +
-                 "instead of climbing to the player's centre.")]
-        public float chaseTargetHeight = 0.5f;
+        [Tooltip("Metres per second for the WASD player.")]
+        public float playerSpeed = 8f;
         public Color playerColour = new Color(0.2f, 0.7f, 1f);
-        public bool createGroundIfMissing = true;
-        [Tooltip("Side length of the ground plane in metres. Big enough for thousands of " +
-                 "cubes: 400 leaves room for 1000+ without stacking at the edge.")]
-        public float groundSize = 400f;
 
-        [Header("Camera")]
-        [Tooltip("Park the Main Camera above the player, looking down, and make it follow.")]
-        public bool setUpTopDownCamera = true;
-        [Tooltip("Metres above the player (45 keeps the whole spawn column in frame).")]
-        public float cameraHeight = 45f;
-        public float cameraBackDistance = 18f;
+        public bool createGroundIfMissing = true;
+        [Tooltip("Side length of the ground plane. 400 leaves room for 1000+ cubes.")]
+        public float groundSize = 400f;
+        public Color groundColour = new Color(0.25f, 0.28f, 0.3f);
 
         [Header("Where spawned cubes appear")]
-        [Tooltip("CenterInAir (default): cubes fall from the air above the middle of the " +
-                 "plane, with gravity on. AroundPlayer: old behaviour, placed on the ground " +
-                 "around the player.")]
-        public SpawnPlacement placement = SpawnPlacement.CenterInAir;
-        [Tooltip("CentreInAir: metres above the ground they are dropped from.")]
+        public SpawnPlacement placement = SpawnPlacement.SpreadOverPlane;
+        [Tooltip("Metres above the ground the cubes are dropped from.")]
         public float spawnHeight = 15f;
-        [Tooltip("CentreInAir: random horizontal offset from the centre, so they do not " +
-                 "all start inside each other.")]
-        public float spawnJitter = 1.5f;
-        [Tooltip("CentreInAir: how far the drop disc widens as more cubes are alive " +
-                 "(radius = jitter + spread * sqrt(alive)). Spreads a big crowd out " +
-                 "instead of piling it on one spot.")]
-        public float spawnSpread = 0.8f;
-        [Tooltip("AroundPlayer: radius of the placement disc/ring around the player.")]
-        public float spawnRadius = 20f;
-        [Tooltip("AroundPlayer: place them on a ring instead of filling the disc.")]
-        public bool spawnOnRing = false;
-        [Tooltip("AroundPlayer: height of the cube centre when it is standing on the ground.")]
-        public float spawnY = 0.55f;
-        [Tooltip("AroundPlayer: keep this far away from the player.")]
+        [Tooltip("SpreadOverPlane: the fraction of the plane's half-size the drop points use.")]
+        [Range(0.05f, 1f)] public float spreadFraction = 0.45f;
+        [Tooltip("CentreInAir: radius of the first cubes.")]
+        public float centreSpread = 1.5f;
+        [Tooltip("CentreInAir: extra metres of radius per sqrt(cube).")]
+        public float centreSpreadGrowth = 0.8f;
+        [Tooltip("AroundPlayer: radius of the ring/disc around the player.")]
+        public float playerRingRadius = 20f;
+        [Tooltip("Keep a new cube at least this far from the player (0 = no rule).")]
         public float minimumDistanceFromPlayer = 2f;
+        [Tooltip("Gravity on the cubes. Off: they hang where they were dropped.")]
+        public bool cubeGravity = true;
 
         [Header("What to spawn")]
-        [Tooltip("Cubes fall and pile up under gravity (Unity's solver is then part of the load " +
-                 "being measured). Off: gravity-free cubes that only slide, which is cheaper.")]
-        public bool gravityEnabled = true;
-        [Tooltip("Optional prefab with Rigidbody + ChaserAI. Empty: built from a primitive cube.")]
+        [Tooltip("Optional prefab with a Rigidbody + ChaserAI. Empty: a primitive cube.")]
         public GameObject cubePrefab;
-        public int spawnPerPress = 1;
-        public int burstSize = 100;
-        [Tooltip("Spawn this many cubes as soon as Play starts. 0 (default) = nothing " +
-                 "spawns until you press the spawn key.")]
+        [Tooltip("Cubes to spawn by itself when play starts. 0 = nothing self-drives.")]
         public int spawnOnStart = 0;
-        public int maxAlive = 5000;
+        public int batchSmall = 1;
+        public int batchLarge = 100;
 
         [Header("Keys")]
-        public KeyCode spawnKey = KeyCode.Space;
-        public KeyCode burstKey = KeyCode.B;
-        public KeyCode clearKey = KeyCode.Backspace;
-        public KeyCode pauseKey = KeyCode.P;
-        public KeyCode reportKey = KeyCode.L;
+        public KeyCode keySpawnSmall = KeyCode.Space;
+        public KeyCode keySpawnLarge = KeyCode.B;
+        public KeyCode keyPause = KeyCode.P;
+        public KeyCode keyWriteFiles = KeyCode.L;
+        public KeyCode keyClear = KeyCode.Backspace;
+        public KeyCode keyResetPlayer = KeyCode.R;
 
         [Header("Recording")]
-        public int sampleEveryFrames = 10;
-        public string frameFileName = "spawn_stress_frames.csv";
+        public bool record = true;
         public string spawnFileName = "spawn_stress_spawns.csv";
+        public string frameFileName = "spawn_stress_frames.csv";
         public string summaryFileName = "spawn_stress_summary.txt";
+        [Tooltip("Sample a CSV frame every N frames.")]
+        public int sampleEveryFrames = 10;
 
-        [Header("Slowdown detection (the practical maximum)")]
-        public bool autoStopOnSlowdown = true;
-        [Tooltip("Frame time considered 'too slow' (33.3 ms = 30 fps).")]
+        [Header("Slowdown detection")]
+        [Tooltip("Pause spawning once the frame budget has been broken for a while.")]
+        public bool stopWhenSlow = true;
+        [Tooltip("Smoothed frame time (ms) above which the machine counts as saturated.")]
         public float slowdownFrameMs = 33.3f;
-        [Tooltip("How long the smoothed frame time must stay above the budget.")]
-        public float sustainedSeconds = 1f;
-        [Tooltip("Do not declare a maximum below this many AIs (avoids warm-up noise).")]
-        public int minimumCountForStop = 25;
-        public bool stopSpawningWhenSlow = true;
-
-        // ------------------------------------------------------------------
-        // Results
-        // ------------------------------------------------------------------
+        [Tooltip("Seconds the budget must stay broken before spawning pauses.")]
+        public float slowdownHoldSeconds = 1.5f;
+        [Tooltip("Never pause before this many cubes exist.")]
+        public int minimumCountForStop = 100;
 
         public class SpawnRecord
         {
             public int index;
             public int frame;
-            public double instantiateMs;
+            public float instantiateMs;
             public float spawnFrameMs;
-            public float settleFrameMs;
             public int aliveAfter;
             public int instanceId;
         }
@@ -158,312 +143,51 @@ namespace MyFSM.Tests
             public int alive;
             public int registered;
             public long totalCalls;
-            /// <summary>Mean distance (metres) from the live cubes to the point they aim
-            /// at; -1 when there was no crowd to measure.</summary>
-            public float crowdMeanToTarget = -1f;
-            /// <summary>Distance from the point they aim at to the closest cube (-1 = none).</summary>
-            public float crowdNearestToTarget = -1f;
+            /// <summary>Mean distance (m) from the live cubes to the player; -1 = no crowd.</summary>
+            public float crowdMeanToPlayer = -1f;
+            /// <summary>Distance (m) from the player to the closest cube; -1 = no crowd.</summary>
+            public float crowdNearestToPlayer = -1f;
         }
 
         public readonly List<SpawnRecord> Spawns = new List<SpawnRecord>();
         public readonly List<FrameSample> Frames = new List<FrameSample>();
 
-        /// <summary>Total AIs ever spawned in this run.</summary>
-        public int SpawnedTotal { get; private set; }
-        /// <summary>Alive AIs (resources this test is holding).</summary>
+        /// <summary>Cubes alive right now.</summary>
         public int AliveCount { get { return _spawned.Count; } }
-        /// <summary>Alive count when the frame budget was declared broken (-1 = not reached).</summary>
-        public int PracticalMaximum { get; private set; } = -1;
+        /// <summary>Total cubes spawned this run.</summary>
+        public int SpawnedTotal { get; private set; }
         /// <summary>Spawning paused (by the P key or by the slowdown detector).</summary>
         public bool Paused { get; private set; }
+        /// <summary>Alive count at the moment spawning was declared too slow (-1 = never).</summary>
+        public int PracticalMaximum { get; private set; } = -1;
 
         private readonly List<GameObject> _spawned = new List<GameObject>();
-        private readonly List<SpawnRecord> _settling = new List<SpawnRecord>();
         private readonly Stopwatch _watch = new Stopwatch();
+        private Transform _ground;
         private float _smoothedMs;
-        private int _slowFrames;
+        private float _slowSeconds;
         private int _frameCounter;
         private int _sampleCounter;
-        private int _lastRegistered;
-        private bool _warnedNoGravity;
-        private Transform _ground;
-        private PlayerController _playerController;
-        private Transform _chaseTarget;
-        private Vector3 _lastPlayerPosition;
-        private bool _hasLastPlayerPosition;
-        private int _driftFrames;
-        private float _driftDistance;
-        private bool _driftReported;
         private long _lastCalls;
+        private int _lastRegistered;
         private bool _wroteFiles;
+        private bool _loggedPlayer;
+        private int _verifyTries;
+        private bool _verifiedTarget;
 
+        // ------------------------------------------------------------------
+        // Setup: ground, player, camera. All of it runs once, in Awake, and none
+        // of it ever touches the player again.
         // ------------------------------------------------------------------
 
         private void Awake()
         {
             EnsureGround();
             player = ResolvePlayer();
-            ConfigurePlayerBounds();
-            HardenPlayer();
-            EnsureChaseTarget();
             SetUpCamera();
-            if (player != null) _playerController = player.GetComponent<PlayerController>();
-        }
+            LogSetup();
 
-        /// <summary>
-        /// The point the chasers aim at: a child of the player at the height of a
-        /// cube centre resting on the ground.
-        ///
-        /// moveTowards moves along the direction to its target (position +=
-        /// direction * speed * time), so aiming at the player's CENTRE would pull the
-        /// cubes half a metre into the air — the direction has an upward component and
-        /// they would hover there. Aiming at a point on the floor keeps the chase
-        /// horizontal, and because it is parented to the player it moves with it, so
-        /// the target is constantly moving without the test updating anything per frame.
-        /// </summary>
-        private void EnsureChaseTarget()
-        {
-            if (player == null) { ChaserAI.Player = null; return; }
-
-            Transform existing = player.Find("ChaserTarget");
-            if (existing == null)
-            {
-                GameObject go = new GameObject("ChaserTarget");
-                existing = go.transform;
-                existing.SetParent(player, false);
-            }
-            // PlayerController pins the player's centre at playerHeight * 0.5, so
-            // the offset that puts the aim point at `chaseTargetHeight` in world
-            // space can be computed once. If the player is ever carried up, the
-            // child rides along and the crowd aims at the same height above it.
-            existing.localPosition =
-                new Vector3(0f, chaseTargetHeight - playerHeight * 0.5f, 0f);
-            _chaseTarget = existing;
-            ChaserAI.Player = existing;
-        }
-
-        /// <summary>
-        /// Keeps the player's clamp square inside the plane, so walking cannot take
-        /// it off the edge of the ground the cubes are standing on.
-        /// </summary>
-        private void ConfigurePlayerBounds()
-        {
-            if (player == null || !createGroundIfMissing) return;
-            PlayerController controller = player.GetComponent<PlayerController>();
-            if (controller == null) return;
-            controller.halfExtent = Mathf.Max(5f, groundSize * 0.5f - 5f);
-            controller.height = playerHeight * 0.5f;
-        }
-
-        /// <summary>
-        /// Makes sure the player cannot be dragged around by the crowd, and says
-        /// what it found.
-        ///
-        /// A player is the one object in this test that must never be moved by
-        /// the simulation: it is the target every chaser aims at, so if physics
-        /// can push it, thousands of dynamic cubes squeeze it into the middle of
-        /// the mob and the "player" wanders on its own. Unity's rule for that is
-        /// a KINEMATIC body — "collisions do not affect a kinematic body" — so the
-        /// crowd can block the player but never move it. The controller then walks
-        /// it with Rigidbody.MovePosition.
-        ///
-        /// It also names any FSM AI sitting on the player, because an AI ticks
-        /// every frame and drives its own object towards its own goal: if one is
-        /// on the player, the player is dragged there whenever WASD is released.
-        /// </summary>
-        private void HardenPlayer()
-        {
-            if (player == null) return;
-
-            AIInstance[] ais = player.GetComponentsInChildren<AIInstance>(true);
-            if (ais.Length > 0)
-            {
-                string names = "";
-                for (int i = 0; i < ais.Length; i++)
-                    names += (i > 0 ? ", " : "") + ais[i].GetType().Name + " on '"
-                             + ais[i].gameObject.name + "'";
-                Debug.LogError("[stress] the player object carries " + ais.Length
-                               + " myFSM AI component(s): " + names + ". An AI drives its"
-                               + " own object towards its own goal every tick, so the player"
-                               + " will be dragged towards that goal whenever you stop"
-                               + " pressing WASD. Remove the AI from the player (the player"
-                               + " is meant to be moved by keys only).", player);
-            }
-
-            Rigidbody body = player.GetComponent<Rigidbody>();
-            CharacterController controller = player.GetComponent<CharacterController>();
-            if (body != null)
-            {
-                if (!body.isKinematic)
-                {
-                    // Dynamic player: the crowd pushes it around. Unity's answer is
-                    // a kinematic body, so switch it and say so.
-                    body.velocity = Vector3.zero;
-                    body.angularVelocity = Vector3.zero;
-                    body.useGravity = false;
-                    body.isKinematic = true;
-                    Debug.LogWarning("[stress] the player had a DYNAMIC Rigidbody — "
-                                     + "switched it to kinematic so the crowding cubes "
-                                     + "cannot push it around (they can still block it). "
-                                     + "Remove that body, or keep it kinematic, if you "
-                                     + "want no surprises.", player);
-                }
-                else if (body.useGravity)
-                {
-                    body.useGravity = false;
-                    Debug.Log("[stress] player Rigidbody is kinematic with gravity on — "
-                              + "gravity does nothing to a kinematic body; switched it off "
-                              + "so the setup matches Unity's rules.", player);
-                }
-                return;
-            }
-            if (controller != null)
-            {
-                Debug.Log("[stress] player uses a CharacterController: it is not pushed "
-                          + "by rigidbodies, and the controller resolves its own collisions.",
-                          player);
-                return;
-            }
-
-            // No body at all: give it a kinematic one. Nothing can push it, and the
-            // crowd collides against a real body instead of static geometry that is
-            // teleported every frame.
-            Rigidbody added = player.gameObject.AddComponent<Rigidbody>();
-            added.isKinematic = true;
-            added.useGravity = false;
-            added.interpolation = RigidbodyInterpolation.Interpolate;
-            Debug.Log("[stress] player had no Rigidbody — added a KINEMATIC one so the "
-                      + "crowd can block the player but never push or drag it.", player);
-        }
-
-        /// <summary>
-        /// Spots a player that moves without the keys and says what is moving it.
-        ///
-        /// The player is the one object in this scene that nothing but WASD is
-        /// allowed to move. If it drifts while no key is held — physics pushing a
-        /// dynamic body, or an FSM AI standing on the player and driving it
-        /// towards its own goal — this reports it once, with the distance, so the
-        /// cause is named instead of guessed. A few frames of interpolation after
-        /// the last key press are ignored.
-        /// </summary>
-        private void WatchPlayerDrift()
-        {
-            Transform who = player;
-            if (who == null) return;
-
-            Vector3 now = who.position;
-            if (!_hasLastPlayerPosition)
-            {
-                _hasLastPlayerPosition = true;
-                _lastPlayerPosition = now;
-                return;
-            }
-            float moved = Vector3.Distance(now, _lastPlayerPosition);
-            _lastPlayerPosition = now;
-
-            if (_playerController != null && _playerController.Moving)
-            {
-                // The keys are driving it: expected movement.
-                _driftFrames = 0;
-                _driftDistance = 0f;
-                return;
-            }
-            if (moved < 0.005f) return;
-
-            _driftFrames++;
-            _driftDistance += moved;
-            if (_driftReported || _driftFrames < 10 || _driftDistance < 0.5f) return;
-
-            _driftReported = true;
-            string what = DescribeBody(who);
-            AIInstance[] ais = who.GetComponentsInChildren<AIInstance>(true);
-            string aiNote = ais.Length == 0
-                ? "No myFSM AI is on the player."
-                : "myFSM AI component(s) on the player: " + ais.Length
-                  + " — an AI drives its own object towards its own goal every tick, "
-                  + "so remove it from the player.";
-            Debug.LogError("[stress] the player moved " + _driftDistance.ToString("F2")
-                           + " m while NO movement key was held. Something other than the "
-                           + "keys owns it. Body: " + what + ". " + aiNote
-                           + " Expected: a kinematic body (nothing can push it) and no AI."
-                           , who);
-        }
-
-        /// <summary>One line for the startup log: what the player's motion comes from.</summary>
-        private static string DescribeBody(Transform who)
-        {
-            if (who == null) return "nothing";
-            Rigidbody body = who.GetComponent<Rigidbody>();
-            if (body != null)
-                return body.isKinematic ? "kinematic Rigidbody (cannot be pushed)"
-                                        : "DYNAMIC Rigidbody (can be pushed — see the warning)";
-            if (who.GetComponent<CharacterController>() != null)
-                return "CharacterController (cannot be pushed)";
-            return "no body";
-        }
-
-        private void SetUpCamera()
-        {
-            if (!setUpTopDownCamera) return;
-            Camera camera = Camera.main;
-            if (camera == null)
-            {
-                Debug.LogWarning("[stress] no Main Camera (nothing tagged MainCamera) — skipping "
-                                 + "the follow rig. Add a camera tagged MainCamera, or drag a "
-                                 + "TopDownFollowCamera onto one yourself.", this);
-                return;
-            }
-            TopDownFollowCamera rig = camera.GetComponent<TopDownFollowCamera>();
-            if (rig == null) rig = camera.gameObject.AddComponent<TopDownFollowCamera>();
-            rig.height = cameraHeight;
-            rig.backDistance = cameraBackDistance;
-            rig.target = player;
-            rig.SnapToTarget();
-            Debug.Log("[stress] camera rig: '" + camera.name + "' parked " + cameraHeight
-                      + " m above and " + cameraBackDistance + " m behind the player, following it.",
-                      camera);
-        }
-
-        private Transform ResolvePlayer()
-        {
-            if (player != null) return player;
-            GameObject found = GameObject.Find("Player");
-
-            // A WASD object that already exists in the scene IS the player: if one
-            // was set up by hand, do not create a second cylinder and aim the whole
-            // crowd at the wrong object (that reads as "everything is stuck in the
-            // middle" while the object you drive gets ignored).
-            PlayerController wasd = FindObjectOfType<PlayerController>();
-            if (found == null && wasd != null)
-            {
-                Debug.Log("[stress] no object named 'Player': using the existing WASD object '"
-                          + wasd.name + "' as the player.", wasd);
-                return wasd.transform;
-            }
-            if (found != null && wasd != null && wasd.transform != found.transform)
-            {
-                Debug.LogWarning("[stress] two candidates for the player: '" + found.name
-                                 + "' (named Player) and '" + wasd.name + "' (has a "
-                                 + "PlayerController). The crowd chases '" + found.name
-                                 + "' — delete or rename one of them if the crowd is hunting "
-                                 + "the wrong object.", found);
-            }
-
-            if (found == null && createPlayerIfMissing)
-            {
-                // A cylinder, standing on the ground: Unity's cylinder primitive is
-                // 2 m tall with its origin at the centre, so y = half its height.
-                found = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                found.name = "Player";
-                found.transform.position = new Vector3(0f, playerHeight * 0.5f, 0f);
-                found.transform.localScale = new Vector3(1f, playerHeight * 0.5f, 1f);
-                found.AddComponent<PlayerController>();
-                Renderer renderer = found.GetComponent<Renderer>();
-                if (renderer != null) renderer.material.color = playerColour;
-                Debug.Log("[stress] created the player: a " + playerHeight + " m cylinder you "
-                          + "drive with WASD.", found);
-            }
-            return found != null ? found.transform : null;
+            for (int i = 0; i < spawnOnStart; i++) Spawn(1);
         }
 
         private void EnsureGround()
@@ -474,59 +198,262 @@ namespace MyFSM.Tests
                 _ground = existing.transform;
                 return;
             }
-            if (!createGroundIfMissing) return;
+            if (!createGroundIfMissing)
+            {
+                Debug.LogWarning("[stress] no ground: create a plane (or set "
+                                 + "createGroundIfMissing) before the cubes start falling.", this);
+                return;
+            }
 
             GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
             ground.name = "StressGround";
-            ground.transform.position = Vector3.zero;
-            // Unity's plane primitive is 10x10 m, so the scale is size/10.
+            // Unity's plane is 10 m across before scaling.
             ground.transform.localScale = new Vector3(groundSize / 10f, 1f, groundSize / 10f);
+            ground.transform.position = Vector3.zero;
+            Renderer renderer = ground.GetComponent<Renderer>();
+            if (renderer != null) renderer.material.color = groundColour;
             _ground = ground.transform;
-            Debug.Log("[stress] ground plane " + groundSize + " x " + groundSize + " m created "
-                      + "(room for thousands of cubes), centred on " + ground.transform.position
-                      + ".", ground);
         }
 
-        private void Start()
+        /// <summary>
+        /// The WASD object: the one you assigned, else an object named "Player", else
+        /// the object carrying a PlayerController, else a new cylinder. When the test
+        /// builds it, it gets a CharacterController: normal WASD movement, gravity,
+        /// and the crowd cannot push it (a controller is not moved by rigidbodies).
+        /// </summary>
+        private Transform ResolvePlayer()
         {
-            Debug.Log("[stress] ready — nothing has spawned yet: you press the keys. Space = +"
-                      + spawnPerPress + " AI, B = +" + burstSize + ", P = pause spawning, "
-                      + "L = write the CSVs, Backspace = clear. Chasers hunt '"
-                      + (ChaserAI.Player != null ? ChaserAI.Player.name : "NOTHING")
-                      + "'. Input backend: " + StressInput.Backend
-                      + ". Placement: " + placement
-                      + (placement == SpawnPlacement.CenterInAir
-                         ? " (from " + spawnHeight + " m up, gravity "
-                           + (gravityEnabled ? "on" : "OFF") + ")"
-                         : " (on the ground at " + spawnY + " m)")
-                      + ", ground plane " + groundSize + " m.", this);
+            if (player != null) return ConfigureKnownPlayer(player);
 
-            if (!StressInput.Available)
-                Debug.LogError("[stress] no readable keyboard input: " + StressInput.Backend + ". "
-                               + StressInput.Fix, this);
-
-            if (ChaserAI.Player == null)
+            GameObject found = GameObject.Find("Player");
+            if (found == null)
             {
-                Debug.LogError("[stress] the chasers have NO target: the player object was "
-                               + "not found and not created. Every spawned cube would drive "
-                               + "towards the world origin (0,0,0) — the centre of the plane "
-                               + "— because getPosition() of an unbound handle is (0,0,0). "
-                               + "Give the 'player' field a Transform, or put an object named "
-                               + "'Player' in the scene.", this);
+                PlayerController existing = FindObjectOfType<PlayerController>();
+                if (existing != null)
+                {
+                    Debug.Log("[stress] using the existing WASD object '" + existing.name
+                              + "' as the player.", existing);
+                    return ConfigureKnownPlayer(existing.transform);
+                }
+            }
+            if (found == null)
+            {
+                if (!createPlayerIfMissing)
+                {
+                    Debug.LogError("[stress] no player: assign one, name it 'Player', or set "
+                                   + "createPlayerIfMissing.", this);
+                    return null;
+                }
+                found = CreatePlayer();
+            }
+            return ConfigureKnownPlayer(found.transform);
+        }
+
+        private Transform ConfigureKnownPlayer(Transform who)
+        {
+            PlayerController controller = who.GetComponent<PlayerController>();
+            if (controller == null) return who;
+            if (controller.speed <= 0f) controller.speed = playerSpeed;
+            if (controller.halfExtent <= 0f) controller.halfExtent = groundSize * 0.48f;
+            return who;
+        }
+
+        private GameObject CreatePlayer()
+        {
+            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            go.name = "Player";
+            // Unity's cylinder is 2 m tall with its origin at the centre.
+            go.transform.position = new Vector3(0f, playerHeight * 0.5f, 0f);
+            go.transform.localScale = new Vector3(1f, playerHeight * 0.5f, 1f);
+
+            // The primitive's capsule collider would be a second, static collider on
+            // the same object. The CharacterController IS the collider here.
+            Collider primitiveCollider = go.GetComponent<Collider>();
+            if (primitiveCollider != null) Destroy(primitiveCollider);
+
+            CharacterController controller = go.AddComponent<CharacterController>();
+            controller.height = playerHeight;
+            controller.radius = 0.5f;
+            controller.center = Vector3.zero;
+
+            PlayerController wasd = go.AddComponent<PlayerController>();
+            wasd.speed = playerSpeed;
+            wasd.halfExtent = groundSize * 0.48f;
+
+            Renderer renderer = go.GetComponent<Renderer>();
+            if (renderer != null) renderer.material.color = playerColour;
+
+            Debug.Log("[stress] created the player: a " + playerHeight
+                      + " m cylinder with a CharacterController — drive it with WASD.", go);
+            return go;
+        }
+
+        private void SetUpCamera()
+        {
+            Camera camera = Camera.main;
+            if (camera == null)
+            {
+                Debug.LogWarning("[stress] no Camera.main in the scene: add a camera "
+                                 + "(the view is not part of the measurement).", this);
+                return;
+            }
+            TopDownFollowCamera follow = camera.GetComponent<TopDownFollowCamera>();
+            if (follow == null) follow = camera.gameObject.AddComponent<TopDownFollowCamera>();
+            follow.target = player;
+            follow.SnapToTarget();   // guards a null target itself
+        }
+
+        private void LogSetup()
+        {
+            if (player != null && !_loggedPlayer)
+            {
+                _loggedPlayer = true;
+                Debug.Log("[stress] player '" + player.name + "': "
+                          + DescribeBody(player) + ", driven by WASD only"
+                          + (StressInput.Available
+                             ? " (input: " + StressInput.Backend + ")."
+                             : " — BUT NO INPUT BACKEND IS AVAILABLE: " + StressInput.Fix),
+                          player);
+            }
+            Debug.Log("[stress] ground " + groundSize + " m, cubes "
+                      + (cubeGravity ? "with gravity" : "without gravity")
+                      + ", spawn placement " + placement
+                      + ", spawnOnStart " + spawnOnStart
+                      + " (Space +" + batchSmall + ", B +" + batchLarge + ").", this);
+        }
+
+        private string DescribeBody(Transform who)
+        {
+            CharacterController controller = who.GetComponent<CharacterController>();
+            if (controller != null)
+                return "CharacterController (the crowd blocks it, never pushes it)";
+            Rigidbody body = who.GetComponent<Rigidbody>();
+            if (body != null)
+                return body.isKinematic
+                    ? "kinematic Rigidbody (nothing can push it)"
+                    : "DYNAMIC Rigidbody — the crowd can push this player around";
+            return "transform only (the crowd is blocked by its collider)";
+        }
+
+        // ------------------------------------------------------------------
+        // Spawning
+        // ------------------------------------------------------------------
+
+        /// <summary>Spawns `count` cubes now, each at its own drop point.</summary>
+        public void Spawn(int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                Vector3 position = NextSpawnPosition();
+                _watch.Reset();
+                _watch.Start();
+                GameObject cube = CreateChaser(position);
+                float instantiateMs = _watch.Elapsed.TotalMilliseconds;
+                _watch.Stop();
+
+                SpawnedTotal++;
+                Spawns.Add(new SpawnRecord
+                {
+                    index = SpawnedTotal,
+                    frame = Time.frameCount,
+                    instantiateMs = instantiateMs,
+                    spawnFrameMs = Time.unscaledDeltaTime * 1000f,
+                    aliveAfter = _spawned.Count
+                });
+            }
+        }
+
+        private GameObject CreateChaser(Vector3 position)
+        {
+            GameObject cube;
+            if (cubePrefab != null)
+            {
+                cube = Instantiate(cubePrefab, position, Quaternion.identity);
             }
             else
             {
-                Debug.Log("[stress] player '" + player.name + "': " + DescribeBody(player)
-                          + ", WASD via PlayerController. The crowd chases '"
-                          + _chaseTarget.name + "' at y = " + chaseTargetHeight.ToString("F2")
-                          + " (a child of the player), so it runs along the ground; nothing can "
-                          + "push the player.", _chaseTarget);
+                cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                cube.transform.position = position;
+
+                Rigidbody body = cube.AddComponent<Rigidbody>();
+                body.useGravity = cubeGravity;
+                // Tumbling locked so a cube stays upright and can be pushed around.
+                body.constraints = RigidbodyConstraints.FreezeRotationX
+                                   | RigidbodyConstraints.FreezeRotationZ;
+                if (!cubeGravity)
+                {
+                    // Nothing would bring it back down, so hold the drop height.
+                    body.constraints |= RigidbodyConstraints.FreezePositionY;
+                }
             }
 
-            // Opt-in only (spawnOnStart is 0 by default): the test does not put AIs in
-            // the scene behind your back, it only answers what you ask it to spawn.
-            if (spawnOnStart > 0) Spawn(spawnOnStart);
+            ChaserAI ai = cube.GetComponent<ChaserAI>();
+            if (ai == null) ai = cube.AddComponent<ChaserAI>();
+            // Bind the target on the spot: the component's Awake has run by now and
+            // its Start (where the runtime reads this) runs later this frame, so no
+            // global state is involved and nothing to guess about.
+            ai.Target = player;
+
+            _spawned.Add(cube);
+            return cube;
         }
+
+        /// <summary>Where the next cube appears, per `placement`.</summary>
+        public Vector3 NextSpawnPosition()
+        {
+            if (placement == SpawnPlacement.AroundPlayer) return GroundSpawnPosition();
+
+            Vector3 centre = GroundCentre();
+            float radius = placement == SpawnPlacement.CentreInAir
+                ? centreSpread + centreSpreadGrowth * Mathf.Sqrt(_spawned.Count)
+                : groundSize * 0.5f * spreadFraction;
+
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                Vector2 point = Random.insideUnitCircle * radius;
+                Vector3 candidate = centre + new Vector3(point.x, 0f, point.y);
+                candidate.y = spawnHeight;
+                if (Vector3.Distance(candidate, GroundCentre()) > groundSize * 0.5f)
+                    continue;
+                if (player != null && minimumDistanceFromPlayer > 0f &&
+                    Vector3.Distance(candidate, player.position) < minimumDistanceFromPlayer)
+                    continue;
+                return candidate;
+            }
+            Vector3 fallback = centre;
+            fallback.y = spawnHeight;
+            return fallback;
+        }
+
+        private Vector3 GroundSpawnPosition()
+        {
+            Vector3 around = player != null ? player.position : GroundCentre();
+            around.y = 0f;
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                float angle = Random.value * Mathf.PI * 2f;
+                float radius = playerRingRadius * Mathf.Sqrt(Random.value);
+                Vector3 candidate = around
+                                    + new Vector3(Mathf.Cos(angle) * radius, 0f,
+                                                  Mathf.Sin(angle) * radius);
+                candidate.y = spawnHeight;
+                if (minimumDistanceFromPlayer <= 0f) return candidate;
+                if (Vector3.Distance(candidate, around) >= minimumDistanceFromPlayer)
+                    return candidate;
+            }
+            Vector3 fallback = around;
+            fallback.y = spawnHeight;
+            return fallback;
+        }
+
+        private Vector3 GroundCentre()
+        {
+            return _ground != null ? _ground.position : Vector3.zero;
+        }
+
+        // ------------------------------------------------------------------
+        // Frame loop
+        // ------------------------------------------------------------------
 
         private void Update()
         {
@@ -535,17 +462,8 @@ namespace MyFSM.Tests
                 ? deltaMs
                 : _smoothedMs + (deltaMs - _smoothedMs) * 0.1f;
 
-            // Cost of the frame AFTER a spawn: this is the first frame in which
-            // the new AI has booted and is being ticked.
-            if (_settling.Count > 0)
-            {
-                for (int i = 0; i < _settling.Count; i++)
-                    _settling[i].settleFrameMs = deltaMs;
-                _settling.Clear();
-            }
-
+            VerifyFirstChaser();
             HandleInput();
-            WatchPlayerDrift();
             DetectSlowdown();
 
             _frameCounter++;
@@ -558,190 +476,95 @@ namespace MyFSM.Tests
 
         private void HandleInput()
         {
-            if (StressInput.GetKeyDown(clearKey)) { ClearAll(); return; }
-            if (StressInput.GetKeyDown(pauseKey))
+            if (!StressInput.Available) return;
+
+            if (StressInput.GetKeyDown(keyClear)) { ClearAll(); return; }
+            if (StressInput.GetKeyDown(keyPause))
             {
                 Paused = !Paused;
                 Debug.Log("[stress] spawning " + (Paused ? "paused" : "resumed")
-                          + " at " + AliveCount + " AIs", this);
+                          + " at " + AliveCount + " cubes", this);
             }
-            if (StressInput.GetKeyDown(reportKey))
+            if (StressInput.GetKeyDown(keyWriteFiles))
             {
                 WriteFiles();
-                Debug.Log("[stress] report written at " + AliveCount + " AIs", this);
+                Debug.Log("[stress] report written at " + AliveCount + " cubes", this);
             }
+            if (StressInput.GetKeyDown(keyResetPlayer)) ResetPlayer();
             if (Paused) return;
 
-            if (StressInput.GetKeyDown(spawnKey)) Spawn(spawnPerPress);
-            if (StressInput.GetKeyDown(burstKey)) Spawn(burstSize);
+            if (StressInput.GetKeyDown(keySpawnSmall)) Spawn(batchSmall);
+            if (StressInput.GetKeyDown(keySpawnLarge)) Spawn(batchLarge);
+        }
+
+        /// <summary>Puts the player back at the origin (the R key). Only the key
+        /// handler calls this — nothing moves the player on its own.</summary>
+        private void ResetPlayer()
+        {
+            if (player == null) return;
+            CharacterController controller = player.GetComponent<CharacterController>();
+            if (controller != null) controller.enabled = false;
+            player.position = new Vector3(0f, playerHeight * 0.5f, 0f);
+            if (controller != null) controller.enabled = true;
+            Rigidbody body = player.GetComponent<Rigidbody>();
+            if (body != null && !body.isKinematic) body.velocity = Vector3.zero;
+            Debug.Log("[stress] player reset to the origin.", player);
+        }
+
+        /// <summary>
+        /// Once, after the first cube has booted: say which object its `player` slot
+        /// ended up bound to. That single line answers "why is the crowd going the
+        /// wrong way" without guessing.
+        /// </summary>
+        private void VerifyFirstChaser()
+        {
+            if (_verifiedTarget || _spawned.Count == 0) return;
+            ChaserAI ai = _spawned[0] != null ? _spawned[0].GetComponent<ChaserAI>() : null;
+            if (ai == null) { _verifiedTarget = true; return; }
+            if (!ai.Booted)
+            {
+                if (++_verifyTries > 600) _verifiedTarget = true;
+                return;
+            }
+            _verifiedTarget = true;
+
+            if (ai.BoundTarget == null)
+            {
+                Debug.LogError("[stress] cube #1 booted without a target. It will stand "
+                               + "still; see the [chaser] error above.", _spawned[0]);
+                return;
+            }
+            if (player != null && ai.BoundTarget != player)
+            {
+                Debug.LogError("[stress] cube #1 chases '" + ai.BoundTarget.name
+                               + "', not the player '" + player.name + "'. Bind the right "
+                               + "object (ai.Target) before the cube boots.", _spawned[0]);
+                return;
+            }
+            float distance = player != null
+                ? Vector3.Distance(_spawned[0].transform.position, player.position)
+                : 0f;
+            Debug.Log("[stress] cube #1 chases '" + ai.BoundTarget.name + "' ("
+                      + distance.ToString("F1") + " m away), slot 'player' bound and booted "
+                      + "as instance " + ai.InstanceId + ".", _spawned[0]);
         }
 
         private void DetectSlowdown()
         {
-            if (!autoStopOnSlowdown) return;
-
-            if (AliveCount >= minimumCountForStop && _smoothedMs > slowdownFrameMs)
-                _slowFrames++;
-            else
-                _slowFrames = 0;
-
-            int needed = Mathf.Max(1, Mathf.RoundToInt(sustainedSeconds / Mathf.Max(0.0001f, Time.unscaledDeltaTime)));
-            if (_slowFrames < needed) return;
-
-            // Sustained slowdown with a real population: that is the practical max.
-            PracticalMaximum = AliveCount;
-            if (stopSpawningWhenSlow) Paused = true;
-            _slowFrames = 0;
-
-            Debug.LogWarning("[stress] PRACTICAL MAXIMUM reached: " + AliveCount
-                             + " AIs — smoothed frame time " + _smoothedMs.ToString("F1")
-                             + " ms (> " + slowdownFrameMs.ToString("F1") + " ms) sustained for "
-                             + sustainedSeconds.ToString("F1") + " s. Spawning stopped.", this);
-            WriteFiles();
-        }
-
-        // ------------------------------------------------------------------
-        // Spawning
-        // ------------------------------------------------------------------
-
-        public void Spawn(int count)
-        {
-            for (int i = 0; i < count; i++)
+            if (!stopWhenSlow || Paused || AliveCount < minimumCountForStop) return;
+            if (_smoothedMs <= slowdownFrameMs) { _slowSeconds = 0f; return; }
+            _slowSeconds += Time.unscaledDeltaTime;
+            if (_slowSeconds >= slowdownHoldSeconds)
             {
-                if (_spawned.Count >= maxAlive)
-                {
-                    Debug.LogWarning("[stress] maxAlive (" + maxAlive + ") reached — not spawning more.", this);
-                    return;
-                }
-
-                Vector3 position = NextSpawnPosition();
-                _watch.Reset();
-                _watch.Start();
-                GameObject go = CreateChaser(position);
-                _watch.Stop();
-
-                SpawnedTotal++;
-                go.name = "Chaser #" + SpawnedTotal;
-                _spawned.Add(go);
-
-                SpawnRecord record = new SpawnRecord
-                {
-                    index = SpawnedTotal,
-                    frame = Time.frameCount,
-                    instantiateMs = _watch.Elapsed.TotalMilliseconds,
-                    spawnFrameMs = Time.unscaledDeltaTime * 1000f,
-                    settleFrameMs = -1f,
-                    aliveAfter = _spawned.Count
-                };
-                Spawns.Add(record);
-                _settling.Add(record); // filled in on the next Update
+                Paused = true;
+                PracticalMaximum = AliveCount;
+                Debug.LogWarning("[stress] paused spawning: smoothed frame time stayed above "
+                                 + slowdownFrameMs.ToString("F1") + " ms for "
+                                 + slowdownHoldSeconds.ToString("F1") + " s at "
+                                 + AliveCount + " cubes. The practical maximum is about "
+                                 + AliveCount + ".", this);
             }
         }
-
-        private GameObject CreateChaser(Vector3 position)
-        {
-            if (cubePrefab != null)
-                return Instantiate(cubePrefab, position, Quaternion.identity);
-
-            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            go.transform.position = position;
-
-            Rigidbody body = go.AddComponent<Rigidbody>();
-            // Dynamic body WITH gravity, so Unity's solver does the falling, the
-            // landing, the colliding and the pile-ups. Only the tumbling is locked
-            // (X/Z rotation) so a cube stays upright and can be pushed around.
-            body.useGravity = gravityEnabled;
-            body.constraints = RigidbodyConstraints.FreezeRotationX
-                               | RigidbodyConstraints.FreezeRotationZ;
-            if (!gravityEnabled)
-            {
-                // No gravity: keep the cubes at the height they were dropped at,
-                // otherwise they would drift down forever with nothing pulling back.
-                body.constraints |= RigidbodyConstraints.FreezePositionY;
-            }
-            body.interpolation = RigidbodyInterpolation.Interpolate;
-
-            go.AddComponent<ChaserAI>(); // boots in its own Start() this frame
-            return go;
-        }
-
-        /// <summary>
-        /// Where the next cube appears. The default drops it from the air above the
-        /// centre of the plane (spawnHeight, widening a little as the crowd grows);
-        /// AroundPlayer keeps the old ground-level ring/disc around the player.
-        /// </summary>
-        public Vector3 NextSpawnPosition()
-        {
-            if (placement == SpawnPlacement.CenterInAir) return AirSpawnPosition();
-            return GroundSpawnPosition();
-        }
-
-        /// <summary>
-        /// Above the centre of the plane, in the air, so the cube falls and lands.
-        /// Successive cubes spread out on a golden-angle spiral whose radius grows
-        /// with the live population (jitter + spread * sqrt(alive)): 100 cubes land
-        /// in a loose cluster instead of all inside each other, which would make the
-        /// solver fire them off in every direction and ruin the measurement.
-        /// </summary>
-        private Vector3 AirSpawnPosition()
-        {
-            if (!gravityEnabled && !_warnedNoGravity)
-            {
-                _warnedNoGravity = true;
-                Debug.LogWarning("[stress] gravityEnabled is OFF but cubes are being dropped from "
-                                 + spawnHeight.ToString("F0") + " m: with Y frozen they will hang in "
-                                 + "the air there. Set placement = AroundPlayer, or turn gravity on.",
-                                 this);
-            }
-            int index = _spawned.Count;
-            float radius = spawnJitter + spawnSpread * Mathf.Sqrt(index);
-            float angle = index * 2.39996323f; // golden angle: even coverage, no runs
-            float height = spawnHeight + Random.Range(-0.5f, 0.5f);
-
-            Vector3 centre = GroundCentre();
-            return new Vector3(centre.x + Mathf.Cos(angle) * radius,
-                               centre.y + height,
-                               centre.z + Mathf.Sin(angle) * radius);
-        }
-
-        /// <summary>Centre of the ground plane: the object was cached in EnsureGround.</summary>
-        private Vector3 GroundCentre()
-        {
-            return _ground != null ? _ground.position : Vector3.zero;
-        }
-
-        private Vector3 GroundSpawnPosition()
-        {
-            Vector3 centre = ChaserAI.Player != null ? ChaserAI.Player.position : Vector3.zero;
-            centre.y = 0f;
-            for (int attempt = 0; attempt < 8; attempt++)
-            {
-                float angle = Random.value * Mathf.PI * 2f;
-                float radius = spawnOnRing
-                    ? spawnRadius
-                    : spawnRadius * Mathf.Sqrt(Random.value);
-                Vector3 candidate = centre + new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
-                candidate.y = spawnY;
-                if (minimumDistanceFromPlayer <= 0f) return candidate;
-                if (Vector3.Distance(candidate, centre) >= minimumDistanceFromPlayer) return candidate;
-            }
-            Vector3 fallback = centre + new Vector3(spawnRadius, 0f, 0f);
-            fallback.y = spawnY;
-            return fallback;
-        }
-
-        public void ClearAll()
-        {
-            for (int i = 0; i < _spawned.Count; i++)
-                if (_spawned[i] != null) Destroy(_spawned[i]);
-            _spawned.Clear();
-            _settling.Clear();
-            Debug.Log("[stress] cleared — " + SpawnedTotal + " AIs were spawned in total this run.", this);
-        }
-
-        // ------------------------------------------------------------------
-        // Recording
-        // ------------------------------------------------------------------
 
         private void SampleFrame(float deltaMs)
         {
@@ -753,9 +576,8 @@ namespace MyFSM.Tests
                 smoothedMs = _smoothedMs,
                 alive = AliveCount
             };
-            // Summing every AI's call counter (and snapshotting the registry) is
-            // O(N): refresh those two on every 5th sample, report the last known
-            // values in between so the CSV never shows a fake zero.
+            // Counting every AI's calls is O(N): refresh it every 5th sample and
+            // report the last known number in between (never a fake zero).
             _sampleCounter++;
             if (_sampleCounter >= 5)
             {
@@ -766,31 +588,25 @@ namespace MyFSM.Tests
             sample.totalCalls = _lastCalls;
             sample.registered = _lastRegistered;
 
-            // Where the crowd actually is, relative to what it aims at. A working
-            // chase keeps the mean small however far the player walks; a crowd that
-            // never got a goal (or is jammed on a pile) shows the mean growing with
-            // the player's distance from it — which is what "the cubes orbit the
-            // middle of the plane" looks like in numbers.
-            Transform aim = _chaseTarget != null ? _chaseTarget : player;
-            if (aim != null && _spawned.Count > 0)
+            if (player != null && _spawned.Count > 0)
             {
-                Vector3 aimPos = aim.position;
+                Vector3 playerPosition = player.position;
                 float sum = 0f;
                 float nearest = float.MaxValue;
                 int counted = 0;
                 for (int i = 0; i < _spawned.Count; i++)
                 {
-                    GameObject go = _spawned[i];
-                    if (go == null) continue;
-                    float d = Vector3.Distance(go.transform.position, aimPos);
-                    sum += d;
-                    if (d < nearest) nearest = d;
+                    GameObject cube = _spawned[i];
+                    if (cube == null) continue;
+                    float distance = Vector3.Distance(cube.transform.position, playerPosition);
+                    sum += distance;
+                    if (distance < nearest) nearest = distance;
                     counted++;
                 }
                 if (counted > 0)
                 {
-                    sample.crowdMeanToTarget = sum / counted;
-                    sample.crowdNearestToTarget = nearest;
+                    sample.crowdMeanToPlayer = sum / counted;
+                    sample.crowdNearestToPlayer = nearest;
                 }
             }
             Frames.Add(sample);
@@ -814,87 +630,121 @@ namespace MyFSM.Tests
             return server != null ? server.Db.SnapshotInstances().Count : 0;
         }
 
-        public string OutputDir { get { return Application.persistentDataPath; } }
-        public string SpawnCsvPath { get { return Path.Combine(OutputDir, spawnFileName); } }
-        public string FrameCsvPath { get { return Path.Combine(OutputDir, frameFileName); } }
-        public string SummaryPath { get { return Path.Combine(OutputDir, summaryFileName); } }
+        /// <summary>Removes every spawned cube (the Backspace key).</summary>
+        public void ClearAll()
+        {
+            int removed = _spawned.Count;
+            for (int i = 0; i < _spawned.Count; i++)
+            {
+                if (_spawned[i] != null) Destroy(_spawned[i]);
+            }
+            _spawned.Clear();
+            Debug.Log("[stress] cleared " + removed + " cubes.", this);
+        }
 
+        // ------------------------------------------------------------------
+        // Files
+        // ------------------------------------------------------------------
+
+        private string SpawnCsvPath { get { return Path.Combine(Application.persistentDataPath, spawnFileName); } }
+        private string FrameCsvPath { get { return Path.Combine(Application.persistentDataPath, frameFileName); } }
+        private string SummaryPath { get { return Path.Combine(Application.persistentDataPath, summaryFileName); } }
+
+        /// <summary>Writes the three files once. Safe to call from anywhere.</summary>
         public void WriteFiles()
         {
-            if (_wroteFiles) return;
+            if (!record || _wroteFiles) return;
             _wroteFiles = true;
 
             StringBuilder spawns = new StringBuilder();
-            spawns.Append("index,frame,instantiateMs,spawnFrameMs,settleFrameMs,aliveAfter,instanceId\n");
+            spawns.Append("index,frame,instantiateMs,spawnFrameMs,aliveAfter,instanceId\n");
             for (int i = 0; i < Spawns.Count; i++)
             {
-                SpawnRecord r = Spawns[i];
-                int id = r.instanceId;
-                if (id == 0 && r.index - 1 < _spawned.Count && _spawned[r.index - 1] != null)
+                SpawnRecord recordRow = Spawns[i];
+                int id = recordRow.instanceId;
+                if (id == 0 && recordRow.index - 1 < _spawned.Count &&
+                    _spawned[recordRow.index - 1] != null)
                 {
-                    ChaserAI ai = _spawned[r.index - 1].GetComponent<ChaserAI>();
-                    if (ai != null) { id = ai.InstanceId; r.instanceId = id; }
+                    ChaserAI ai = _spawned[recordRow.index - 1].GetComponent<ChaserAI>();
+                    if (ai != null) { id = ai.InstanceId; recordRow.instanceId = id; }
                 }
-                spawns.Append(r.index).Append(',')
-                      .Append(r.frame).Append(',')
-                      .Append(r.instantiateMs.ToString("F4")).Append(',')
-                      .Append(r.spawnFrameMs.ToString("F2")).Append(',')
-                      .Append(r.settleFrameMs.ToString("F2")).Append(',')
-                      .Append(r.aliveAfter).Append(',')
+                spawns.Append(recordRow.index).Append(',')
+                      .Append(recordRow.frame).Append(',')
+                      .Append(recordRow.instantiateMs.ToString("F4")).Append(',')
+                      .Append(recordRow.spawnFrameMs.ToString("F2")).Append(',')
+                      .Append(recordRow.aliveAfter).Append(',')
                       .Append(id).Append('\n');
             }
             File.WriteAllText(SpawnCsvPath, spawns.ToString());
 
             StringBuilder frames = new StringBuilder();
             frames.Append("frame,time,deltaMs,smoothedMs,fps,alive,registered,totalCalls,"
-                          + "crowdMeanToTarget,crowdNearestToTarget\n");
+                          + "crowdMeanToPlayer,crowdNearestToPlayer\n");
             for (int i = 0; i < Frames.Count; i++)
             {
-                FrameSample s = Frames[i];
-                frames.Append(s.frame).Append(',')
-                      .Append(s.time.ToString("F3")).Append(',')
-                      .Append(s.deltaMs.ToString("F2")).Append(',')
-                      .Append(s.smoothedMs.ToString("F2")).Append(',')
-                      .Append((1000f / Mathf.Max(0.0001f, s.smoothedMs)).ToString("F1")).Append(',')
-                      .Append(s.alive).Append(',')
-                      .Append(s.registered).Append(',')
-                      .Append(s.totalCalls).Append(',')
-                      .Append(s.crowdMeanToTarget.ToString("F2")).Append(',')
-                      .Append(s.crowdNearestToTarget.ToString("F2")).Append('\n');
+                FrameSample sample = Frames[i];
+                frames.Append(sample.frame).Append(',')
+                      .Append(sample.time.ToString("F3")).Append(',')
+                      .Append(sample.deltaMs.ToString("F2")).Append(',')
+                      .Append(sample.smoothedMs.ToString("F2")).Append(',')
+                      .Append((1000f / Mathf.Max(0.0001f, sample.smoothedMs)).ToString("F1"))
+                      .Append(',')
+                      .Append(sample.alive).Append(',')
+                      .Append(sample.registered).Append(',')
+                      .Append(sample.totalCalls).Append(',')
+                      .Append(sample.crowdMeanToPlayer.ToString("F2")).Append(',')
+                      .Append(sample.crowdNearestToPlayer.ToString("F2")).Append('\n');
             }
             File.WriteAllText(FrameCsvPath, frames.ToString());
 
             StringBuilder summary = new StringBuilder();
             summary.Append("myFSM spawn stress test\n");
-            summary.Append("spawned total      : ").Append(SpawnedTotal).Append('\n');
-            summary.Append("alive at stop      : ").Append(AliveCount).Append('\n');
-            summary.Append("practical maximum  : ").Append(PracticalMaximum < 0 ? "not reached" : PracticalMaximum.ToString()).Append('\n');
-            summary.Append("slowdown budget    : ").Append(slowdownFrameMs.ToString("F1")).Append(" ms smoothed\n");
-            summary.Append("ground plane       : ").Append(groundSize).Append(" x ").Append(groundSize).Append(" m\n");
-            summary.Append("cube gravity       : ").Append(gravityEnabled ? "ON (physics solver included in these numbers)" : "off").Append('\n');
-            summary.Append("spawn placement    : ").Append(placement).Append(placement == SpawnPlacement.CenterInAir
-                              ? " at " + spawnHeight.ToString("F0") + " m" : "").Append('\n');
-            summary.Append("input backend      : ").Append(StressInput.Backend).Append('\n');
-            summary.Append("final smoothed ms  : ").Append(_smoothedMs.ToString("F2")).Append('\n');
-            summary.Append("final fps          : ").Append((1000f / Mathf.Max(0.0001f, _smoothedMs)).ToString("F1")).Append('\n');
-            summary.Append("crowd to target    : ");
+            summary.Append("player            : ")
+                   .Append(player != null ? player.name + " (" + DescribeBody(player) + ")" : "NONE")
+                   .Append('\n');
+            summary.Append("spawned total     : ").Append(SpawnedTotal).Append('\n');
+            summary.Append("alive at stop     : ").Append(AliveCount).Append('\n');
+            summary.Append("practical maximum : ")
+                   .Append(PracticalMaximum < 0 ? "not reached" : PracticalMaximum.ToString())
+                   .Append('\n');
+            summary.Append("ground plane      : ").Append(groundSize).Append(" x ")
+                   .Append(groundSize).Append(" m\n");
+            summary.Append("cube gravity      : ")
+                   .Append(cubeGravity ? "ON (the physics step is part of these numbers)" : "off")
+                   .Append('\n');
+            summary.Append("spawn placement   : ").Append(placement)
+                   .Append(placement == SpawnPlacement.SpreadOverPlane
+                           ? " (drop points spread over the plane)"
+                           : placement == SpawnPlacement.CentreInAir
+                             ? " (above the centre, at " + spawnHeight.ToString("F0") + " m)"
+                             : " (ring around the player)")
+                   .Append('\n');
+            summary.Append("input backend     : ").Append(StressInput.Backend).Append('\n');
+            summary.Append("final smoothed ms : ").Append(_smoothedMs.ToString("F2")).Append('\n');
+            summary.Append("final fps         : ")
+                   .Append((1000f / Mathf.Max(0.0001f, _smoothedMs)).ToString("F1")).Append('\n');
+            summary.Append("crowd to player   : ");
             if (Frames.Count > 0)
             {
                 FrameSample last = Frames[Frames.Count - 1];
-                summary.Append("mean ").Append(last.crowdMeanToTarget.ToString("F2"))
-                       .Append(" m, nearest ").Append(last.crowdNearestToTarget.ToString("F2"))
-                       .Append(" m (a small mean means the crowd is on the target; a mean "
-                               + "that grows with the player's walk means the crowd is stuck)\n");
+                summary.Append("mean ").Append(last.crowdMeanToPlayer.ToString("F2"))
+                       .Append(" m, nearest ").Append(last.crowdNearestToPlayer.ToString("F2"))
+                       .Append(" m (a small mean means the crowd is on the player; a mean "
+                               + "that grows as the player walks means the crowd is not "
+                               + "following)\n");
             }
             else
             {
                 summary.Append("no frames sampled\n");
             }
-            summary.Append("registered AIs     : ").Append(_lastRegistered > 0 ? _lastRegistered : RegisteredCount()).Append('\n');
-            summary.Append("total FSM calls    : ").Append(_lastCalls > 0 ? _lastCalls : TotalCalls()).Append('\n');
+            summary.Append("registered AIs    : ")
+                   .Append(_lastRegistered > 0 ? _lastRegistered : RegisteredCount()).Append('\n');
+            summary.Append("total FSM calls   : ")
+                   .Append(_lastCalls > 0 ? _lastCalls : TotalCalls()).Append('\n');
             File.WriteAllText(SummaryPath, summary.ToString());
 
-            Debug.Log("[stress] wrote " + SpawnCsvPath + ", " + FrameCsvPath + " and " + SummaryPath, this);
+            Debug.Log("[stress] wrote " + SpawnCsvPath + ", " + FrameCsvPath + " and "
+                      + SummaryPath, this);
         }
 
         private void OnApplicationQuit() { WriteFiles(); }

@@ -13,8 +13,9 @@
 // one step of `position += direction * speed * time` and hands it to
 // Rigidbody.MovePosition: Unity moves the cube and resolves the contacts.
 //
-// The target is a point at the cube's own height that follows the player (the
-// test publishes it), so the chase stays horizontal.
+// The cube has gravity, so the runtime aims that step along the ground plane and
+// lets Unity keep the vertical axis: the cube falls, lands and runs, and it is
+// never lifted or held at the player's height.
 
 const float chaseSpeed = 6.0f;
 
