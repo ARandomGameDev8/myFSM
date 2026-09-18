@@ -15,6 +15,9 @@
 //      the +10 m / +40 m teleports can actually be read off the screen;
 //   5. frames the Main Camera on that column (disable with frameCameraOnStart).
 //
+// It drives nothing: the cube only moves when you press a key (W/Up, S/Down,
+// R) or edit `zone` on the controller. There is no demo cycle.
+//
 // Why the ruler and the camera: the machine moves the object 10 m and 40 m up.
 // With a default camera at eye height the object simply leaves the frame, which
 // looks exactly like "it broke". The ruler shows the height, the framing shows
@@ -111,7 +114,7 @@ namespace MyFSM.Tests
                       + ", marker pin = the '" + ZoneMarker.DefaultName + "' object, recorder watching "
                       + string.Join(", ", watchVariables) + "."
                       + " The cube teleports 0 m / +10 m / +40 m, so the ruler beside it reads the state."
-                      + " Press W/Up and S/Down to drive it (a demo cycle runs until your first key press).",
+                      + " Drive it with W/Up and S/Down (nothing moves until you do).",
                       this);
         }
 

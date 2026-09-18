@@ -33,7 +33,7 @@ inspector). So the whole procedure is:
 
    | test | component to add | it builds, on its own |
    | --- | --- | --- |
-   | 01 | `ZoneTestSetup` | a **visible cube with the AI on it** (or the AI you already placed), a 45 m height ruler with ticks at +10 m/+40 m, the keyboard controller, the marker pin, the recorder, and a camera framing that fits the whole column |
+   | 01 | `ZoneTestSetup` | a **visible cube with the AI on it** (or the AI you already placed), a 45 m height ruler with ticks at +10 m/+40 m, the keyboard controller, the marker pin, the recorder, and a camera framing that fits the whole column. It drives nothing: the cube moves when you press a key |
    | 02 | `SpawnStressTest` | ground plane, WASD player, and one chaser cube per `Space` press |
    | 03 | `MazeTestSetup` | ground plane, random maze + entry/exit, baked NavMesh, runner capsule + agent + AI + recorder |
    | 04 | `ChaseTestSetup` | the same maze, plus a walked-out chaser and a walking target |
@@ -178,13 +178,28 @@ it adds a visible cube child, so an "empty GameObject" still gives you something
 you can watch. `ZoneController` (keyboard) and `StateTransitionRecorder` go on
 the AI's own object.
 
-**The cube moves by itself as soon as you press Play**: a demo cycle walks `zone`
-through 0 → 15 → 25 → 0 every 2.5 s until your first key press, so "is it alive?"
-never depends on getting keyboard focus right. It also builds a 45 m height ruler
-(thin pole, tick at +10 m and +40 m) and frames the Main Camera on the column —
-the machine teleports the cube 10 m and 40 m up, which a default camera at eye
-height cannot show. Set `frameCameraOnStart`/`demoCycle` to false to keep your own
-camera and drive it purely by hand (`C` re-frames the camera at any time).
+**Nothing moves until you drive it.** `zone` changes only from your keys
+(`W`/`Up` +1, `S`/`Down` −1, `R` reset), from editing `zone` on the controller in
+the Inspector while playing (the value is pushed to the FSM on the next frame), or
+from your own code calling `SetZone()`. There is no demo cycle, no timer, no
+automatic stepping.
+
+Every accepted change is logged with its source and a read-back from the FSM:
+
+```
+[zone] zone = 15  (from: increase key (+1))  ->  FSM reads 15, expecting Above10 (10 m up)
+```
+
+That single line answers "the variable isn't changing": if it appears, the variable did
+change and the machine is what to look at next (the same line names the
+state it expects, and a `[zone] FAIL …` warning follows if the machine disagrees);
+if it never appears, the key press is not reaching the game — see the input rows
+in Troubleshooting.
+
+The scene also builds a 45 m height ruler (thin pole, tick at +10 m and +40 m) and
+frames the Main Camera on the column, because the machine teleports the cube 10 m
+and 40 m up — which a default camera at eye height cannot show. Set
+`frameCameraOnStart` to false to keep your own camera; `C` re-frames at any time.
 
 ### What the `marker` slot is (and why it needs nothing from you)
 
@@ -221,10 +236,10 @@ Controls: `W` / `Up` = +1, `S` / `Down` = −1 (a tap steps once, a hold repeats
 after 0.4 s and then every 0.15 s), `R` = reset to 0, and the value never drops
 below 0.
 
-The demo cycle and the visible cube are not decoration: with an AI on an empty
-GameObject the state machine transitions and logs perfectly while *nothing on
-screen changes*, which reads as a broken test. The cube, the ruler and the frame
-exist so the screen agrees with the console.
+The visible cube, the ruler and the camera framing are not decoration: with an AI
+on an empty GameObject the state machine transitions and logs perfectly while
+*nothing on screen changes*, which reads as a broken test. They exist so the
+screen agrees with the console.
 
 What it records:
 
@@ -351,8 +366,11 @@ the live route length and the chaser's state — the curve that shows the chase)
 | `CS0103: The name 'FsmValue' does not exist in the current context` in a `*.Manual.cs` | that file writes value slots, and `FsmValue` lives in `MyFSM.Core` — a `using` applies to ONE file, so `using MyFSM.Unity;` does not bring it in | add `using MyFSM.Core;` (fixed in the shipped files; if you copied them earlier, re-copy or add the line) |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
 | test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
-| test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding now logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube (keys then drive it, or the demo cycle does) |
-| test 01: keys do nothing while the demo runs | Unity only delivers `Input` to the Game view, and the demo stops at your first key press | click inside the Game view, then press `W`/`S` or the arrow keys |
+| test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube; the keys then drive it (nothing moves by itself) |
+| test 01: keys do nothing, console shows no `[zone] zone = …` line | input is not reaching the game | check the startup line `[zone] input backend: …`. If it reports the Input System package, or says NONE, your project's **Active Input Handling** excludes the legacy `UnityEngine.Input` API the tests used to call (that API throws in that mode, so no key ever arrives) — the controller now reads whichever backend is compiled in; the line tells you which. Anything unmapped logs `[input] <key> has no Input System mapping` |
+| test 01: keys do nothing and the backend line looks fine | Unity only delivers input to a **focused** window | click inside the Game view before pressing keys — and note that pressing WASD while the mouse is over the **Scene** view flies the Scene camera instead of driving the game |
+| test 01: `[zone] SetBoundValue(…) failed` or `[myFSM] SetBoundValue before execution exists` | the FSM could not be written at that moment | fixed: the first push now waits for the AI to boot. If it still appears, the AI never booted — the controller then reports `the AI never booted after N s: <BootError>` |
+| test 01: `zone` changes in the Inspector but the FSM does not follow | the field was edited before the AI booted | the controller pushes any changed `zone` on the next frame and logs it; if nothing is logged at all, look for the boot error row above |
 
 `Tests/Tools/check_project.py` finds all three situations before Unity does, and
 `Sandbox/check.py` (repo-side) now also fails on the second one: it verifies that

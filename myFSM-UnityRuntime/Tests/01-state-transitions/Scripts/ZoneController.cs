@@ -1,6 +1,13 @@
 // Test 01 — drives the `zone` runtime variable and checks the state machine
 // actually followed it.
 //
+// NOTHING MOVES ON ITS OWN. The only things that change `zone` are:
+//   * your keys (W/Up, S/Down, R),
+//   * this component's `zone` field — edit it in the Inspector while playing and
+//     the new value is pushed to the FSM,
+//   * your own code calling SetZone().
+// There is no demo, no timer, no automatic stepping.
+//
 // The FSM (Fsm/zonebridge.fsm) never reads the keyboard: it only reacts to its
 // `zone` variable, which this controller writes through
 // AIInstance.SetBoundValue(slot, FsmValue.MakeInt(zone)). That is the point of
@@ -21,9 +28,15 @@
 //   R                reset to 0
 //   C                re-frame the Main Camera on the 0-45 m test column
 //
-// A demo cycle runs on its own until the first key press (disable with
-// demoCycle = false), so the cube visibly moves even if you just want to
-// watch: 0 -> 15 -> 25 -> 0, every couple of seconds.
+// Keyboard reading goes through ZoneInput, which works with either Unity input
+// backend (legacy Input Manager or the Input System package) and reports which
+// one it used at startup — "the keys do nothing" is usually that setting.
+//
+// Every accepted change is logged as
+//   [zone] zone = 15  (from: W pressed)  ->  FSM reads 15, expecting Above10
+// so "the variable did not change" can be answered from the console alone: if
+// that line appears, the variable changed and the machine is at fault; if it
+// never appears, the key press is not reaching the game.
 //
 // While the variable changes, the controller also verifies the OUTCOME a few
 // ticks later: the AI's state must be the expected state, and the objects must
@@ -44,7 +57,7 @@ namespace MyFSM.Tests
     public class ZoneController : MonoBehaviour
     {
         [Header("The AI this controller drives")]
-        [Tooltip("Left empty: found on this GameObject.")]
+        [Tooltip("Left empty: found on this GameObject, then anywhere in the scene.")]
         public ZoneBridgeAI ai;
 
         [Tooltip("OPTIONAL. Leave empty: the marker is read back from the module's own slot 1 " +
@@ -57,18 +70,9 @@ namespace MyFSM.Tests
         public KeyCode decreaseKey = KeyCode.DownArrow;
         public KeyCode decreaseKeyAlt = KeyCode.S;
         public KeyCode resetKey = KeyCode.R;
+        public KeyCode frameCameraKey = KeyCode.C;
         public int minZone = 0;
         public int maxZone = 1000;
-
-        [Header("Demo cycle (proves movement without touching the keyboard)")]
-        [Tooltip("Step `zone` through the three states by itself until you press a key.")]
-        public bool demoCycle = true;
-        [Tooltip("Seconds between demo steps.")]
-        public float demoInterval = 2.5f;
-        [Tooltip("Zone values the demo walks through (0 = home, 15 = +10 m, 25 = +40 m).")]
-        public int[] demoZones = { 15, 25, 0 };
-        [Tooltip("Key that re-frames the Main Camera on the 0-45 m column.")]
-        public KeyCode frameCameraKey = KeyCode.C;
 
         [Header("Hold behaviour (deliberately slower than a tap)")]
         [Tooltip("Seconds a key must be held before it starts repeating.")]
@@ -88,7 +92,15 @@ namespace MyFSM.Tests
         public int recheckEvery = 60;
         public string fileName = "zone_checks.csv";
 
-        /// <summary>The variable the FSM reads. 0..10 home, 11..20 +10 m, 21+ +40 m.</summary>
+        [Header("Boot")]
+        [Tooltip("Seconds to wait for the AI to boot before reporting that it never did.")]
+        public float bootTimeout = 3f;
+
+        /// <summary>
+        /// The variable the FSM reads. 0..10 home, 11..20 +10 m, 21+ +40 m.
+        /// Edit it in the Inspector while playing: the new value is pushed to the
+        /// FSM on the next frame and logged like any other change.
+        /// </summary>
         public int zone;
 
         /// <summary>Verification rows: one per check.</summary>
@@ -101,26 +113,30 @@ namespace MyFSM.Tests
         private int _settle;
         private int _frameAccumulator;
         private int _lastDirection;
-        private bool _unresolvedMarkerWarned;
-        private bool _demoStopped;
-        private int _demoIndex = -1;
-        private float _demoNext;
         private float _untilRepeat;
         private bool _wroteCsv;
+
+        private int _pushedZone = int.MinValue; // what the FSM currently holds
+        private string _pendingReason;          // why `zone` last changed (null = inspector)
+        private bool _bootChecked;
+        private bool _bootErrorLogged;
+        private float _bootWait;
+        private bool _unresolvedMarkerWarned;
 
         // ------------------------------------------------------------------
         // Public API — usable from the inspector or from your own test driver
         // ------------------------------------------------------------------
 
-        public void SetZone(int value)
+        /// <summary>Sets the variable. The FSM sees it on the next frame.</summary>
+        public void SetZone(int value, string reason = null)
         {
             value = Mathf.Max(minZone, Mathf.Min(maxZone, value));
             if (value == zone) return;
             zone = value;
-            PushZone();
+            _pendingReason = string.IsNullOrEmpty(reason) ? "code" : reason;
         }
 
-        public void ResetZone() { SetZone(0); }
+        public void ResetZone() { SetZone(0, "reset key"); }
 
         /// <summary>The state the module must be in for this zone value.</summary>
         public static string ExpectedState(int value)
@@ -137,27 +153,6 @@ namespace MyFSM.Tests
             if (value <= 20) return lift10;
             return lift40;
         }
-
-        // ------------------------------------------------------------------
-
-        private void Awake()
-        {
-            if (ai == null) ai = GetComponent<ZoneBridgeAI>();
-            if (ai == null) ai = FindObjectOfType<ZoneBridgeAI>(); // setup may live elsewhere
-            if (ai == null)
-            {
-                Debug.LogWarning("[zone] no ZoneBridgeAI in the scene — controller disabled: " + name
-                                 + ". Add ZoneTestSetup (which creates the AI + cube) or put this "
-                                 + "component on the same object as a ZoneBridgeAI.", this);
-                enabled = false;
-                return;
-            }
-        }
-
-        // No marker creation here: the BINDING (ZoneBridgeAI.Manual.cs) must bind
-        // something to slot 1 anyway and creates the pin when the scene has none.
-        // This controller only reads that result back (see MarkerObject), so
-        // there is nothing to assign in the inspector.
 
         /// <summary>
         /// The object the module itself holds in slot 1 — the marker it teleports.
@@ -181,32 +176,84 @@ namespace MyFSM.Tests
             }
         }
 
+        // ------------------------------------------------------------------
+
+        private void Awake()
+        {
+            if (ai == null) ai = GetComponent<ZoneBridgeAI>();
+            if (ai == null) ai = FindObjectOfType<ZoneBridgeAI>(); // setup may live elsewhere
+            if (ai == null)
+            {
+                Debug.LogWarning("[zone] no ZoneBridgeAI in the scene — controller disabled: " + name
+                                 + ". Add ZoneTestSetup (which creates the AI + cube) or put this "
+                                 + "component on the same object as a ZoneBridgeAI.", this);
+                enabled = false;
+            }
+        }
+
         private void Start()
         {
-            // Both fields here are optional overrides; the marker is read from
-            // the module's own slot 1 (see MarkerObject). This controller never
-            // touches fields that only exist in the hand-written partial file,
-            // so dropping ZoneBridgeAI.Manual.cs still compiles.
-            _home = ReadHome();
+            Debug.Log("[zone] input backend: " + ZoneInput.Backend + ". Keys: W/Up +1, S/Down -1,"
+                      + " R reset, C camera. Unity only delivers input to a focused window — click"
+                      + " inside the Game view first (and note that WASD with the mouse over the"
+                      + " SCENE view flies the scene camera instead).", this);
+
+            if (!ZoneInput.Available)
+                Debug.LogError("[zone] no readable keyboard input: " + ZoneInput.Backend + ". "
+                               + ZoneInput.Fix, this);
+        }
+
+        private void Update()
+        {
+            if (ai == null) return;
+
+            BootCheck();
+            if (!_bootChecked) return; // the FSM cannot be driven until it has booted
+
+            if (ZoneInput.GetKeyDown(frameCameraKey)) ZoneTestSetup.FrameCamera(_home);
+
+            _pendingReason = null;   // null here = the value was changed outside a key press
+            HandleInput();
+            if (zone != _pushedZone)
+                PushZone(_pendingReason ?? "inspector / code");
+
+            VerifyTick();
+        }
+
+        /// <summary>
+        /// Waits for the AI to boot, then reads `home` from the module and pushes
+        /// the first value. Pushing before boot is pointless (there is no variable
+        /// table yet) and the runtime logs an error for it, so the first push is
+        /// deferred until the FSM is really alive — and if it never boots, that is
+        /// reported instead of leaving a dead scene.
+        /// </summary>
+        private void BootCheck()
+        {
+            if (_bootChecked) return;
+            if (!ai.Booted)
+            {
+                _bootWait += Time.unscaledDeltaTime;
+                if (!_bootErrorLogged && _bootWait > bootTimeout)
+                {
+                    _bootErrorLogged = true;
+                    Debug.LogError("[zone] the AI never booted after " + bootTimeout.ToString("F1")
+                                   + " s" + (string.IsNullOrEmpty(ai.BootError)
+                                             ? " (no boot error reported)"
+                                             : ": " + ai.BootError)
+                                   + " — so `zone` cannot be driven and nothing will move. Look for "
+                                   + "the boot failure above this line.", this);
+                }
+                return;
+            }
+            _bootChecked = true;
             _homeKnown = true;
-            PushZone(); // make the FSM and this controller agree from frame one
-            Debug.Log("[zone] home = " + _home + " — W/Up +1, S/Down -1, R resets, C re-frames"
-                      + " the camera. Expecting " + ExpectedState(zone) + " at zone " + zone
-                      + ". The marker object (slot 1) pins the home position;"
-                      + " nothing needs assigning.", this);
-            if (demoCycle)
-            {
-                _demoNext = Time.time + demoInterval;
-                Debug.Log("[zone] demo cycle ON: zone walks " + DemoPlan() + " every "
-                          + demoInterval.ToString("F1") + " s so you can SEE the cube move. It stops"
-                          + " for good at your first key press. Unity only delivers key input while"
-                          + " the Game view has focus — click inside it first.", this);
-            }
-            else
-            {
-                Debug.Log("[zone] demo cycle off — drive it with the keys (click the Game view first:"
-                          + " Unity ignores input while another window has focus).", this);
-            }
+            _home = ReadHome();
+            _pushedZone = int.MinValue; // force the push below
+
+            Debug.Log("[zone] driving '" + ai.DisplayName + "' (module " + ai.ModuleName + ", state "
+                      + ai.CurrentStateName + ", home " + _home + "). zone " + zone + " -> "
+                      + ExpectedState(zone) + ".", this);
+            PushZone("start");
         }
 
         private Vector3 ReadHome()
@@ -219,60 +266,39 @@ namespace MyFSM.Tests
             return ai != null ? ai.transform.position : transform.position;
         }
 
-        private void PushZone()
+        /// <summary>
+        /// Writes `zone` into the FSM's runtime variable and reads it straight back:
+        /// a value that changed in this component but not in the FSM is the whole
+        /// question when someone reports "the variable isn't changing", and one
+        /// read-back answers it.
+        /// </summary>
+        private void PushZone(string reason)
         {
-            if (ai != null)
-                ai.SetBoundValue(ZoneBridgeAI.Slot_zone, FsmValue.MakeInt(zone));
-            _settle = settleFrames; // verify once the transitions have had a few ticks
-            Debug.Log("[zone] zone = " + zone + " -> expecting "
-                      + ExpectedState(zone) + " (" + ExpectedLift(zone) + " m up)", this);
-        }
+            if (ai == null || !ai.Booted) return;
 
-        private void Update()
-        {
-            if (ai == null) return;
-            HandleInput();
-
-            if (_settle > 0)
+            if (!ai.SetBoundValue(ZoneBridgeAI.Slot_zone, FsmValue.MakeInt(zone)))
             {
-                _settle--;
-                if (_settle == 0) Verify("after change");
+                Debug.LogError("[zone] SetBoundValue(Slot_zone = " + ZoneBridgeAI.Slot_zone
+                               + ", " + zone + ") failed — the FSM was NOT updated. The error"
+                               + " above from the runtime says why (slot type, missing binding,"
+                               + " or the AI was not booted).", this);
+                return;
             }
-            else if (recheckEvery > 0)
-            {
-                _frameAccumulator++;
-                if (_frameAccumulator >= recheckEvery)
-                {
-                    _frameAccumulator = 0;
-                    Verify("recheck");
-                }
-            }
-        }
 
-        private int Direction()
-        {
-            bool up = Input.GetKey(increaseKey) || Input.GetKey(increaseKeyAlt);
-            bool down = Input.GetKey(decreaseKey) || Input.GetKey(decreaseKeyAlt);
-            if (up && !down) return 1;
-            if (down && !up) return -1;
-            return 0;
+            _pushedZone = zone;
+            _settle = settleFrames; // verify the outcome once the transitions have had a few ticks
+
+            FsmValue readback;
+            bool readOk = ai.TryGetVariable("zone", out readback);
+            Debug.Log("[zone] zone = " + zone + "  (from: " + reason + ")  ->  FSM reads "
+                      + (readOk ? readback.ToString() : "<unreadable>")
+                      + ", expecting " + ExpectedState(zone) + " (" + ExpectedLift(zone) + " m up)",
+                      this);
         }
 
         private void HandleInput()
         {
-            if (Input.GetKeyDown(frameCameraKey)) ZoneTestSetup.FrameCamera(_home);
-
-            bool anyKey = Input.GetKeyDown(increaseKey) || Input.GetKeyDown(increaseKeyAlt)
-                       || Input.GetKeyDown(decreaseKey) || Input.GetKeyDown(decreaseKeyAlt)
-                       || Input.GetKeyDown(resetKey);
-            if (anyKey && demoCycle && !_demoStopped)
-            {
-                _demoStopped = true;
-                Debug.Log("[zone] key pressed — demo cycle stopped, you are driving.", this);
-            }
-            if (demoCycle && !_demoStopped) RunDemo();
-
-            if (Input.GetKeyDown(resetKey)) { ResetZone(); return; }
+            if (ZoneInput.GetKeyDown(resetKey)) { ResetZone(); return; }
 
             int direction = Direction();
             if (direction == 0)
@@ -297,35 +323,40 @@ namespace MyFSM.Tests
             Step(direction);
         }
 
+        private int Direction()
+        {
+            bool up = ZoneInput.GetKey(increaseKey) || ZoneInput.GetKey(increaseKeyAlt);
+            bool down = ZoneInput.GetKey(decreaseKey) || ZoneInput.GetKey(decreaseKeyAlt);
+            if (up && !down) return 1;
+            if (down && !up) return -1;
+            return 0;
+        }
+
         private void Step(int direction)
         {
-            SetZone(zone + direction);
-        }
-
-        /// <summary>
-        /// Walks the zone through the three bands by itself. It only stops for
-        /// good when a key is pressed, which is also what tells the tester the
-        /// difference between "the machine is broken" and "nobody pressed W".
-        /// </summary>
-        private void RunDemo()
-        {
-            if (demoZones == null || demoZones.Length == 0) { demoCycle = false; return; }
-            if (Time.time < _demoNext) return;
-            _demoNext = Time.time + demoInterval;
-            _demoIndex = (_demoIndex + 1) % demoZones.Length;
-            SetZone(demoZones[_demoIndex]);
-        }
-
-        private string DemoPlan()
-        {
-            StringBuilder sb = new StringBuilder("0");
-            for (int i = 0; i < demoZones.Length; i++) sb.Append(" -> ").Append(demoZones[i]);
-            return sb.ToString();
+            SetZone(zone + direction, direction > 0 ? "increase key (+1)" : "decrease key (-1)");
         }
 
         // ------------------------------------------------------------------
         // Verification
         // ------------------------------------------------------------------
+
+        private void VerifyTick()
+        {
+            if (_settle > 0)
+            {
+                _settle--;
+                if (_settle == 0) Verify("after change");
+                return;
+            }
+            if (recheckEvery <= 0) return;
+            _frameAccumulator++;
+            if (_frameAccumulator >= recheckEvery)
+            {
+                _frameAccumulator = 0;
+                Verify("recheck");
+            }
+        }
 
         private void Verify(string when)
         {
@@ -346,7 +377,7 @@ namespace MyFSM.Tests
                 markerError = Vector3.Distance(pin.position, _home);
                 markerOk = markerError <= positionTolerance;
             }
-            else if (pin == null && _unresolvedMarkerWarned == false)
+            else if (pin == null && !_unresolvedMarkerWarned)
             {
                 _unresolvedMarkerWarned = true;
                 Debug.LogWarning("[zone] slot 1 (marker) is not bound yet — cannot verify the "
@@ -380,6 +411,8 @@ namespace MyFSM.Tests
                                  + " (" + when + ")", this);
             }
         }
+
+        // ------------------------------------------------------------------
 
         public string CsvPath
         {
