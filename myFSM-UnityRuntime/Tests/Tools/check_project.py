@@ -188,6 +188,12 @@ def main(argv):
               "\n     REFERENCE these types, not in the missing ones." % (len(missing), len(stale)))
         return 1
     print("\n---- every test and runtime file the tests need is present and up to date")
+    print("     (presence and staleness only: comparing contents catches a file copied from")
+    print("      an older commit, but nothing here can see a mistake the checkout itself")
+    print("      contains. For that - a name used but declared nowhere, which Unity reports")
+    print("      as CS0103 - run the repo-side check against this install:")
+    print("          python3 <myFSM-UnityRuntime>/Sandbox/check.py --baseline <project>/Assets/MyFSM")
+    print("      it needs tree-sitter: python3 -m pip install tree_sitter tree_sitter_c_sharp)")
     return 0
 
 
