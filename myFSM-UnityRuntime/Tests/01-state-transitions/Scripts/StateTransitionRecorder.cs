@@ -1,4 +1,9 @@
-// myFSM test support — records the state changes the runtime reports for one AI.
+// Test 01 — records the state changes the runtime reports for one AI.
+//
+// It lives in this test's Scripts/ folder on purpose: every test folder is
+// self-contained, so copying 01-state-transitions/ into a project brings
+// everything it compiles against (a shared folder is one more thing to forget,
+// and the first symptom is a CS0246 in ZoneTestSetup.cs).
 //
 // Every AI publishes each state change through MainServer (DB timetable + the
 // ordered/priority broadcast servers), which is why this recorder does not

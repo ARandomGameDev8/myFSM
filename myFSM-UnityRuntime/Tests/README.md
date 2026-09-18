@@ -42,6 +42,19 @@ inspector). So the whole procedure is:
    CSVs appear under `Application.persistentDataPath` (Unity logs the full path
    whenever it writes one).
 
+If you copied the folders by hand instead of running the installer, verify the
+copy first — a single missing script shows up as a `CS0246` in whatever file
+uses it, which is a confusing way to learn a file is missing:
+
+```bash
+python3 Tests/Tools/check_project.py "/path/to/YourUnityProject"
+# -> every test and runtime file the tests need is present and up to date
+```
+
+It compares by file NAME (renamed folders are fine) and reports what is missing,
+what is stale (an older copy of a file that has since been fixed), and which
+public types a missing file declares — i.e. the names Unity will fail to find.
+
 Nothing else is required — no prefabs, no inspector references, no `.fsmb`
 assets to assign (each generated class carries its module bytes), no
 `com.unity.*` packages (`NavMeshAgent`/`NavMeshBuilder` are built-in modules),
@@ -66,20 +79,23 @@ nothing here fails a build. The property-style checks live in
 `Tests/` (along with Runtime/Sandbox/Samples) plus the catalog/dispatch
 invariants, so a malformed test script is caught without opening Unity.
 
+Every folder is SELF-CONTAINED — a test never compiles against another test's
+scripts, so you can copy one case into a project on its own.
+
 ```
 Tests/
   README.md                          this file
-  Shared/
-    StateTransitionRecorder.cs       logs every state change + watched variables
-  Tools/
+  Tools/                             dev helpers (not needed to run a test)
     gen_class.py                     emits the generated class (mirrors ClassGenerator)
     verify_classes.py                module/class consistency check for all four cases
+    check_project.py                 verifies a Unity project holds the files it needs
   01-state-transitions/
     Fsm/zonebridge.fsm               source
     Fsm/zonebridge.fsmb              compiled module (950 bytes)
     Fsm/zonebridge.fsmd              disassembly (states, slots, types)
     Scripts/ZoneBridgeAI.cs          GENERATED  - module blob + State_/Slot_ constants
     Scripts/ZoneBridgeAI.Manual.cs   MANUAL     - OnBindingsManual() bindings
+    Scripts/StateTransitionRecorder.cs  logs every state change + watched variables
     Scripts/ZoneController.cs        drives `zone`, verifies the outcome
     Scripts/ZoneTestSetup.cs         one component that finishes the scene
   02-spawn-stress/                   chaser.fsm (232 bytes) + ChaserAI(.Manual) + ...
@@ -288,6 +304,19 @@ Four facts, all measured, decide the verdict:
 **PASS** needs all four plus the final state `Caught`. Files: `pursuit.csv`
 (verdict row) and `pursuit_samples.csv` (per-sample separation, both positions,
 the live route length and the chaser's state — the curve that shows the chase).
+
+## Troubleshooting compile errors
+
+| error | meaning | fix |
+| --- | --- | --- |
+| `CS0246: The type or namespace name 'StateTransitionRecorder' could not be found` in `ZoneTestSetup.cs` | the recorder script is not in the project — test 01 needs it | copy `Tests/01-state-transitions/Scripts/StateTransitionRecorder.cs` somewhere under `Assets/` (any folder; Unity compiles every script under `Assets/`) |
+| `CS0103: The name 'FsmValue' does not exist in the current context` in a `*.Manual.cs` | that file writes value slots, and `FsmValue` lives in `MyFSM.Core` — a `using` applies to ONE file, so `using MyFSM.Unity;` does not bring it in | add `using MyFSM.Core;` (fixed in the shipped files; if you copied them earlier, re-copy or add the line) |
+| `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
+
+`Tests/Tools/check_project.py` finds all three situations before Unity does, and
+`Sandbox/check.py` (repo-side) now also fails on the second one: it verifies that
+every file naming a `MyFSM.Core`/`MyFSM.Unity`/`MyFSM.Compiler` type imports that
+namespace, so the `CS0103` above cannot ship again.
 
 ## Reading the output
 

@@ -16,7 +16,10 @@
 // to you. The value slots (Vector3 `home`, int `zone`) are also set here so the
 // module starts with the numbers the test expects.
 
+// MyFSM.Core is where FsmValue lives: the SetBoundValue() calls below name it,
+// and a using is per file - importing MyFSM.Unity does not bring MyFSM.Core in.
 using UnityEngine;
+using MyFSM.Core;
 using MyFSM.Unity;
 
 public sealed partial class ZoneBridgeAI

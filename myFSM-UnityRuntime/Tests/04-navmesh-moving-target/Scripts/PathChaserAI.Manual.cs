@@ -9,7 +9,10 @@
 // walker is a scene object it can also be dragged onto the `target` field; the
 // FindObjectOfType fallback keeps a scene that was set up in a hurry working.
 
+// MyFSM.Core is where FsmValue lives: the SetBoundValue() calls below name it,
+// and a using is per file - importing MyFSM.Unity does not bring MyFSM.Core in.
 using UnityEngine;
+using MyFSM.Core;
 using MyFSM.Unity;
 using MyFSM.Tests;
 

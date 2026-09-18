@@ -166,6 +166,11 @@ Ranked, best first:
    burst compiler. This is the home for ambiguous-type slots and value
    overrides:
    ```csharp
+   using UnityEngine;
+   using MyFSM.Core;   // FsmValue lives here - a using is per FILE, so
+                       // `using MyFSM.Unity;` alone does not bring it in
+   using MyFSM.Unity;
+
    public sealed partial class PatrolAI
    {
        partial void OnBindingsManual()
@@ -176,6 +181,11 @@ Ranked, best first:
        }
    }
    ```
+   Only the `Bind(...)` calls need no extra using: reading a value slot
+   (`TryGetVariable(name, out FsmValue value)`) and writing one
+   (`SetBoundValue(slot, FsmValue.Make…)`) both name `FsmValue`, so a manual
+   file that touches ANY value slot needs `using MyFSM.Core;` — that is the
+   `CS0103: The name 'FsmValue' does not exist in the current context` error.
 3. **Inline in the generated file** — works (same calls inside the generated
    override), but the burst compiler rewrites the file on every compile, so
    treat it as scratch only.

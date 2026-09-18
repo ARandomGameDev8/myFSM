@@ -10,7 +10,10 @@
 // scene — the same trick as test 02, and the reason a runtime-created object
 // cannot simply be dragged into the inspector.
 
+// MyFSM.Core is where FsmValue lives: the SetBoundValue() calls below name it,
+// and a using is per file - importing MyFSM.Unity does not bring MyFSM.Core in.
 using UnityEngine;
+using MyFSM.Core;
 using MyFSM.Unity;
 using MyFSM.Tests; // MazeGeneratorController (the maze the runner is dropped into)
 
