@@ -12,9 +12,15 @@
    exist in the current context`) - the second one shipped. Types declared
    inside another type (a nested enum, a record struct for CSV rows) are not
    importable and are ignored, as are global-namespace types.
-3. FunctionCatalog holds exactly 179 unique overload rows.
-4. Every catalog ID has exactly one `case` in the Run dispatchers and vice versa.
-5. Every catalog ID falls inside exactly one category dispatch range.
+3. Undefined names: a name used as a type or as a static receiver (`Foo.Bar()`)
+   has to be declared somewhere in the shipped sources, or listed in
+   known_external_names.txt as an engine/framework name. This is the check that
+   catches the "renamed a class, forgot a caller" / "the helper file never made
+   it into the project" family - Unity reports those as CS0103, and they have
+   shipped twice (InputCompat, FsmValue).
+4. FunctionCatalog holds exactly 179 unique overload rows.
+5. Every catalog ID has exactly one `case` in the Run dispatchers and vice versa.
+6. Every catalog ID falls inside exactly one category dispatch range.
 """
 import os
 import re
@@ -50,8 +56,15 @@ RANGES = [
 
 
 def make_parser():
-    import tree_sitter as ts
-    import tree_sitter_c_sharp as tscs
+    try:
+        import tree_sitter as ts
+        import tree_sitter_c_sharp as tscs
+    except ImportError as exc:
+        print("cannot run the checks: %s" % exc)
+        print("this needs the tree-sitter C# grammar:")
+        print("    python3 -m pip install tree_sitter tree_sitter_c_sharp")
+        print("or use an interpreter that has it: <python> Sandbox/check.py --baseline <dir>")
+        raise SystemExit(2)
     try:  # tree-sitter >= 0.25 API
         return ts.Parser(ts.Language(tscs.language()))
     except Exception:  # older API
@@ -211,6 +224,67 @@ def missing_namespace_usings(rel, code, imports, namespaces, namespaces_table):
     return problems
 
 
+BASELINE_NAME = "known_external_names.txt"
+
+
+def collect_declared_and_used(tree, src):
+    """(declared names, uppercase names used as types or static receivers).
+
+    Declaration positions cover types (top level and nested), methods,
+    properties, events, enum members, fields/locals (variable_declarator),
+    using-aliases and generic type parameters - so anything declared in this
+    repository resolves. Usage positions cover `Name.Member`, `new Name(...)`
+    and base types: exactly the places where a missing declaration becomes
+    CS0103 in Unity.
+    """
+    declared, used = set(), set()
+
+    def text(node):
+        return src[node.start_byte:node.end_byte].decode("utf-8", "replace")
+
+    def visit(node):
+        kind = node.type
+        if kind in NON_CODE_NODES:
+            return
+        if kind in TYPE_NODES or kind in (
+                "method_declaration", "property_declaration", "event_declaration",
+                "enum_member_declaration", "variable_declarator",
+                "using_alias_directive", "type_parameter"):
+            field = node.child_by_field_name("name")
+            if field is not None:
+                declared.add(text(field).split("<")[0].strip())
+        if kind == "member_access_expression":
+            first = node.children[0]
+            if first.type == "identifier":
+                used.add(text(first))
+        elif kind == "object_creation_expression":
+            type_node = node.child_by_field_name("type")
+            if type_node is not None and type_node.type in ("identifier", "generic_name"):
+                used.add(text(type_node).split("<")[0].strip())
+        elif kind == "base_list":
+            for child in node.children:
+                if child.type in ("identifier", "generic_name"):
+                    used.add(text(child).split("<")[0].strip())
+        for child in node.children:
+            visit(child)
+
+    visit(tree.root_node)
+    return declared, {u for u in used if u[:1].isupper()}
+
+
+def load_baseline(path):
+    """Engine/framework names the repository is allowed to use without declaring."""
+    names = set()
+    if not os.path.exists(path):
+        return names
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.add(line)
+    return names
+
+
 def collect_cs_files():
     files = []
     for base in (RUNTIME, EDITOR, SANDBOX, SAMPLES, TESTS):
@@ -221,7 +295,146 @@ def collect_cs_files():
     return sorted(files)
 
 
+def collect_cs_files(*roots):
+    """Every .cs file under the given roots (default: the shipped folders)."""
+    bases = roots if roots else (RUNTIME, EDITOR, SANDBOX, SAMPLES, TESTS)
+    files = []
+    for base in bases:
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _, names in os.walk(base):
+            for name in names:
+                if name.endswith(".cs"):
+                    files.append(os.path.join(dirpath, name))
+    return sorted(files)
+
+
+def load_external_names():
+    return load_baseline(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      BASELINE_NAME))
+
+
+def external_baseline_size():
+    return len(load_external_names())
+
+
+def scan_undefined_names(parser, files, baseline=frozenset(), declared_extra=frozenset()):
+    """(declared, used, undefined) over `files`.
+
+    `declared_extra` holds names that are known-good because they are declared
+    outside the scanned set (the repository, when scanning an installed copy);
+    `baseline` holds engine/framework names.
+    """
+    declared_all, used_all = set(), set()
+    for path in files:
+        _, _, tree, src = parse_file(parser, path)
+        declared, used = collect_declared_and_used(tree, src)
+        declared_all |= declared
+        used_all |= used
+    known = declared_all | set(baseline) | set(declared_extra)
+    undefined = sorted(used_all - known)
+    return declared_all, used_all, undefined
+
+
+def undefined_message(name, where="Runtime/, Editor/, Tests/, Samples/ or Sandbox/",
+                      known_extra=None):
+    return ("UNDEFINED NAME %s - used as a type/static receiver but declared nowhere in %s. "
+            "Unity reports this as CS0103. Fix the reference, ship the file that declares it, "
+            "or add the name to Sandbox/%s if it really is an engine type.%s"
+            % (name, where, BASELINE_NAME, known_extra or ""))
+
+
+def run_project_check(target, parser):
+    """`--baseline <dir>`: check an installed copy against this repository.
+
+    Answers "is my copy stale / missing a file" without Unity: every name the
+    copy uses that the repository does not declare either is printed with the
+    CS0103 note. This is the check that would have caught a project holding
+    SpawnStressTest.cs from one commit and StressInput.cs from another.
+    """
+    if not os.path.isdir(target):
+        print("usage error: no such directory: %s" % target)
+        print("pass the folder that holds the installed runtime, for example")
+        print("    <unity-project>/Assets/MyFSM")
+        return 2
+    files = collect_cs_files(target)
+    if not files:
+        print("usage error: no .cs files under %s" % target)
+        print("pass the folder that holds the installed runtime, for example")
+        print("    <unity-project>/Assets/MyFSM")
+        return 2
+    # A wrong directory must not pass quietly: the point is to prove that THIS
+    # copy is the one Unity compiles.
+    declares_myfsm = False
+    for path in files:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                if re.search(r"namespace\s+MyFSM\.", handle.read()):
+                    declares_myfsm = True
+                    break
+        except OSError:
+            continue
+    if not declares_myfsm:
+        print("usage error: %s holds no file declaring a MyFSM.* namespace" % target)
+        print("pass the folder that holds the installed runtime, for example")
+        print("    <unity-project>/Assets/MyFSM")
+        return 2
+    if not os.path.isdir(os.path.join(target, "Runtime")):
+        print("warning: %s has no Runtime/ folder of its own - checking it anyway"
+              % target)
+
+    print("checking %s against %s" % (target, ROOT))
+    print("")
+
+    fails = 0
+    for path in files:
+        errs, _, tree, _ = parse_file(parser, path)
+        if errs:
+            fails += 1
+            print("SYNTAX FAIL %s" % path)
+            for e in errs[:5]:
+                print("    " + e)
+
+    # declared names of the repository: the reference for "should exist"
+    repo_files = collect_cs_files()
+    repo_declared, _, _ = scan_undefined_names(parser, repo_files)
+    declared, used, undefined = scan_undefined_names(
+        parser, files, baseline=load_external_names(), declared_extra=repo_declared)
+
+    if undefined:
+        fails += len(undefined)
+        for name in undefined:
+            print(undefined_message(name, where="this copy or in %s" % ROOT))
+    else:
+        print("names ok: nothing in this copy names a type that neither the copy nor the "
+              "repository declares (%d declared here, %d known in the repository, %d external)"
+              % (len(declared), len(repo_declared), external_baseline_size()))
+
+    print("")
+    print("RESULT: %s" % ("OK" if fails == 0 else "FAIL (%d)" % fails))
+    return 1 if fails else 0
+
+
 def main():
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("-h", "--help"):
+        print("usage: check.py [--baseline <directory>]")
+        print("")
+        print("  no arguments          check this repository")
+        print("  --baseline <dir>      check an installed copy of the runtime (for example")
+        print("                        <unity-project>/Assets/MyFSM) against this repository: any")
+        print("                        name the copy uses that the repository does not declare is")
+        print("                        reported, because Unity reports those as CS0103")
+        return 0
+    if argv and argv[0] == "--baseline":
+        if len(argv) < 2:
+            print("usage error: --baseline needs a directory, for example "
+                  "<unity-project>/Assets/MyFSM")
+            return 2
+        return run_project_check(argv[1], make_parser())
+    if argv:
+        print("usage error: unknown argument %s (try --help)" % argv[0])
+        return 2
     fails = 0
 
     # Every MyFSM.* namespace we ship (runtime, tests, samples, editor), with the
@@ -270,7 +483,19 @@ def main():
         print("usings ok: every file that names a shipped MyFSM.* type imports its "
               "namespace (%d checked)" % len(NAMESPACES))
 
-    # 3. catalog rows
+    # 3. undefined names (the CS0103 family: renamed class, missing helper file)
+    declared_all, used_all, undefined = scan_undefined_names(
+        parser, collect_cs_files(), baseline=load_external_names())
+    if undefined:
+        fails += len(undefined)
+        for name in undefined:
+            print(undefined_message(name))
+    else:
+        print("names ok: every type/static receiver used here is declared here or listed as "
+              "external (%d declared, %d external)"
+              % (len(declared_all), external_baseline_size()))
+
+    # 4. catalog rows
     with open(os.path.join(RUNTIME, "Core/FunctionCatalog.cs")) as f:
         cat = f.read()
     ids = [int(x, 16) for x in re.findall(r"O\(0x([0-9A-Fa-f]+),", cat)]
@@ -281,7 +506,7 @@ def main():
     else:
         print("catalog ok: 179 unique overload rows")
 
-    # 4. dispatcher cases both directions
+    # 5. dispatcher cases both directions
     cases = []
     for name in os.listdir(os.path.join(RUNTIME, "Unity/Functions")):
         if not name.endswith(".cs"):

@@ -1,0 +1,62 @@
+# Names this repository may use without declaring them.
+#
+# Sandbox/check.py fails when a name is used as a type or as a static receiver
+# (`Foo.Bar()`, `new Foo(...)`, `: Foo`) and is declared nowhere under Runtime/,
+# Editor/, Tests/, Samples/ or Sandbox/ - Unity reports that as CS0103, and both
+# times it happened here it shipped (a helper renamed without its caller, and a
+# helper file that never reached the project).
+#
+# Everything listed below is an engine or framework type that lives outside this
+# repository (UnityEngine, UnityEditor, System). Add a line when you start using
+# another one, and delete lines for names nothing uses any more.
+#
+# one name per line, `#` starts a comment.
+AppDomain
+Array
+AssetDatabase
+Attribute
+BitConverter
+CallingConvention
+Console
+Convert
+Dictionary
+Directory
+EditorApplication
+EditorGUILayout
+EditorSceneManager
+EditorStyles
+EditorUtility
+Encoding
+Exception
+File
+GUILayout
+HashSet
+Input
+IntPtr
+KeyCode
+Keyboard
+List
+Marshal
+Material
+Math
+MessageType
+NavMeshBuilder
+NavMeshCollectGeometry
+Path
+PrimitiveType
+Queue
+RigidbodyConstraints
+RigidbodyInterpolation
+SceneView
+SearchOption
+Selection
+SessionState
+Shader
+Stopwatch
+StringBuilder
+StringComparer
+StringComparison
+StringSplitOptions
+System
+Undo
+UnityEngine

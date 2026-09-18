@@ -403,13 +403,41 @@ the live route length and the chaser's state — the curve that shows the chase)
 | test 01: `[zone] SetBoundValue(…) failed` or `[myFSM] SetBoundValue before execution exists` | the FSM could not be written at that moment | fixed: the first push now waits for the AI to boot. If it still appears, the AI never booted — the controller then reports `the AI never booted after N s: <BootError>` |
 | test 01: `zone` changes in the Inspector but the FSM does not follow | the field was edited before the AI booted | the controller pushes any changed `zone` on the next frame and logs it; if nothing is logged at all, look for the boot error row above |
 
-`Tests/Tools/check_project.py` finds the first three situations before Unity does,
-and `Sandbox/check.py` (repo-side) now fails on the `CS0103` class: it reads the
-top-level types of every shipped `MyFSM.*` namespace from the files themselves and
-fails any file that names one without importing its namespace (nested types and
-global-namespace types are ignored — the generated AI classes live in the global
-namespace and are importable by anyone). Proved by reintroducing the bug:
-`USING FAIL … names TmpProbe but never imports MyFSM.Tests.Stress; … -> RESULT: FAIL`.
+`Tests/Tools/check_project.py` finds the first three situations before Unity does.
+`Sandbox/check.py` (repo-side, needs tree-sitter) fails on two `CS0103` shapes:
+
+- **a name is used but its namespace is never imported** — it reads the top-level
+  types of every shipped `MyFSM.*` namespace from the files themselves and fails
+  any file that names one without importing its namespace (nested types and
+  global-namespace types are ignored — the generated AI classes live in the global
+  namespace and are importable by anyone). Proved by reintroducing the bug:
+  `USING FAIL … names TmpProbe but never imports MyFSM.Tests.Stress; … -> RESULT: FAIL`.
+- **a name is used as a type or static receiver and is declared nowhere** — the
+  shape Unity reported for `InputCompat` and earlier for `FsmValue`. Everything the
+  repository uses that lives outside it (UnityEngine, UnityEditor, `System`) is
+  listed in `Sandbox/known_external_names.txt`; the check fails any other
+  `Foo.Bar()`, `new Foo(…)` or `: Foo` whose `Foo` no folder declares. Proved the
+  same way: a file calling `InputCompat.GetKeyDown(...)` → `UNDEFINED NAME
+  InputCompat … -> RESULT: FAIL`, `RESULT: OK` once removed.
+
+Before the `InputCompat` round the second shape did not exist, which is exactly how
+a renamed helper shipped with a caller still using the old name.
+
+### Checking a project you already copied
+
+The second check also runs against a *project*, which is how to tell "my copy is
+from the broken commit" from "the FSM itself is misbehaving":
+
+```
+python3 Sandbox/check.py --baseline <unity-project>/Assets/MyFSM
+```
+
+It parses the project's `Assets/MyFSM` instead of the repository and treats the
+repository's own files as the baseline, so each name the project uses that the
+current repository does not declare is printed with `CS0103` next to it. On a
+current copy: `names ok … RESULT: OK`. On a copy that still holds the old helper
+name, the name is listed. Naming the wrong directory (say the project root) is
+reported as a usage error rather than passing quietly.
 
 ## Reading the output
 
