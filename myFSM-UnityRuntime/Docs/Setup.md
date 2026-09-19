@@ -83,7 +83,9 @@ recompile).
   with its own variables, handles and goals. Each ticks itself in its own
   `Update()` (Unity component order); the main server only keeps the
   registry. If you override `Update()` in a subclass, call `base.Update()`
-  or that AI silently stops ticking.
+  or that AI silently stops ticking. Goals on a `Rigidbody`(2D) step in the
+  AI's `FixedUpdate()` instead — override that one with `base.FixedUpdate()`
+  too, or rigidbody agents stop moving.
 - The main server object (`"MyFSM MainServer"`) is created automatically,
   survives scene loads (`DontDestroyOnLoad`), and self-destructs duplicates,
   so exactly one exists at runtime.

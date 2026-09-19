@@ -86,6 +86,12 @@ DB timetable row + publish to both broadcast servers → tick-sample. Returns
 the change (null when none). Overriding `Update()` without
 `base.Update()` silently stops the AI — prefer `Paused` / `enabled=false`.
 
+**Per physics step.** `FixedUpdate()` (virtual) → `FixedTickInternal()`: skip
+unbooted or `Paused`; else `Movement.FixedAdvance(Time.fixedDeltaTime)`, which
+takes the step of every goal whose agent is a `Rigidbody`(2D) — one
+`MovePosition` per physics step (see below). The FSM never runs here.
+Overriding `FixedUpdate()` without `base.FixedUpdate()` stops rigidbody agents.
+
 **Movement is component-aware.** Tier-3 goals never move a bare transform:
 each tick the movement system looks at what the agent's GameObject (or its
 nearest parent) actually has on it and calls the Unity function meant for that
@@ -96,8 +102,8 @@ everything:
 |---|---|---|
 | `NavMeshAgent` (enabled, on the mesh) | `SetDestination` | yes — via the NavMesh |
 | `CharacterController` | `Move(motion)` | **yes** — its own capsule sweep handles slopes, steps and walls |
-| `Rigidbody` / `Rigidbody2D`, **dynamic** | `MovePosition` — the step becomes that physics step's velocity | **yes** — the solver resolves every contact, so walls, piles and other bodies all matter |
-| `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"*; use a dynamic body when walls must stop it |
+| `Rigidbody` / `Rigidbody2D`, **dynamic** | `MovePosition`, once per physics step from `FixedUpdate` | **yes** — the solver resolves every contact, so walls, piles and other bodies all matter |
+| `Rigidbody` / `Rigidbody2D`, **kinematic** | `MovePosition`, once per physics step from `FixedUpdate` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"*; use a dynamic body when walls must stop it |
 | `Collider` / `Collider2D`, no body | *(none exists)* | **no** — a collider on its own is static geometry; the runtime warns once and says what to add |
 | nothing at all | *(none)* | no — the step is written to the transform |
 
@@ -105,28 +111,47 @@ everything:
 `Rigidbody`(2D) with gravity off (`useGravity = false` / `gravityScale = 0`) and
 rotation frozen, or a `CharacterController`. Those are the component sets Unity
 provides a collision-resolving move for. The dynamic body is the closest to "it
-just works": the runtime takes one step of `position += direction x speed x time`
-per tick and calls `MovePosition`, and Unity resolves the contacts.
+just works": the runtime moves it exactly as the hand-written follower below
+does, and Unity resolves the contacts.
 
-**Every goal-driven move is the same formula:** `position += direction x speed x
-time`, one step per tick, handed to the Unity call for the component the agent
-carries. Nothing writes `velocity` and nothing resolves a contact in the
-runtime; Unity moves the body. `MovePosition` is a move rather than a teleport
-(Unity: use `Rigidbody.position` to teleport), so interpolation stays smooth and
-a dynamic body's contacts are resolved by the physics step. Rigidbodies move in
-physics steps while an AI ticks once per frame, so the steps of the frames inside
-one physics step are summed and requested as a single move: the body travels at
-exactly the requested speed whatever the frame rate is doing.
+**On a Rigidbody the goal is this script, verbatim**, run from the AI's own
+`FixedUpdate`:
 
-**Gravity keeps the vertical axis.** A dynamic body with gravity on (a 2D one
-with gravity, or a CharacterController — whose gravity this runtime adds) has its
-step taken in the ground plane, so Unity keeps the fall: a cube dropped from the
-air falls, lands and runs, and is never lifted or held at the goal's height. A
-body with gravity **off**, or a kinematic body, has nothing else driving the
-vertical axis, so the goal drives all three axes and the agent flies to the
-target. A goal posted towards an **object** re-reads that object's position every
-tick, so the agent tracks a target that moves and settles on one that stands
-still.
+```csharp
+void FixedUpdate()
+{
+    var dir = (target.position - rb.position).normalized;
+    rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+}
+```
+
+`speed` is the goal's speed (the call's argument for `moveTowards`; the agent's
+base speed — `NavMeshAgent.speed` or 3.5 — for `goTo` / `follow`, times the
+multiplier for `sprintTowards`), `target.position` is the goal's destination
+(re-read every physics step for an object target, a fixed point for a Vector3),
+and both are measured from the body's own `rb.position`. Nothing is layered on
+top: no velocity is written, the step is not clamped to the remaining distance,
+not flattened onto the ground plane and not stopped short by a stop distance,
+and the goal is **not dropped on arrival** — the follower has no notion of
+"arrived" either. A body standing on its destination gets a zero direction
+(Unity's `normalized` of a zero vector) and so a zero-length move, until the next
+call replaces the goal or `stopMovement` drops it. `MovePosition` is a move
+rather than a teleport (Unity: use `Rigidbody.position` to teleport), so
+interpolation stays smooth and a dynamic body's contacts are resolved by the
+physics step. Because the step runs once per physics step with
+`Time.fixedDeltaTime`, the body travels at exactly the requested speed whatever
+the frame rate is doing. A path goal (`findShortestPathAndMove`) still advances
+from corner to corner and ends past the last one; each corner is walked with the
+same step.
+
+**Everything else steps per frame** in `Update`, one step of `position +=
+direction x speed x time`, clamped so it never overshoots, and the goal ends
+within the agent's stop distance. A CharacterController's step is taken in the
+ground plane and its gravity is added by the runtime, so a walker falls, lands
+and runs instead of hovering at the goal's height; a transform-driven object has
+nothing else moving it, so the goal drives all three axes. A goal posted towards
+an **object** re-reads that object's position every step, so the agent tracks a
+target that moves.
 
 `setPosition` / `setRotation` / `setScale` are **not** affected by any of this —
 they write the transform directly and teleport, exactly like `transform.position`
@@ -141,7 +166,7 @@ either way.
 changes — one line goes to the log:
 
 ```
-movement: Marcher -> Rigidbody.MovePosition (physics resolves collisions)
+movement: Marcher -> Rigidbody.MovePosition in FixedUpdate (physics resolves collisions)
 movement: Marcher -> transform (collider without a body: nothing can stop it)
 ```
 

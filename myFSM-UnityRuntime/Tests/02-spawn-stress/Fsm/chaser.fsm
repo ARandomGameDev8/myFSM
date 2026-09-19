@@ -9,13 +9,14 @@
 // Speed is explicit (the runtime uses it directly), which is what makes the
 // stress numbers comparable between runs.
 //
-// The spawned cube carries a dynamic Rigidbody, so each tick the runtime takes
-// one step of `position += direction * speed * time` and hands it to
-// Rigidbody.MovePosition: Unity moves the cube and resolves the contacts.
-//
-// The cube has gravity, so the runtime aims that step along the ground plane and
-// lets Unity keep the vertical axis: the cube falls, lands and runs, and it is
-// never lifted or held at the player's height.
+// The spawned cube carries a dynamic Rigidbody, so the runtime moves it exactly
+// like the plain follower script, once per physics step from FixedUpdate:
+//   rb.MovePosition(rb.position + (dest - rb.position).normalized * chaseSpeed
+//                   * Time.fixedDeltaTime)
+// Nothing else is written to the cube — no velocity, no clamping, no stop
+// distance — Unity moves it and resolves the contacts. The direction is the
+// full 3D direction to the destination; gravity keeps pulling the cube down in
+// the same physics step.
 
 // Faster than the player (PlayerController.speed = 8): a crowd that is slower than
 // what it chases never catches up, and the ones at the back stay jammed where they

@@ -56,31 +56,44 @@ collision maths in the runtime at all:
 |---|---|---|
 | `NavMeshAgent` (enabled, on a mesh) | `SetDestination` | yes, by the NavMesh |
 | `CharacterController` | `Move` | yes — the controller's own capsule sweep |
-| `Rigidbody`/`Rigidbody2D`, **dynamic** | `MovePosition` — the step becomes the velocity for that physics step | **yes** — the solver resolves every contact |
-| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity: "If the rigidbody is kinematic then any collisions won't affect the rigidbody itself". Use a dynamic body when walls must stop it |
+| `Rigidbody`/`Rigidbody2D`, **dynamic** | `MovePosition`, once per physics step from `FixedUpdate` | **yes** — the solver resolves every contact |
+| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition`, once per physics step from `FixedUpdate` | **no** — Unity: "If the rigidbody is kinematic then any collisions won't affect the rigidbody itself". Use a dynamic body when walls must stop it |
 | `Collider`/`Collider2D` with no body | none exists | **no** — a bare collider is static geometry; a warning names the missing component |
 | nothing at all | none | no — the step goes to the transform |
 
-Every goal-driven move is the same formula: **position += direction x speed
-x time**, handed to the Unity call for the component the agent carries.
-Nothing in the runtime writes `velocity` and nothing here resolves a contact:
-Unity moves the body, and for a dynamic body the physics step is what makes
-walls, piles and other bodies matter. `MovePosition` is a move, not a teleport
-(Unity: use `Rigidbody.position` to teleport), so interpolation stays smooth;
-and because a rigidbody moves in physics steps while an AI ticks once per
-frame, the steps of the frames inside one physics step are summed and
-requested as a single move — the body then travels at exactly the requested
-speed no matter what the frame rate is doing.
+**On a Rigidbody the goal is the plain follower script, verbatim**, run from
+the AI's own `FixedUpdate`:
 
-**Gravity keeps the vertical axis.** A dynamic body with gravity on (a 2D one
-with gravity, a CharacterController — whose gravity this runtime adds) has its
-step taken in the ground plane: Unity keeps the fall, so a cube dropped from the
-air falls, lands and runs instead of being lifted and held at the goal's height
-— the same split a NavMeshAgent uses walking the ground. A body with gravity
-**off**, or a kinematic body, has nothing else driving the vertical axis, so the
-goal drives all three and the agent flies to the target. A goal posted towards
-an **object** re-reads that object's position every tick, so the agent tracks a
-target that moves and settles on one that stands still.
+```csharp
+void FixedUpdate()
+{
+    var dir = (target.position - rb.position).normalized;
+    rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+}
+```
+
+`speed` is the goal's speed (the call's argument for `moveTowards`, the agent's
+base speed for `goTo`/`follow`, times the multiplier for `sprintTowards`),
+`target.position` is the goal's destination (re-read every physics step for an
+object target, a fixed point for a Vector3), both measured from the body's own
+`rb.position`. Nothing is layered on top: no velocity is written, the step is
+not clamped, flattened or stopped short by a stop distance, and the goal is not
+dropped on arrival — a body standing on its destination is moved by a
+zero-length step until the next call replaces the goal or `stopMovement` drops
+it. `MovePosition` is a move, not a teleport (Unity: use `Rigidbody.position` to
+teleport), so interpolation stays smooth and the physics step resolves every
+contact; and because the step runs once per physics step with
+`Time.fixedDeltaTime`, the body travels at exactly the requested speed no
+matter what the frame rate is doing.
+
+**Everything else steps per frame**: one step of **position += direction x
+speed x time** in `Update`, clamped so it never overshoots, ending within the
+agent's stop distance. A CharacterController's step is taken in the ground
+plane and its gravity is added by the runtime, so a walker falls, lands and
+runs instead of being held at the goal's height; a transform-driven object has
+nothing else moving it, so the goal drives all three axes. A goal posted towards
+an **object** re-reads that object's position every step, so the agent tracks a
+target that moves.
 
 Each of these is reported once per AI (they fire every tick otherwise).
 
@@ -90,7 +103,7 @@ Direct position changes are untouched: `setPosition`, `setRotation` and
 through the calls above.
 
 Each agent logs the call it uses when that changes
-(`movement: Marcher -> Rigidbody.velocity (physics resolves collisions)`), and
+(`movement: Marcher -> Rigidbody.MovePosition in FixedUpdate (physics resolves collisions)`), and
 a collider with no body logs one warning naming the component to add.
 `Movement.CollisionAware = false` skips the environment and writes to the
 transform (the escape hatch for objects whose movement something else owns);
@@ -289,7 +302,7 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0621` | `sprintTowards(Object3D agent, Object3D dest, float speedMult) -> void` | 3 |  |
 | `0x0622` | `sprintTowards(Object2D agent, Vector2 dest, float speedMult) -> void` | 3 |  |
 | `0x0623` | `sprintTowards(Object2D agent, Object2D dest, float speedMult) -> void` | 3 |  |
-| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body (`MovePosition`, `Move` for a CharacterController). With an **object** argument the target is re-read every tick, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
+| `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body: on a Rigidbody(2D) that is, verbatim, `rb.MovePosition(rb.position + (dest - rb.position).normalized * speed * Time.fixedDeltaTime)` once per physics step from FixedUpdate, with no stop distance and nothing else written to the body; `Move` for a CharacterController. With an **object** argument the target is re-read every step, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
 | `0x0625` | `moveTowards(NavMeshAgent agent, Object3D dest, float speed) -> void` | 3 |  |
 | `0x0626` | `moveTowards(Object3D agent, Vector3 dest, float speed) -> void` | 3 |  |
 | `0x0627` | `moveTowards(Object3D agent, Object3D dest, float speed) -> void` | 3 |  |

@@ -3,10 +3,13 @@
 // Path queries over NavMesh (3D) with straight-line fallback, arrival tests,
 // and goal-posting movement: goTo / followTarget / findShortestPathAndMove /
 // follow / sprintTowards / moveTowards never teleport — they set a goal the
-// MovementSystem advances incrementally (NavMeshAgent when on a mesh,
-// manual position += direction * speed * dt otherwise, swept against
-// colliders so the body slides along walls). Object destinations
-// are snapshotted at call time (goTo/sprint/move); follow* re-target live.
+// MovementSystem advances incrementally through the Unity call for the
+// agent's component: NavMeshAgent.SetDestination on a mesh,
+// Rigidbody(2D).MovePosition from FixedUpdate (rb.position + normalized
+// direction * speed * Time.fixedDeltaTime, the plain follower script),
+// CharacterController.Move, or a transform write when nothing can move it.
+// Object destinations are snapshotted at call time (goTo/sprint); follow*
+// and moveTowards(object) re-target live.
 
 using System.Collections.Generic;
 using UnityEngine;

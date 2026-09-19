@@ -575,38 +575,98 @@ public static class SmokeTest
         if (!File.Exists(path)) return;
 
         byte[] bytes = File.ReadAllBytes(path);
+        // Two clocks, deliberately different: a frame is 1/60 s, a physics step
+        // is Unity's default 0.02 s. A rigidbody steps in FixedUpdate with
+        // Time.fixedDeltaTime; everything else steps per frame with Time.deltaTime.
         Time.deltaTime = 1f / 60f;
+        Time.fixedDeltaTime = 0.02f;
         const float speed = 2f;                       // straightline.fsm
-        float step = speed * Time.deltaTime;          // 0.0333 per tick
+        float step = speed * Time.deltaTime;          // 0.0333 per frame
+        float bodyStep = speed * Time.fixedDeltaTime; // 0.04 per physics step
         const int ticks = 31;                         // first tick posts the goal
         int steps = ticks - 1;
 
-        // (a) dynamic rigidbody: position += direction * speed * time, handed to
-        // Unity's move call — no velocity is written by the runtime
+        // (a) dynamic rigidbody: the follower script, verbatim, in FixedUpdate —
+        //   dir = (target - rb.position).normalized;
+        //   rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+        // one MovePosition per physics step, no velocity written by the runtime
         GameObject bodyGo = new GameObject("BodyMover");
         Rigidbody body = bodyGo.AddComponent<Rigidbody>();
         FsmbAIInstance bodyAi = bodyGo.AddComponent<FsmbAIInstance>();
         Check(bodyAi.BootWithBytes(bytes, "Smoke_body"), "rigidbody AI boots");
         RunTicks(bodyAi, ticks);
+        Console.WriteLine("    dynamic mover: " + body.movePositionCalls +
+                          " MovePosition calls, z=" + bodyGo.transform.position.z.ToString("0.###"));
         Check(body.movePositionCalls == steps && Math.Abs(body.velocity.z) < 1e-6f,
-              "dynamic body: moved by MovePosition, never given a velocity");
-        Check(Math.Abs(bodyGo.transform.position.z - steps * step) < 0.02f,
-              "dynamic body travels direction * speed * time each tick");
+              "dynamic body: one MovePosition per physics step, never given a velocity");
+        Check(Math.Abs(bodyGo.transform.position.z - steps * bodyStep) < 0.02f,
+              "dynamic body travels normalized direction * speed * fixedDeltaTime per step");
+        Check(Math.Abs(bodyGo.transform.position.z - steps * step) > 0.1f,
+              "the body's step is on the physics clock, not the frame clock");
 
-        // dropping the goal stops the move that was being requested
+        // the frame pass leaves a body alone: Update alone never calls MovePosition
+        int callsBeforeFrames = body.movePositionCalls;
+        for (int i = 0; i < 5; i++) { Time.time += Time.deltaTime; bodyAi.TickInternal(); }
+        Check(body.movePositionCalls == callsBeforeFrames,
+              "frames without a physics step do not move a body");
+        for (int i = 0; i < 3; i++) { Time.fixedTime += Time.fixedDeltaTime; bodyAi.FixedTickInternal(); }
+        Check(body.movePositionCalls == callsBeforeFrames + 3,
+              "every physics step moves the body once, however many frames sit between");
+
+        // the move is measured from the body itself: exactly rb.position + dir * speed * dt
+        Vector3 before = body.position;
+        Time.fixedTime += Time.fixedDeltaTime;
+        bodyAi.FixedTickInternal();
+        Vector3 expected = before + new Vector3(0f, 0f, 1f) * speed * Time.fixedDeltaTime;
+        Check((body.lastMovePosition - expected).magnitude < 1e-4f,
+              "MovePosition receives rb.position + dir.normalized * speed * fixedDeltaTime");
+
         int handleId = 0;
         for (int id = 1; id <= bodyAi.Handles.Count && handleId == 0; id++)
         {
             if (bodyAi.Handles.Resolve(id) == (UnityEngine.Object)bodyGo) handleId = id;
         }
         Check(handleId > 0, "the AI's agent handle was found");
+
+        // like the follower, a body has no "arrived": a goal on the spot it stands
+        // on stays posted and moves it by a zero-length step (normalized zero = zero),
+        // never overshooting, never stopping short, never dropped
+        MoveGoal onTheSpot = new MoveGoal();
+        onTheSpot.Mode = MoveMode.Point;
+        onTheSpot.Agent = FsmValue.MakeHandle(FsmbType.Object3D, handleId);
+        onTheSpot.Destination = body.position;
+        onTheSpot.Speed = speed;
+        bodyAi.Movement.SetGoal(handleId, onTheSpot);
+        Vector3 spot = body.position;
+        int callsAtSpot = body.movePositionCalls;
+        Time.fixedTime += Time.fixedDeltaTime;
+        bodyAi.FixedTickInternal();
+        Check(body.movePositionCalls == callsAtSpot + 1 && (body.position - spot).magnitude < 1e-6f,
+              "a body on its destination is moved by a zero-length step");
+        Check(bodyAi.Movement.HasGoal(handleId), "the body's goal is not dropped on arrival");
+
+        // dropping the goal stops the move that was being requested: with no goal,
+        // physics steps call nothing (the follower with its target cleared) —
+        // physics steps only here, because the FSM's next Update re-posts the goal
         bodyAi.Movement.ClearGoal(handleId);
         int callsAtClear = body.movePositionCalls;
-        RunTicks(bodyAi, 5);
+        for (int i = 0; i < 5; i++) { Time.fixedTime += Time.fixedDeltaTime; bodyAi.FixedTickInternal(); }
         Check(body.movePositionCalls == callsAtClear,
               "dropping the goal stops the move (no further MovePosition)");
+        Check(Math.Abs(body.velocity.z) < 1e-6f && Math.Abs(body.velocity.y) < 1e-6f,
+              "dropping the goal writes nothing to the body");
 
-        // (b) kinematic rigidbody: MovePosition, Unity's kinematic move API
+        // ...and the re-post idiom: the FSM's next Update posts a fresh goal, so the
+        // physics step after it moves the body again
+        Time.time += Time.deltaTime;
+        bodyAi.TickInternal();
+        Check(body.movePositionCalls == callsAtClear, "the frame that re-posts does not move a body");
+        Time.fixedTime += Time.fixedDeltaTime;
+        bodyAi.FixedTickInternal();
+        Check(body.movePositionCalls == callsAtClear + 1,
+              "the next moveTowards call posts a fresh goal and the next physics step moves the body");
+
+        // (b) kinematic rigidbody: the same MovePosition, from the same FixedUpdate
         GameObject kinGo = new GameObject("KinMover");
         Rigidbody kinBody = kinGo.AddComponent<Rigidbody>();
         kinBody.isKinematic = true;
@@ -616,8 +676,8 @@ public static class SmokeTest
         Console.WriteLine("    kinematic mover: " + kinBody.movePositionCalls +
                           " MovePosition calls, z=" + kinGo.transform.position.z.ToString("0.###"));
         Check(kinBody.movePositionCalls == steps, "kinematic body is moved by MovePosition");
-        Check(Math.Abs(kinGo.transform.position.z - steps * step) < 0.02f,
-              "kinematic MovePosition receives position + delta each tick");
+        Check(Math.Abs(kinGo.transform.position.z - steps * bodyStep) < 0.02f,
+              "kinematic MovePosition receives rb.position + dir * speed * fixedDeltaTime each step");
         Check(Math.Abs(kinBody.velocity.z) < 1e-6f,
               "kinematic body is never given a velocity (Unity ignores it)");
 
@@ -689,12 +749,18 @@ public static class SmokeTest
               "with a live agent nothing here moves the transform");
     }
 
+    /// <summary>
+    /// One Unity frame per tick, in Unity's order: the physics step (FixedUpdate,
+    /// where a Rigidbody goal takes its step) and then the frame (Update, where the
+    /// FSM runs and everything else moves).
+    /// </summary>
     private static void RunTicks(AIInstance ai, int ticks)
     {
         for (int i = 0; i < ticks; i++)
         {
-            Time.time += Time.deltaTime;
             Time.fixedTime += Time.fixedDeltaTime;   // one physics step per tick
+            ai.FixedTickInternal();
+            Time.time += Time.deltaTime;
             ai.TickInternal();
         }
     }

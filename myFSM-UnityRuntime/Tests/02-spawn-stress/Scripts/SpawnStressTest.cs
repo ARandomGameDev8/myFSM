@@ -12,11 +12,12 @@
 //
 //   A cube: dynamic Rigidbody (gravity on, X/Z rotation frozen) dropped in the
 //   air, plus one chaser AI. The AI walks towards the player with moveTowards,
-//   which the runtime turns into one step of `position += direction * speed *
-//   time` through Unity's move call for that body, so the physics step resolves
-//   every contact: cubes push each other, are stopped by each other, and pile up.
-//   Gravity keeps the vertical axis — a cube falls, lands and runs, and is never
-//   lifted or held at the player's height.
+//   which the runtime turns into the plain follower script, verbatim, once per
+//   physics step from the AI's FixedUpdate:
+//     rb.MovePosition(rb.position + (target - rb.position).normalized * speed
+//                     * Time.fixedDeltaTime)
+//   Nothing else is written to the body, so the physics step resolves every
+//   contact: cubes push each other, are stopped by each other, and pile up.
 //
 // KEYS
 //

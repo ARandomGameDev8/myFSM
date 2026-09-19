@@ -9,15 +9,25 @@
 //   NavMeshAgent         SetDestination() — the mesh pathfinds and steers.
 //   CharacterController  Move() — the controller's own capsule sweep resolves
 //                        slopes, steps and walls.
-//   Rigidbody(2D)        MovePosition(), Unity's move call — the documented
-//                        way to move a body by a step (its own example is
-//                        `rb.MovePosition(transform.position + input * dt *
-//                        speed)`, i.e. position += direction * speed * time).
-//                        It is a MOVE, not a teleport (teleporting is
-//                        Rigidbody.position), so the body still collides with
-//                        what is in the way and interpolation stays smooth.
-//                        Nothing is layered on top: no velocity is written and
-//                        no collision maths happens here.
+//   Rigidbody(2D)        MovePosition(), from FixedUpdate — exactly the
+//                        hand-written follower every Unity tutorial ends with:
+//
+//                            void FixedUpdate()
+//                            {
+//                                var dir = (target.position - rb.position).normalized;
+//                                rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+//                            }
+//
+//                        `speed` is the goal's speed (the FSM call's argument
+//                        or the agent's base speed), `target.position` is the
+//                        goal's destination (re-read every step for an object
+//                        target), and that is the whole of it. Nothing is
+//                        layered on top: no velocity is written, the step is
+//                        not clamped, flattened or stopped short — Unity's
+//                        physics step resolves the contacts. Because a body
+//                        moves in physics steps, its step is taken in
+//                        FixedAdvance() (called from the AI's FixedUpdate),
+//                        never from the per-frame Advance().
 //   Collider, no body    No Unity function can move it: a collider on its own
 //                        is static geometry. Movement is written to the
 //                        transform and a warning names the missing component.
@@ -56,9 +66,9 @@ namespace MyFSM.Unity
         ColliderNoBody = 1,
         /// <summary>CharacterController.Move().</summary>
         CharacterController = 2,
-        /// <summary>Rigidbody: velocity when dynamic, MovePosition when kinematic.</summary>
+        /// <summary>Rigidbody.MovePosition(), once per physics step (FixedUpdate).</summary>
         Rigidbody = 3,
-        /// <summary>Rigidbody2D: velocity when dynamic, MovePosition when kinematic.</summary>
+        /// <summary>Rigidbody2D.MovePosition(), once per physics step (FixedUpdate).</summary>
         Rigidbody2D = 4,
         /// <summary>NavMeshAgent.SetDestination().</summary>
         NavMeshAgent = 5,
@@ -108,9 +118,8 @@ namespace MyFSM.Unity
         public int CornerIndex;
         public bool Is2D;
 
-        // Cached while the goal advances, so stopMovement/Clear() can stop a
-        // body that was already set in motion (a velocity-driven rigidbody
-        // would otherwise keep coasting after its goal is gone).
+        // Cached while the goal advances, so stopMovement/Clear() can halt a
+        // NavMeshAgent that was already set in motion.
         public Transform AgentTransform;
     }
 
@@ -156,12 +165,6 @@ namespace MyFSM.Unity
     {
         private readonly Dictionary<int, MoveGoal> _goals = new Dictionary<int, MoveGoal>();
 
-        // Rigidbody moves are requested per render frame but applied in physics
-        // steps, so each agent's move is accumulated per step (see MoveBody).
-        private readonly Dictionary<int, PendingStep> _pendingSteps =
-            new Dictionary<int, PendingStep>();
-        private readonly List<int> _staleHandles = new List<int>();
-
         // Diagnostics: one line per agent when its driver changes, plus a
         // one-off warning when a collider has no body to move it, so "why did
         // it walk through that wall?" is answerable from the console.
@@ -174,11 +177,12 @@ namespace MyFSM.Unity
         }
 
         /// <summary>
-        /// Drops the goal and stops whatever was driving it: a dynamic body gets
-        /// its planar velocity zeroed (MovePosition sets a velocity to travel, so
-        /// a body would otherwise coast on after the goal is gone), a
-        /// NavMeshAgent is stopped. A kinematic body and a transform move stop
-        /// because MovePosition simply stops being called.
+        /// Drops the goal and stops whatever was driving it: a NavMeshAgent is
+        /// stopped; a Rigidbody, a CharacterController and a transform move stop
+        /// because MovePosition / Move simply stop being called — exactly what
+        /// happens to the hand-written follower when its target is cleared.
+        /// Nothing is written to a body here (no velocity), so a pushed or
+        /// falling body keeps obeying physics.
         /// </summary>
         public void ClearGoal(int agentHandleId)
         {
@@ -189,7 +193,6 @@ namespace MyFSM.Unity
                     StopMotion(Resolve(goal.AgentTransform, goal.Is2D));
                 _goals.Remove(agentHandleId);
             }
-            _pendingSteps.Remove(agentHandleId);
         }
 
         public bool HasGoal(int agentHandleId)
@@ -210,17 +213,38 @@ namespace MyFSM.Unity
                     StopMotion(Resolve(goal.AgentTransform, goal.Is2D));
             }
             _goals.Clear();
-            _pendingSteps.Clear();
             _reportedDriver.Clear();
             _warnedNoBody.Clear();
         }
 
         /// <summary>
-        /// Advances every goal one step. Runs even while an AI is suspended by
-        /// wait()/waitUntil(): in-flight motion is engine-level, so conditions
-        /// like waitUntil(hasReachedDestination(...)) can still become true.
+        /// The per-frame pass (the AI's Update, before its FSM round): advances
+        /// every goal one step of <paramref name="dt"/> — except goals whose
+        /// agent is moved by a Rigidbody(2D), which step in
+        /// <see cref="FixedAdvance"/> instead. Runs even while an AI is
+        /// suspended by wait()/waitUntil(): in-flight motion is engine-level, so
+        /// conditions like waitUntil(hasReachedDestination(...)) can still become
+        /// true.
         /// </summary>
         public void Advance(float dt, FunctionDispatcher d, AiExecution exec)
+        {
+            AdvanceAll(dt, false, d, exec);
+        }
+
+        /// <summary>
+        /// The physics-step pass (the AI's FixedUpdate, <paramref name="dt"/> =
+        /// Time.fixedDeltaTime): takes the step of every goal whose agent is a
+        /// Rigidbody(2D), through MovePosition, once per physics step — the same
+        /// place and the same clock a hand-written `rb.MovePosition(...)` in
+        /// FixedUpdate uses. Goals on anything else are left to
+        /// <see cref="Advance"/>.
+        /// </summary>
+        public void FixedAdvance(float dt, FunctionDispatcher d, AiExecution exec)
+        {
+            AdvanceAll(dt, true, d, exec);
+        }
+
+        private void AdvanceAll(float dt, bool physicsStep, FunctionDispatcher d, AiExecution exec)
         {
             if (_goals.Count == 0 || dt <= 0f) return;
             int[] keys = new int[_goals.Count];
@@ -230,20 +254,13 @@ namespace MyFSM.Unity
                 MoveGoal goal;
                 if (!_goals.TryGetValue(keys[i], out goal)) continue;
                 if (goal.Mode == MoveMode.LookAt)
-                    AdvanceLook(keys[i], goal, dt, d, exec);
+                {
+                    if (!physicsStep) AdvanceLook(keys[i], goal, dt, d, exec);
+                }
                 else
-                    AdvanceMove(keys[i], goal, dt, d, exec);
-            }
-
-            // Forget the accumulated move of agents that no longer have a goal,
-            // so a reused handle id cannot inherit someone else's pending step.
-            if (_pendingSteps.Count > 0)
-            {
-                _staleHandles.Clear();
-                foreach (KeyValuePair<int, PendingStep> entry in _pendingSteps)
-                    if (!_goals.ContainsKey(entry.Key)) _staleHandles.Add(entry.Key);
-                for (int i = 0; i < _staleHandles.Count; i++)
-                    _pendingSteps.Remove(_staleHandles[i]);
+                {
+                    AdvanceMove(keys[i], goal, dt, physicsStep, d, exec);
+                }
             }
         }
 
@@ -370,12 +387,12 @@ namespace MyFSM.Unity
                 case MotionDriver.CharacterController: return "CharacterController.Move";
                 case MotionDriver.Rigidbody:
                     return ctx.Kinematic
-                        ? "Rigidbody.MovePosition (kinematic: Unity does not stop it at colliders)"
-                        : "Rigidbody.MovePosition (physics resolves collisions)";
+                        ? "Rigidbody.MovePosition in FixedUpdate (kinematic: Unity does not stop it at colliders)"
+                        : "Rigidbody.MovePosition in FixedUpdate (physics resolves collisions)";
                 case MotionDriver.Rigidbody2D:
                     return ctx.Kinematic
-                        ? "Rigidbody2D.MovePosition (kinematic: Unity does not stop it at colliders)"
-                        : "Rigidbody2D.MovePosition (physics resolves collisions)";
+                        ? "Rigidbody2D.MovePosition in FixedUpdate (kinematic: Unity does not stop it at colliders)"
+                        : "Rigidbody2D.MovePosition in FixedUpdate (physics resolves collisions)";
                 case MotionDriver.ColliderNoBody:
                     return "transform (collider without a body: nothing can stop it)";
                 default:
@@ -415,81 +432,46 @@ namespace MyFSM.Unity
         }
 
         /// <summary>
-        /// Moves a body by this tick's step, through Unity's move call.
+        /// One physics step of a Rigidbody(2D) towards <paramref name="dest"/> —
+        /// the hand-written follower, verbatim:
         ///
-        /// Rigidbodies move in PHYSICS steps: MovePosition keeps the LAST request
-        /// of the step while this runs once per RENDER frame, and several frames
-        /// can sit between two physics steps. The steps of those frames are
-        /// therefore summed per body and requested as one move — without that, a
-        /// body would travel at (render fps / physics fps) of the requested speed.
+        ///     var dir = (target.position - rb.position).normalized;
+        ///     rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+        ///
+        /// <paramref name="speed"/> is the goal's speed, <paramref name="dest"/>
+        /// is the goal's destination (an object target was re-read this step),
+        /// and <paramref name="fixedDt"/> is Time.fixedDeltaTime, because this
+        /// runs from FixedUpdate. Direction and distance are measured from the
+        /// body's own position, as the follower does. Nothing else: the step is
+        /// not clamped to the remaining distance, not flattened onto the ground
+        /// plane and not stopped short of the target, and no velocity is
+        /// written. A body sitting exactly on its destination gets a zero
+        /// direction (Unity's normalized of a zero vector) and therefore a
+        /// zero-length move. Unity's physics step resolves the contacts.
         /// </summary>
-        private void MoveBody(int handleId, MotionContext ctx, Vector3 step)
+        private static void MoveBody(MotionContext ctx, Vector3 dest, float speed, float fixedDt)
         {
-            Vector3 total = AddStep(handleId, step);
             if (ctx.Body != null)
             {
-                ctx.Body.MovePosition(ctx.Body.position + total);
+                Rigidbody rb = ctx.Body;
+                Vector3 dir = (dest - rb.position).normalized;
+                rb.MovePosition(rb.position + dir * speed * fixedDt);
                 return;
             }
-            ctx.Body2D.MovePosition(ctx.Body2D.position + new Vector2(total.x, total.y));
+            Rigidbody2D rb2 = ctx.Body2D;
+            Vector2 dir2 = (new Vector2(dest.x, dest.y) - rb2.position).normalized;
+            rb2.MovePosition(rb2.position + dir2 * speed * fixedDt);
         }
 
-        /// <summary>This physics step's accumulated move for one agent.</summary>
-        private Vector3 AddStep(int handleId, Vector3 step)
-        {
-            PendingStep pending;
-            if (!_pendingSteps.TryGetValue(handleId, out pending))
-            {
-                pending = new PendingStep();
-                _pendingSteps[handleId] = pending;
-            }
-            if (pending.PhysicsTime != Time.fixedTime)
-            {
-                // A physics step has run since the last request: start over.
-                pending.PhysicsTime = Time.fixedTime;
-                pending.Step = Vector3.zero;
-            }
-            pending.Step += step;
-            return pending.Step;
-        }
-
-        private sealed class PendingStep
-        {
-            public float PhysicsTime = float.NaN;
-            public Vector3 Step;
-        }
-
-        /// <summary>Stops a body the goal was driving, keeping pose and gravity.</summary>
         /// <summary>
-        /// True when something other than the goal drives the vertical axis: a
-        /// dynamic body with gravity on, a 2D body with gravity, or a
-        /// CharacterController (its own gravity is added here). The goal then takes
-        /// its step in the plane and measures arrival there.
+        /// Halts what the goal was driving. Only a NavMeshAgent needs telling:
+        /// it keeps steering on its own until it is stopped. A Rigidbody, a
+        /// CharacterController and a transform move stop because their move
+        /// call simply stops being made — nothing is written to a body (no
+        /// velocity), the same as the hand-written follower losing its target.
         /// </summary>
-        private static bool GravityOwnsVertical(MotionContext ctx)
-        {
-            if (ctx.Driver == MotionDriver.CharacterController) return true;
-            if (ctx.Driver == MotionDriver.Rigidbody)
-                return ctx.Body != null && !ctx.Body.isKinematic && ctx.Body.useGravity;
-            if (ctx.Driver == MotionDriver.Rigidbody2D)
-                return ctx.Body2D != null && !ctx.Body2D.isKinematic && ctx.Body2D.gravityScale != 0f;
-            return false;
-        }
-
         private static void StopMotion(MotionContext ctx)
         {
-            if (ctx.Driver == MotionDriver.Rigidbody && ctx.Body != null && !ctx.Body.isKinematic)
-            {
-                Vector3 v = ctx.Body.velocity;
-                ctx.Body.velocity = new Vector3(0f, v.y, 0f);
-                return;
-            }
-            if (ctx.Driver == MotionDriver.Rigidbody2D && ctx.Body2D != null &&
-                !ctx.Body2D.isKinematic)
-            {
-                ctx.Body2D.velocity = Vector2.zero;
-                return;
-            }
             if (ctx.Driver == MotionDriver.NavMeshAgent && ctx.Nav != null)
                 ctx.Nav.isStopped = true;
         }
@@ -505,7 +487,15 @@ namespace MyFSM.Unity
             return (a - b).sqrMagnitude <= within * within;
         }
 
-        private void AdvanceMove(int handleId, MoveGoal goal, float dt,
+        /// <summary>
+        /// One pass of a movement goal. Picking the destination (a fixed point,
+        /// an object re-read now, the current path corner) is the same in both
+        /// passes; which pass takes the step depends on the component that moves
+        /// the agent: a Rigidbody(2D) steps only in the physics pass (<paramref
+        /// name="physicsStep"/> true, dt = Time.fixedDeltaTime), everything else
+        /// only in the frame pass.
+        /// </summary>
+        private void AdvanceMove(int handleId, MoveGoal goal, float dt, bool physicsStep,
                                  FunctionDispatcher d, AiExecution exec)
         {
             Transform t = d.ResolveTransform(goal.Agent, exec, "movement");
@@ -566,32 +556,63 @@ namespace MyFSM.Unity
 
             MotionContext ctx = Resolve(t, goal.Is2D);
 
-            // NavMesh: the engine pathfinds and steers.
+            // NavMesh: the engine pathfinds and steers (told once per frame).
             if (ctx.Driver == MotionDriver.NavMeshAgent)
             {
                 NavMeshAgent agent = ctx.Nav;
-                agent.isStopped = false;
-                agent.speed = goal.Speed;
-                agent.stoppingDistance = goal.StopDistance;
-                agent.SetDestination(dest);
-                if (!agent.pathPending &&
-                    agent.pathStatus == NavMeshPathStatus.PathInvalid)
+                if (physicsStep)
                 {
-                    // No route on the mesh: hand the step to whatever component
-                    // the object does have instead of pretending it can walk.
+                    // The mesh is steered from the frame pass. The only thing a
+                    // physics step can do for a mesh agent is move the body that
+                    // stands in for it when the mesh has no route.
+                    if (agent.pathPending || agent.pathStatus != NavMeshPathStatus.PathInvalid)
+                        return;
                     ctx = ResolveCore(t, goal.Is2D, true);
-                }
-                else if (!agent.pathPending && agent.remainingDistance <= goal.StopDistance)
-                {
-                    StopMotion(ctx);
-                    if (goal.Mode != MoveMode.FollowObject) _goals.Remove(handleId);
-                    return;
                 }
                 else
                 {
-                    Report(handleId, ctx, t.name, exec);
-                    return; // the mesh is steering; nothing more this tick
+                    agent.isStopped = false;
+                    agent.speed = goal.Speed;
+                    agent.stoppingDistance = goal.StopDistance;
+                    agent.SetDestination(dest);
+                    if (!agent.pathPending &&
+                        agent.pathStatus == NavMeshPathStatus.PathInvalid)
+                    {
+                        // No route on the mesh: hand the step to whatever component
+                        // the object does have instead of pretending it can walk.
+                        ctx = ResolveCore(t, goal.Is2D, true);
+                    }
+                    else if (!agent.pathPending && agent.remainingDistance <= goal.StopDistance)
+                    {
+                        StopMotion(ctx);
+                        if (goal.Mode != MoveMode.FollowObject) _goals.Remove(handleId);
+                        return;
+                    }
+                    else
+                    {
+                        Report(handleId, ctx, t.name, exec);
+                        return; // the mesh is steering; nothing more this tick
+                    }
                 }
+            }
+
+            // A body moves in physics steps, everything else per frame: each
+            // driver takes its step in its own pass and is left alone in the other.
+            bool isBody = ctx.Driver == MotionDriver.Rigidbody ||
+                          ctx.Driver == MotionDriver.Rigidbody2D;
+            if (isBody != physicsStep) return;
+
+            if (isBody)
+            {
+                // The follower script, verbatim (see MoveBody): direction from the
+                // body to the destination, normalized, times speed, times
+                // Time.fixedDeltaTime, through MovePosition. The goal stays posted
+                // — like the follower, it has no notion of "arrived": a Point goal
+                // is replaced by the next call or dropped by stopMovement, an
+                // object target is tracked for as long as the goal exists.
+                MoveBody(ctx, dest, goal.Speed, dt);
+                Report(handleId, ctx, t.name, exec);
+                return;
             }
 
             Vector3 pos = t.position;
@@ -599,16 +620,11 @@ namespace MyFSM.Unity
             Vector3 to = dest - pos;
             if (goal.Is2D) to.z = 0f;
 
-            // A body that gravity is holding down cannot be lifted or held by the
-            // goal: MovePosition writes the whole 3D position (and therefore the
-            // velocity for that step), so a vertical component would cancel gravity
-            // and glue the body to the goal's height - a crowd of cubes ends up
-            // climbing and hovering instead of walking. For those components the
-            // goal owns the plane it can walk in and gravity keeps the vertical
-            // axis, exactly like a NavMeshAgent walking the ground. A body with
-            // gravity off (or a kinematic body) has nothing else driving the
-            // vertical axis, so the goal drives all three - that is the flyer case.
-            bool planar = GravityOwnsVertical(ctx);
+            // A CharacterController is held down by the gravity added below, so
+            // the goal owns the plane it can walk in and measures arrival there;
+            // a vertical component would fight the fall. A transform-driven
+            // object has nothing else moving it, so the goal drives all three axes.
+            bool planar = ctx.Driver == MotionDriver.CharacterController;
             if (planar) to.y = 0f;
 
             float dist = to.magnitude;
@@ -624,40 +640,24 @@ namespace MyFSM.Unity
             if (goal.Is2D) delta.z = 0f;
             if (delta.sqrMagnitude <= 0f) return;   // zero speed: goal stays posted
 
-            switch (ctx.Driver)
+            if (ctx.Driver == MotionDriver.CharacterController)
             {
-                case MotionDriver.CharacterController:
-                {
-                    // Unity's controller move: it does its own capsule sweep,
-                    // slope and step handling, and stops at walls. Only gravity
-                    // is ours to add.
-                    Vector3 motion = delta;
-                    if (!ctx.Controller.isGrounded) motion.y -= CharacterGravity * dt;
-                    ctx.Controller.Move(motion);
-                    Report(handleId, ctx, t.name, exec);
-                    return;
-                }
-                case MotionDriver.Rigidbody:
-                case MotionDriver.Rigidbody2D:
-                {
-                    // position += direction * speed * time, handed to Unity's move
-                    // call for this body. Unity resolves the contacts; this file
-                    // still contains no collision maths.
-                    MoveBody(handleId, ctx, delta);
-                    Report(handleId, ctx, t.name, exec);
-                    return;
-                }
-                default:
-                {
-                    // No body: Unity has nothing to move here, so the step goes
-                    // to the transform (and the first time, the warning above).
-                    if (ctx.Driver == MotionDriver.ColliderNoBody)
-                        WarnNoBody(handleId, t.name, exec);
-                    ctx.Owner.position = ownerPos + delta;
-                    Report(handleId, ctx, t.name, exec);
-                    return;
-                }
+                // Unity's controller move: it does its own capsule sweep,
+                // slope and step handling, and stops at walls. Only gravity
+                // is ours to add.
+                Vector3 motion = delta;
+                if (!ctx.Controller.isGrounded) motion.y -= CharacterGravity * dt;
+                ctx.Controller.Move(motion);
+                Report(handleId, ctx, t.name, exec);
+                return;
             }
+
+            // No body: Unity has nothing to move here, so the step goes to the
+            // transform (and the first time, the warning above).
+            if (ctx.Driver == MotionDriver.ColliderNoBody)
+                WarnNoBody(handleId, t.name, exec);
+            ctx.Owner.position = ownerPos + delta;
+            Report(handleId, ctx, t.name, exec);
         }
 
         private void AdvanceLook(int handleId, MoveGoal goal, float dt,

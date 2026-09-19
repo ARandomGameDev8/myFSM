@@ -83,6 +83,9 @@ AI's frame:
 
 1. `MovementSystem.Advance` — in-flight motion/rotation goals step closer
    (fresh positions for this tick's decisions; runs even while suspended).
+   A goal on a `Rigidbody`(2D) steps in the AI's `FixedUpdate()` instead
+   (`MovementSystem.FixedAdvance`: one `MovePosition` per physics step, with
+   `Time.fixedDeltaTime` — see *Movement & functions*).
 2. `StateHandler.Tick` — on the very first tick the head is entered
    (none → entry) and its Start round runs; then the suspension check
    (`wait`/`waitUntil`), then any externally commanded transition, then the
@@ -156,8 +159,8 @@ meant for that component** — there is no collision maths in the runtime:
 |---|---|---|
 | `NavMeshAgent` (enabled, on a mesh) | `SetDestination` | yes — via the NavMesh |
 | `CharacterController` | `Move(motion)` | **yes** — the controller's own sweep |
-| `Rigidbody`/`Rigidbody2D`, **dynamic** | `velocity` is set each tick | **yes** — the physics solver (mass, drag, gravity keep working) |
-| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"* |
+| `Rigidbody`/`Rigidbody2D`, **dynamic** | `MovePosition`, from `FixedUpdate` | **yes** — the physics solver (mass, drag, gravity keep working) |
+| `Rigidbody`/`Rigidbody2D`, **kinematic** | `MovePosition`, from `FixedUpdate` | **no** — Unity's docs: *"If the rigidbody is kinematic then any collisions won't affect the rigidbody itself"* |
 | `Collider`/`Collider2D`, no body | *(none exists)* | **no** — a bare collider is static geometry; one warning names the missing component |
 | nothing at all | *(none)* | no — the step goes to the transform |
 
@@ -169,17 +172,37 @@ component sets Unity resolves collisions for. `setPosition` / `setRotation` /
 calls above. `AIInstance`'s **Collision Aware** toggle is the escape hatch for
 objects whose transform something else owns.
 
+On a **Rigidbody** the goal is, line for line, the follower script every Unity
+tutorial ends with — run from the AI's own `FixedUpdate`:
+
+```csharp
+void FixedUpdate()
+{
+    var dir = (target.position - rb.position).normalized;
+    rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+}
+```
+
+`speed` is the call's speed argument (or the agent's base speed for `goTo` /
+`follow`), `target.position` is the goal's destination (re-read every step for an
+object target), and nothing is layered on top: no velocity is written, the step
+is not clamped, flattened or stopped short, and the goal is not dropped on
+arrival — a body standing on its destination is moved by a zero-length step until
+the next call replaces the goal or `stopMovement` drops it. The physics step
+resolves the contacts, and because the step runs once per physics step with
+`Time.fixedDeltaTime`, the body travels at the requested speed at any frame rate.
+
 Each agent logs the call it uses when that changes
-(`movement: Marcher -> Rigidbody.MovePosition (physics resolves collisions)`), which
-makes the path taken visible instead of guessed. A moving body with gravity on is
-driven along the ground plane — Unity keeps the vertical axis, so a walker falls and
-lands instead of hovering at its goal's height. `moveTowards` with an OBJECT
-destination re-reads it every tick, as `follow`/`followTarget` do; `goTo` and
-`sprintTowards` take a Vector3 (or an object's position at call time); `lookAt`
-rotates gradually (through `MoveRotation` when the object has a body); movement
-never changes facing. The other 150+ overloads are direct engine mappings;
-engine-state failures (null handles, missing components) log and yield defaults,
-never exceptions.
+(`movement: Marcher -> Rigidbody.MovePosition in FixedUpdate (physics resolves collisions)`),
+which makes the path taken visible instead of guessed. A `CharacterController` is
+driven along the ground plane — its gravity is added by the runtime, so a walker
+falls and lands instead of hovering at its goal's height. `moveTowards` with an
+OBJECT destination re-reads it every tick, as `follow`/`followTarget` do; `goTo`
+and `sprintTowards` take a Vector3 (or an object's position at call time);
+`lookAt` rotates gradually (through `MoveRotation` when the object has a body);
+movement never changes facing. The other 150+ overloads are direct engine
+mappings; engine-state failures (null handles, missing components) log and yield
+defaults, never exceptions.
 
 ### If an AI walks through a wall
 

@@ -140,28 +140,38 @@ Every goal-driven move is one step of the plain formula — **position += direct
 x speed x time** — handed to Unity's move call for the component the object
 carries. Nothing writes `velocity`, and the runtime contains no collision maths:
 
-* **Rigidbody / Rigidbody2D** → `MovePosition` (Unity's documented way to move a
-  body by a step; its own example is
-  `rb.MovePosition(transform.position + input * dt * speed)`), so a **dynamic**
-  body is stopped by walls, piles and other bodies, and interpolation stays
-  smooth. A **kinematic** body is moved the same way but Unity documents that
-  collisions do not affect it — use a dynamic body when walls must stop it.
-* **CharacterController** → `Move(step)` (its own capsule sweep).
+* **Rigidbody / Rigidbody2D** → the follower script, verbatim, from the AI's own
+  `FixedUpdate`:
+
+  ```csharp
+  void FixedUpdate()
+  {
+      var dir = (target.position - rb.position).normalized;
+      rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);
+  }
+  ```
+
+  `speed` is the call's speed, `target.position` the goal's destination, and
+  that is all of it: one `MovePosition` per physics step, nothing clamped,
+  flattened or stopped short, no velocity written, the goal never dropped on
+  arrival (a body on its destination is moved by a zero-length step until the
+  next call replaces the goal or `stopMovement` drops it). A **dynamic** body is
+  stopped by walls, piles and other bodies, and interpolation stays smooth. A
+  **kinematic** body is moved the same way but Unity documents that collisions
+  do not affect it — use a dynamic body when walls must stop it.
+* **CharacterController** → `Move(step)` per frame (its own capsule sweep), the
+  step taken in the ground plane with the runtime's gravity added, ending within
+  the stop distance.
 * **NavMeshAgent** → `SetDestination` (the mesh pathfinds).
-* **Nothing to move it** → the step is written to the transform, and the first
-  time a bare `Collider` is found the runtime warns and names what to add.
+* **Nothing to move it** → the step is written to the transform per frame, and
+  the first time a bare `Collider` is found the runtime warns and names what to
+  add.
 
-Rigidbodies are moved by Unity in **physics steps** while an AI ticks once per
-frame, and `MovePosition` keeps the last request of a step — so the steps of the
-frames inside one physics step are summed and requested as one move. Without
-that a body would travel at (render fps / physics fps) of the requested speed.
-
-`moveTowards` towards an **object** re-reads that object every tick, so a target
-that keeps moving is tracked and one that stands still is reached normally.
-**Gravity keeps the vertical axis.** A body that gravity is holding down (dynamic
-with gravity on, or a CharacterController) gets its step in the ground plane, so
-the goal never fights the fall; a body with gravity off or a kinematic body flies
-to the target on all three axes.
+Because a rigidbody steps in `FixedUpdate` with `Time.fixedDeltaTime`, it travels
+at the requested speed whatever the frame rate: many frames between two physics
+steps do not move it, and several physics steps in one frame move it several
+times. `moveTowards` towards an **object** re-reads that object every step, so a
+target that keeps moving is tracked.
 
 ### Checking that the committed pieces agree
 
@@ -322,11 +332,16 @@ gravity well. `CentreInAir` and `AroundPlayer` are there if you want the older
 shapes.
 
 The chaser FSM walks the cube at the player's position. The runtime turns that
-into one step of `position += direction x speed x time` per tick through Unity's
-`MovePosition` — and because the cube has gravity, **the runtime aims the step
-along the ground plane and lets Unity keep the vertical axis**: the cube falls,
-lands, runs, and is never lifted or held at the player's height. Overlapping
-spawns or a pile-up can push a cube up; it falls back instead of hovering.
+into the follower script, verbatim, once per physics step from the AI's
+`FixedUpdate`: `rb.MovePosition(rb.position + (player - rb.position).normalized
+* chaseSpeed * Time.fixedDeltaTime)`. Nothing else touches the cube — no
+velocity, no clamping, no stop distance — so the physics step alone decides what
+happens when the crowd meets the player or itself. The direction is the full
+3D direction to the player's transform (the cylinder's centre, 1 m up), exactly
+as the script would do it, so a cube right next to the player is nudged upwards
+by the same step and gravity brings it back down; for a pure ground chase, bind
+the crowd's target to a transform at the cubes' own height (an empty child at
+the player's feet does it) — the FSM does not change.
 
 The target is bound on the spot: `SpawnStressTest` sets `ChaserAI.Target` right
 after `AddComponent`, before the component's `Start` binds its slots — per cube,
@@ -481,7 +496,7 @@ the live route length and the chaser's state — the curve that shows the chase)
 | test 02: the **player** slides on its own, or the crowd pushes him to the middle | something other than the keys is driving the player: either a dynamic Rigidbody (physics can then shove it), an FSM AI standing on the player object (an AI ticks every frame and drags its own object towards its own goal), or any other script that writes a position | the setup forces a **kinematic** body on the player (Unity: collisions do not affect a kinematic body, so the crowd blocks it but cannot move it) and prints `[stress] player '<name>': …`, then the **complete list of scripts on the player**, with anything that is not `PlayerController` logged as an error. During the run `[stress] THE PLAYER MOVED … with NO movement key held` names the distance (accumulated from where the keys left the player) and the summary line `player drift` counts it — the test reports the drag instead of leaving it to be inferred |
 | test 02: the **view** slides after releasing the keys, as if the player were still moving | the follow camera is smoothed: it trails while you walk and catches up when you stop, which moves the world on screen, not the player | the startup line reports `follow smoothing … s`. Set `smoothing = 0` on `TopDownFollowCamera` and the effect disappears; confirm with `spawn_stress_frames.csv`: rows with `playerMoving = 0` whose `playerX/playerZ` do not change mean the player never moved |
 | every cube (or an object the FSM drives) walks to the **centre of the plane** | the AI's target slot is unbound. World-space reads of an unbound handle used to return `(0,0,0)`, and `(0,0,0)` is the world origin — the middle of the plane — so every such AI marched there | fixed in the runtime: such a read is now an **invalid (NaN)** position and the movement calls refuse it, so the agent stays where it is and logs `getPosition: no live source to read a position from …` once per AI. Bind the slot (or create the object it expects) — in test 02 the chaser's `player` target comes from `ChaserAI.Player` / an object named `Player` |
-| an agent hovers, or climbs towards a target above it | a body whose gravity is on has its step taken in the ground plane: Unity keeps the vertical axis (`GravityOwnsVertical`). A body with gravity **off** or a kinematic body has nothing else driving it, so the goal owns all three axes and flies to the target's height | that is the walker/flyer split: `useGravity` on = ground agent (test 02), off = flyer |
+| a rigidbody agent hovers, or climbs towards a target above it | a Rigidbody is moved exactly like the follower script — `rb.MovePosition(rb.position + (target - rb.position).normalized * speed * Time.fixedDeltaTime)` — and that direction is the full 3D direction to the target, so a target above the body pulls it up with every physics step; gravity pulls it back down in the same step, and the two fight | give the goal a destination at the body's own height (bind a transform at the target's feet, or aim at a point on the ground); a CharacterController agent, by contrast, has its step taken in the ground plane by the runtime |
 | `CS0246: The type or namespace name 'AIInstance' ...` / `MainServer` | the runtime folder is missing or not under `Assets/` | install the runtime (`installers/unity/install.py`) — `Runtime/Core`, `Runtime/Unity` and `Runtime/Compiler` all have to be present |
 | test 01: console shows `zone = 15 -> expecting Above10` and transitions, but **nothing visibly moves** | the AI sits on an object with no mesh (an empty GameObject): the machine is working perfectly on an invisible object | attach `ZoneTestSetup` — it adds a visible cube child to an empty object, or use a Cube primitive as the AI host. Before that change, this looked exactly like a broken test |
 | test 01: **nothing happens at all**, no log lines from `[zone]` | you added `ZoneBridgeAI` on its own: the module never reads the keyboard, only its `zone` variable, and nothing writes it. The binding logs this as a warning at boot | add `ZoneTestSetup` to any GameObject — it wires the controller, the recorder and the cube; the keys then drive it (nothing moves by itself) |

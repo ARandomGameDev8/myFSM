@@ -49,7 +49,10 @@ another. One AI's frame:
 2. `Movement.Advance` (fresh positions, even while suspended), then
    `Execution.Tick` (first tick: initial entry none → head + its Start
    round; then suspension → external transition → Update round →
-   Traversals round → transition).
+   Traversals round → transition). A goal on a `Rigidbody`(2D) is the one
+   thing that does not step here: it steps in the AI's own `FixedUpdate()`
+   (`Movement.FixedAdvance`, once per physics step with
+   `Time.fixedDeltaTime`, through `MovePosition`).
 3. If the head state changed: append a `StateChangeEntry` to the DB
    timetable, then publish one `StateChangeEvent` to the ordered server and
    then the priority server; record the AI's tick-sample (`OnInstanceTick`).

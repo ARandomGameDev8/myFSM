@@ -8,11 +8,13 @@
 // Lifecycle: Unity Start() -> BootFromAsset() -> MainServer registry.
 // Each AI then ticks ITSELF in its own Update(): movement advance first
 // (fresh positions for decisions), then the Update + Traversals rounds,
-// then its own DB/broadcast bookkeeping. The main server never ticks AIs;
-// it only keeps the registry and runs the query scheduler in LateUpdate
-// (after every AI). Bindings must be applied before boot because the entry
-// state's Start{} runs on the very first Update; the journal replays them
-// across hot reloads.
+// then its own DB/broadcast bookkeeping. A goal on a Rigidbody(2D) takes its
+// step in the AI's own FixedUpdate() instead — once per physics step, with
+// Time.fixedDeltaTime, through MovePosition, the way a hand-written follower
+// does it. The main server never ticks AIs; it only keeps the registry and
+// runs the query scheduler in LateUpdate (after every AI). Bindings must be
+// applied before boot because the entry state's Start{} runs on the very
+// first Update; the journal replays them across hot reloads.
 
 using System;
 using System.Collections.Generic;
@@ -568,6 +570,26 @@ namespace MyFSM.Unity
         protected virtual void Update()
         {
             TickInternal();
+        }
+
+        /// <summary>
+        /// The physics-step half of the tick: a movement goal whose agent is a
+        /// Rigidbody(2D) is advanced here, once per physics step and with
+        /// Time.fixedDeltaTime, through MovePosition — the same place and the
+        /// same clock a hand-written `rb.MovePosition(...)` in FixedUpdate
+        /// uses, so a body travels at exactly the requested speed whatever the
+        /// frame rate. The FSM itself never runs here. Subclasses overriding
+        /// this MUST call base.FixedUpdate() or rigidbody agents stop moving.
+        /// </summary>
+        protected virtual void FixedUpdate()
+        {
+            FixedTickInternal();
+        }
+
+        internal void FixedTickInternal()
+        {
+            if (!Booted || Execution == null || Paused) return;
+            Movement.FixedAdvance(UnityEngine.Time.fixedDeltaTime, Dispatcher, Execution);
         }
 
         internal StateChangeInfo TickInternal()

@@ -812,17 +812,19 @@ namespace UnityEngine
 
 namespace UnityEngine.AI
 {
+    // Unity's member names (PathComplete / PathPartial / PathInvalid): the
+    // runtime compares against NavMeshPathStatus.PathInvalid.
     public enum NavMeshPathStatus
     {
-        Invalid,
-        Partial,
-        Complete,
+        PathComplete,
+        PathPartial,
+        PathInvalid,
     }
 
     public class NavMeshPath
     {
         public Vector3[] corners = new Vector3[0];
-        public NavMeshPathStatus status = NavMeshPathStatus.Invalid;
+        public NavMeshPathStatus status = NavMeshPathStatus.PathInvalid;
     }
 
     public static class NavMesh
@@ -841,7 +843,7 @@ namespace UnityEngine.AI
         public float stoppingDistance = 0f;
         public float remainingDistance = float.MaxValue;
         public bool pathPending = false;
-        public NavMeshPathStatus pathStatus = NavMeshPathStatus.Complete;
+        public NavMeshPathStatus pathStatus = NavMeshPathStatus.PathComplete;
         public bool isOnNavMesh = false;
         public bool isStopped = false;
 
