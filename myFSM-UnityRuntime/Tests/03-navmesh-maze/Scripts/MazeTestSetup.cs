@@ -2,14 +2,16 @@
 // dropped onto an empty GameObject and played.
 //
 // It makes sure a maze exists (adding a MazeGeneratorController if the scene has
-// none), creates the runner — capsule + NavMeshAgent + the generated
-// MazeRunnerAI — and adds the recorder. The maze bakes its NavMesh in its own
-// Awake, so by the time this component's Start runs there is an entry to place
-// the runner on.
+// none), creates the runner — capsule + NavMeshAgent + the pre-compiled TestAI —
+// and adds the recorder. The maze bakes its NavMesh in its own Awake, so by the
+// time this component's Start runs there is an entry to place the runner on.
 //
-// The movement is entirely the runtime's: the runner's NavMeshAgent is the
-// component the movement system detects, and it drives it with SetDestination.
-// Nothing in this test touches a transform directly.
+// The movement is entirely the runtime's: TestAI posts a persistent chase goal
+// with moveTowards(agent, target, speed); the runtime re-reads the target every
+// tick and drives the NavMeshAgent with SetDestination. Nothing here touches a
+// transform during the run. The AI's dest and speed slots are bound in
+// TestAI.Manual.cs (target = the maze's ActiveTarget: the assigned target, or
+// the static marker the maze creates on the exit).
 
 using UnityEngine;
 using UnityEngine.AI;
@@ -23,10 +25,11 @@ namespace MyFSM.Tests
         [Tooltip("The maze. Left empty: found, or created on an empty GameObject.")]
         public MazeGeneratorController maze;
         [Tooltip("The runner. Left empty: found, or created here.")]
-        public MazeRunnerAI runner;
+        public TestAI runner;
         public bool createRunnerIfMissing = true;
 
         [Header("Runner setup")]
+        [Tooltip("The chase speed bound into TestAI.speed (units/second).")]
         public float runnerSpeed = 3.5f;
         public float agentRadius = 0.4f;
         public float agentHeight = 2f;
@@ -36,6 +39,7 @@ namespace MyFSM.Tests
 
         private void Awake()
         {
+            Current = this;
             if (maze == null) maze = FindObjectOfType<MazeGeneratorController>();
             if (maze == null)
             {
@@ -44,7 +48,7 @@ namespace MyFSM.Tests
                 Debug.Log("[maze-03] no MazeGeneratorController found — created one with the default grid.", this);
             }
 
-            if (runner == null) runner = FindObjectOfType<MazeRunnerAI>();
+            if (runner == null) runner = FindObjectOfType<TestAI>();
             if (runner == null && createRunnerIfMissing) runner = CreateRunner();
 
             if (runner != null)
@@ -55,6 +59,15 @@ namespace MyFSM.Tests
             }
         }
 
+        /// <summary>The one setup in the scene, for the manual bindings to read
+        /// (TestAI.Manual.cs takes runnerSpeed from here).</summary>
+        public static MazeTestSetup Current { get; private set; }
+
+        private void OnDestroy()
+        {
+            if (Current == this) Current = null;
+        }
+
         private void Start()
         {
             if (maze == null || runner == null) return;
@@ -63,8 +76,9 @@ namespace MyFSM.Tests
             Vector3 entry = maze.EntryPosition;
             Place(runner.transform, new Vector3(entry.x, maze.GroundY + runnerCentreHeight, entry.z));
             Debug.Log("[maze-03] runner placed at the entry " + runner.transform.position
-                      + " — it should walk the shortest corridor route to " + maze.ExitPosition
-                      + " and stop there.", this);
+                      + " — it should chase the target to "
+                      + (maze.ActiveTarget != null ? maze.ActiveTarget.position : maze.ExitPosition)
+                      + " and stop within the agent's stoppingDistance.", this);
         }
 
         /// <summary>
@@ -84,7 +98,7 @@ namespace MyFSM.Tests
             target.position = position;
         }
 
-        private MazeRunnerAI CreateRunner()
+        private TestAI CreateRunner()
         {
             GameObject go = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             go.name = "MazeRunner";
@@ -101,8 +115,8 @@ namespace MyFSM.Tests
             Renderer renderer = go.GetComponent<Renderer>();
             if (renderer != null) renderer.material.color = new Color(0.95f, 0.85f, 0.2f);
 
-            MazeRunnerAI ai = go.AddComponent<MazeRunnerAI>();
-            Debug.Log("[maze-03] created a runner (capsule + NavMeshAgent + MazeRunnerAI).", go);
+            TestAI ai = go.AddComponent<TestAI>();
+            Debug.Log("[maze-03] created a runner (capsule + NavMeshAgent + TestAI).", go);
             return ai;
         }
     }

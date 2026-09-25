@@ -109,7 +109,7 @@ Tests/
   02-spawn-stress/                   chaser.fsm (232 bytes) + ChaserAI(.Manual)
     Scripts/StressInput.cs           keyboard reads, either Unity input backend
     Scripts/TopDownFollowCamera.cs   the follow rig the test adds to the Main Camera
-  03-navmesh-maze/                   mazerunner.fsm (475 bytes) + MazeRunnerAI(.Manual)
+  03-navmesh-maze/                   testai.fsm (188 bytes) + TestAI(.Manual)
     Scripts/MazeInput.cs             keyboard reads (G rebuild, B re-bake)
   04-navmesh-moving-target/          pathchaser.fsm (513 bytes) + PathChaserAI(.Manual)
     Scripts/ChaseInput.cs            keyboard reads (M manual mode, WASD)
@@ -189,7 +189,7 @@ state:
 ```
 ok   01-state-transitions/zonebridge: module 950 bytes in sync, class ZoneBridgeAI.cs matches (3 states, 4 runtime slots, blob identical)
 ok   02-spawn-stress/chaser:         module 232 bytes in sync, class ChaserAI.cs matches   (1 state,  2 runtime slots, blob identical)
-ok   03-navmesh-maze/mazerunner:      module 475 bytes in sync, class MazeRunnerAI.cs matches (2 states, 4 runtime slots, blob identical)
+ok   03-navmesh-maze/testai:         module 188 bytes in sync, class TestAI.cs matches (1 state, 3 runtime slots, blob identical)
 ok   04-navmesh-moving-target/pathchaser: module 513 bytes in sync, class PathChaserAI.cs matches (2 states, 4 runtime slots, blob identical)
 ```
 
@@ -405,47 +405,65 @@ stays above `slowdownFrameMs` (33.3 ms = 30 fps) for `slowdownHoldSeconds` (1.5 
 with at least `minimumCountForStop` cubes alive, spawning pauses and the console
 says so. Set `stopWhenSlow` off to keep spawning regardless.
 
-## Test 03 — shortest path through a maze
+## Test 03 — chase a target through a maze
 
-**Goal**: an AI in a generated maze walks the shortest path out, and the test
-proves afterwards that it did.
+**Goal**: an AI in a generated maze chases a target object standing on the exit
+— the `moveTowards(NavMeshAgent, Object3D, speed)` brain — and the test proves
+afterwards that it really walked.
 
 Scene: an empty GameObject with **`MazeTestSetup`** on it. It finds or creates
 the `MazeGeneratorController` (ground plane + random maze + entry/exit markers +
 runtime-baked NavMesh) and creates the runner: capsule + `NavMeshAgent` +
-`MazeRunnerAI` + the recorder.
+`TestAI` + the recorder.
 
-The maze is a **perfect maze** from an iterative depth-first search, so every cell
-is reachable and entry → exit always has a route; `MazeGeneratorController` also
-proves that at runtime with a BFS over the same grid and logs the corridor length
-it found. Walls are cubes with colliders, laid on the ground plane's own height
-(`GroundY`), so raising the plane moves the maze with it. `G` rebuilds a new
-random maze (new NavMesh), `B` re-bakes the NavMesh.
+The maze shape has three knobs on the generator: `pathsFromStartToFinish` (1 =
+a perfect maze with exactly one simple path; N opens N−1 extra loops by
+removing walls — "braiding"), `corridorStraightness` (0 = max windiness, 1 =
+long straight galleries — the average tightness) and `tightnessVariation` (0 =
+the same tightness everywhere, higher blends tight regions into loose ones via
+a coarse seeded noise field, so one maze contains both). The base maze is the
+iterative depth-first search, so every cell is reachable and entry → exit
+always has a route; braiding only removes walls, which cannot disconnect it.
+`MazeGeneratorController` proves that at runtime with a BFS over the same grid
+and logs the corridor length it found. Walls are cubes with colliders, laid on
+the ground plane's own height (`GroundY`), so raising the plane moves the maze
+with it. `G` rebuilds a new random maze (new NavMesh), `B` re-bakes the
+NavMesh.
 
-The module (`mazerunner.fsm`) runs once on entry:
-`plannedLength = getPathLength(findPath(getPosition(self), getPosition(exit)))`
-then `findShortestPathAndMove(self, exit)`; its Traversals watch
-`hasReachedDestination(self, exit)` and stop in the terminal `Done` state.
-Because the runner carries a `NavMeshAgent`, the movement system drives it with
-Unity's own `NavMeshAgent.SetDestination`.
+The target: assign one to the generator, or leave it empty — a static marker is
+created standing on the exit area at run time and used as the chase target
+instead. An assigned target may move (test 04's walker drops into the same
+scene); `FollowObject` mode re-reads it every tick.
 
-Three numbers, from three places, decide the verdict:
+The module (`testai.fsm`) posts the goal once in the entry state's `Start{}`:
+`moveTowards(agent, dest, speed)`. `agent` is auto-bound to the runner's
+`NavMeshAgent`; `dest` is the module's only `Object3D` slot, so auto-bind
+would point it at the runner itself — `TestAI.Manual.cs` overrides it with the
+maze's ActiveTarget; `speed` is seeded from `MazeTestSetup.runnerSpeed`. The
+state has no Traversals: it is terminal on purpose, the persistent goal does
+the rest, and the movement system drives the runner with Unity's own
+`NavMeshAgent.SetDestination` (pathfinding, avoidance and off-mesh links are
+the mesh's job).
+
+Two facts decide the verdict:
 
 | number | source |
 | --- | --- |
-| `plannedLength` | the engine's own `findPath` + `getPathLength` inside the module |
 | `travelled` | the recorder's per-frame accumulation of the runner's real movement |
 | `straightLine` | entry → exit in a straight line, measured before the run starts |
 
-**PASS** needs: arrival within `arrivalTolerance` (1 m), `travelled` ≥ straight
-line (you cannot cross a maze shorter than the direct line), and `travelled`
-inside `[0.85, 1.25] × plannedLength` (a wanderer or a teleporting shortcut fails
-this). The **only** skip: `findPath` returned no route at all (no NavMesh under
-the runner) — then the row says `SKIPPED — findPath returned no route`.
+**PASS** needs: arrival within `arrivalTolerance` (1 m) of the target's live
+position, and `travelled` ≥ straight line (you cannot reach a maze exit by
+walking less than the direct line). The route length is reported, not enforced:
+`pathLowerBound` (the BFS corridor in metres) is a lower bound the agent's
+corner-cutting and a moving target legitimately undercut. There are no
+engine-side numbers to compare against — the persistent goal re-plans
+implicitly every tick, which is exactly what makes it track a moving target.
 
-Files: `maze_run.csv` (the verdict row and its numbers) and `maze_trail.csv`
-(per-sample position, distance to the exit, FSM state). The walked route is also
-drawn in the scene with a LineRenderer.
+Files: `maze_run.csv` (the verdict row, plus `pathCells`, `pathLowerBound` and
+`loopsOpened` from the generator) and `maze_trail.csv` (per-sample position,
+distance to the target, FSM state). The walked route is also drawn in the
+scene with a LineRenderer.
 
 Needs no extra package: the bake is `UnityEngine.AI.NavMeshBuilder`, part of the
 built-in `UnityEngine.AIModule`. With a NavMesh baked in the editor instead,

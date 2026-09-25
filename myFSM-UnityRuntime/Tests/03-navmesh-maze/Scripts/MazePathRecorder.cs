@@ -1,29 +1,37 @@
-// Test 03 — checks, afterwards, that the runner really took the shortest path.
+// Test 03 — checks, afterwards, that the runner really chased the target
+// through the maze and arrived at it.
 //
-// Three numbers decide it, and they come from three different places:
+// The AI is the moveTowards(NavMeshAgent, Object3D, speed) brain: it posts a
+// persistent chase goal and never reports a planned route, so the verdict is
+// built from what this recorder measures itself plus two facts from the maze
+// controller:
 //
-//   plannedLength  the module's own findPath()+getPathLength() result — what the
-//                  engine says the route costs (unavailable: the run is marked
-//                  SKIPPED, that is the only skip condition)
-//   travelled      this recorder's own accumulation of the runner's movement,
-//                  sampled every frame — what actually happened in the scene
-//   straightLine   entry to exit in a straight line — a shortest path through a
-//                  maze can never be shorter than that
+//   travelled    this recorder's accumulation of the runner's movement, sampled
+//                every frame — what actually happened in the scene
+//   straightLine entry -> exit in a straight line, measured by the maze
+//                controller. A shortest path through a maze can never be
+//                shorter than this, so a runner that "arrived" without walking
+//                (teleport, dropped into the exit) fails this bound
+//   pathLowerBound (PathCells - 1) * cellSize — the BFS route through the maze
+//                layout, converted to metres. It is a lower bound, not the
+//                plan: wall thickness, the agent's radius (corner cutting) and
+//                diagonal cutting all shave metres off, and with a MOVING
+//                target the runner legitimately shortcuts toward wherever the
+//                target is now. So it is only reported, not enforced — the
+//                strict bounds are straightLine (must beat) and arrival.
 //
-// Verdict: arrived inside `arrivalTolerance` of the exit, travelled >= the
-// straight line, and travelled within [0.85, 1.25] x plannedLength. A runner
-// that wandered (travelled >> planned) or that got teleported along a shortcut
-// (travelled << planned) fails those last two.
+// Verdict: arrived inside `arrivalTolerance` of the target's live position,
+// travelled >= straightLine. The target may be moving, so arrival is measured
+// against where the target is at that moment, not a fixed point.
 //
 // Files (Application.persistentDataPath):
 //   maze_run.csv    one verdict row + the numbers behind it
-//   maze_trail.csv  per-frame positions, distance to the exit, and FSM state
+//   maze_trail.csv  per-frame positions, distance to the target, and FSM state
 
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using UnityEngine;
-using MyFSM.Core;
 using MyFSM.Unity;
 
 namespace MyFSM.Tests
@@ -33,16 +41,15 @@ namespace MyFSM.Tests
     {
         [Header("What to watch")]
         [Tooltip("The runner. Left empty: found on this GameObject.")]
-        public MazeRunnerAI ai;
-        [Tooltip("The exit object. Left empty: the maze controller's exit.")]
-        public Transform exit;
+        public TestAI ai;
+        [Tooltip("The chase target. Left empty: the maze controller's ActiveTarget " +
+                 "(the assigned target, or the static exit marker it created).")]
+        public Transform target;
         public MazeGeneratorController maze;
 
         [Header("Verdict thresholds")]
-        [Tooltip("How close to the exit counts as arrived (metres).")]
+        [Tooltip("How close to the target counts as arrived (metres).")]
         public float arrivalTolerance = 1.0f;
-        public float plannedLengthToleranceLow = 0.85f;
-        public float plannedLengthToleranceHigh = 1.25f;
         [Tooltip("Seconds without arrival before the run is reported as stuck.")]
         public float giveUpAfterSeconds = 300f;
 
@@ -59,7 +66,6 @@ namespace MyFSM.Tests
         // Results
         // ------------------------------------------------------------------
 
-        public float PlannedLength { get; private set; } = -1f;
         public float Travelled { get; private set; }
         public float StraightLine { get; private set; }
         public float ArrivalError { get; private set; } = -1f;
@@ -80,7 +86,7 @@ namespace MyFSM.Tests
 
         private void Awake()
         {
-            if (ai == null) ai = GetComponent<MazeRunnerAI>();
+            if (ai == null) ai = GetComponent<TestAI>();
             if (maze == null) maze = FindObjectOfType<MazeGeneratorController>();
         }
 
@@ -88,7 +94,7 @@ namespace MyFSM.Tests
         {
             _startTime = Time.time;
             _lastPosition = ai.transform.position;
-            if (exit == null && maze != null) exit = maze.Exit;
+            if (target == null && maze != null) target = maze.ActiveTarget;
 
             if (drawTrail)
             {
@@ -102,39 +108,32 @@ namespace MyFSM.Tests
                 _trail.endColor = new Color(1f, 0.5f, 0f);
             }
 
-            if (exit == null)
+            if (target == null || maze == null)
             {
-                Debug.LogWarning("[maze-03] no exit transform — set `exit` or add the maze controller.", this);
+                Skipped = true;
+                Verdict = "SKIPPED — no target to watch (assign a target or add the maze controller)";
+                Debug.LogWarning("[maze-03] " + Verdict, this);
             }
             else
             {
                 // The straight line is an entry-to-exit fact: measure it now,
                 // before the runner has moved, not at the end of the run.
-                StraightLine = maze != null
-                    ? maze.StraightDistance
-                    : HorizontalDistance(ai.transform.position, exit.position);
+                StraightLine = maze.StraightDistance;
             }
         }
 
         private void Update()
         {
-            if (_finished || ai == null) return;
+            if (_finished || ai == null || target == null) return;
 
             Vector3 position = ai.transform.position;
             Travelled += HorizontalDistance(_lastPosition, position);
             _lastPosition = position;
 
-            ReadModuleNumbers();
-
-            if (exit != null)
-            {
-                ArrivalError = HorizontalDistance(position, exit.position);
-                if (ArrivalError <= arrivalTolerance) Arrived = true;
-            }
-
-            FsmValue arrivedValue;
-            if (ai.TryGetVariable("arrived", out arrivedValue) && arrivedValue.B)
-                Arrived = true;
+            // Against the target's LIVE position: it may be moving (test 04's
+            // walker), so "arrived" means caught up with it, not reached a point.
+            ArrivalError = HorizontalDistance(position, target.position);
+            if (ArrivalError <= arrivalTolerance) Arrived = true;
 
             _frameCounter++;
             if (recordTrail && trailEveryFrames > 0 && _frameCounter % trailEveryFrames == 0)
@@ -147,15 +146,6 @@ namespace MyFSM.Tests
                 return;
             }
             if (Arrived) Finish();
-        }
-
-        private void ReadModuleNumbers()
-        {
-            if (PlannedLength > 0f) return;
-            FsmValue value;
-            if (ai.TryGetVariable("plannedLength", out value) && value.Kind == FsmValueKind.Float
-                && value.F > 0f)
-                PlannedLength = value.F;
         }
 
         private void AddTrailPoint(Vector3 position)
@@ -188,27 +178,22 @@ namespace MyFSM.Tests
             _finished = true;
             RunSeconds = Time.time - _startTime;
 
-            if (PlannedLength <= 0f)
+            bool arrivedOk = Arrived && ArrivalError >= 0f && ArrivalError <= arrivalTolerance;
+            // The one non-negotiable fact: you cannot arrive at a maze exit by
+            // walking less than the straight-line distance to it.
+            bool notShorter = Travelled + 0.001f >= StraightLine;
+
+            if (arrivedOk && notShorter)
             {
-                // The one legitimate skip: the navigation built-in did not give a
-                // path (no NavMesh where the runner stands), so there is nothing
-                // to compare the walk against.
-                Skipped = true;
-                Verdict = "SKIPPED — findPath returned no route (NavMesh missing at the runner's position?)";
+                Verdict = "PASS — arrived, travelled " + Travelled.ToString("F1")
+                          + " m (straight line " + StraightLine.ToString("F1") + " m)";
             }
             else
             {
-                bool arrivedOk = Arrived && ArrivalError >= 0f && ArrivalError <= arrivalTolerance;
-                bool notShorter = Travelled + 0.001f >= StraightLine;
-                bool followsPlan = Travelled >= PlannedLength * plannedLengthToleranceLow
-                                   && Travelled <= PlannedLength * plannedLengthToleranceHigh;
-                Verdict = (arrivedOk && notShorter && followsPlan ? "PASS" : "FAIL")
-                          + " — arrived " + (arrivedOk ? "yes" : "no")
-                          + ", travelled " + Travelled.ToString("F1") + " m vs planned "
-                          + PlannedLength.ToString("F1") + " m (straight line "
-                          + StraightLine.ToString("F1") + " m)";
+                Verdict = "FAIL — arrived " + (arrivedOk ? "yes" : "no")
+                          + ", travelled " + Travelled.ToString("F1")
+                          + " m vs straight line " + StraightLine.ToString("F1") + " m";
                 if (!notShorter) Verdict += " [shorter than a straight line: it did not walk]";
-                else if (!followsPlan) Verdict += " [walked a different route than the planned one]";
             }
 
             Debug.Log("[maze-03] " + Verdict + " in " + RunSeconds.ToString("F1") + " s"
@@ -226,24 +211,23 @@ namespace MyFSM.Tests
             _wroteFiles = true;
 
             StringBuilder row = new StringBuilder();
-            row.Append("plannedLength,travelled,straightLine,pathCells,pathLowerBound,arrived,arrivalError,seconds,detourRatio,verdict\n");
-            float detour = PlannedLength > 0f ? Travelled / PlannedLength : -1f;
-            row.Append(PlannedLength.ToString("F3")).Append(',')
-               .Append(Travelled.ToString("F3")).Append(',')
+            row.Append("travelled,straightLine,pathCells,pathLowerBound,loopsOpened,")
+               .Append("arrived,arrivalError,seconds,verdict\n");
+            row.Append(Travelled.ToString("F3")).Append(',')
                .Append(StraightLine.ToString("F3")).Append(',')
                .Append(maze != null ? maze.PathCells.ToString() : "-").Append(',')
                .Append(maze != null ? maze.PathLengthLowerBound.ToString("F1") : "-").Append(',')
+               .Append(maze != null ? maze.LoopsOpened.ToString() : "-").Append(',')
                .Append(Arrived ? "yes" : "no").Append(',')
                .Append(ArrivalError.ToString("F3")).Append(',')
                .Append(RunSeconds.ToString("F3")).Append(',')
-               .Append(detour.ToString("F3")).Append(',')
                .Append('"').Append(Verdict).Append('"').Append('\n');
             File.WriteAllText(VerdictPath, row.ToString());
 
             if (recordTrail && _trailPositions.Count > 0)
             {
                 StringBuilder trail = new StringBuilder();
-                trail.Append("index,time,x,y,z,distanceToExit,state\n");
+                trail.Append("index,time,x,y,z,distanceToTarget,state\n");
                 for (int i = 0; i < _trailPositions.Count; i++)
                 {
                     Vector3 p = _trailPositions[i];
@@ -252,7 +236,7 @@ namespace MyFSM.Tests
                          .Append(p.x.ToString("F3")).Append(',')
                          .Append(p.y.ToString("F3")).Append(',')
                          .Append(p.z.ToString("F3")).Append(',')
-                         .Append((exit != null ? HorizontalDistance(p, exit.position) : -1f).ToString("F3"))
+                         .Append((target != null ? HorizontalDistance(p, target.position) : -1f).ToString("F3"))
                          .Append(',')
                          .Append(_trailStates[i]).Append('\n');
                 }

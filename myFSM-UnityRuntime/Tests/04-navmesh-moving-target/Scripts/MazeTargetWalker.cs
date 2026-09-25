@@ -61,7 +61,7 @@ namespace MyFSM.Tests
         private Vector3 _lastPosition;
         private Transform _currentEnd;
         private float _pauseUntil;
-        private MazeRunnerAI _runner;
+        private TestAI _runner;
         private bool _warnedNoEnds;
 
         private void Awake()
@@ -103,7 +103,7 @@ namespace MyFSM.Tests
             if (endA == null && endB == null && _runner == null)
             {
                 // No maze in the scene: fall back to the runner of test 03.
-                _runner = FindObjectOfType<MazeRunnerAI>();
+                _runner = FindObjectOfType<TestAI>();
                 if (_runner != null) endA = _runner.transform;
             }
         }

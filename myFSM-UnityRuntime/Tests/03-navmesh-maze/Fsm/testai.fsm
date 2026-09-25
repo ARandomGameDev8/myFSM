@@ -1,0 +1,28 @@
+// Test 03 — the brain: a persistent chase with the NavMesh.
+//
+// moveTowards(NavMeshAgent, Object3D, speed) posts a FollowObject goal: the
+// runtime re-reads the target's position every tick and hands it to the
+// NavMeshAgent, which does the actual pathfinding through the maze. The goal
+// persists — the call happens once in Start{} and keeps steering forever, and
+// even after arrival the chase resumes on its own if the target wanders off.
+// (Test 02 re-posts moveTowards every tick instead, because there the speed
+// and destination are meant to be re-read; here one call is the point.)
+
+var NavMeshAgent agent;  // slot 0 - the mover; auto-bound (unique tag) to this GameObject's agent
+var Object3D    dest;    // slot 1 - the chase target; bind by hand (TestAI.Manual.cs)
+var float       speed;   // slot 2 - chase speed (u/s); bound from MazeTestSetup.runnerSpeed
+
+State Chase {
+    Actions {
+        Start {
+            moveTowards(agent, dest, speed);
+        }
+        Update { }
+    }
+    // No Traversals: the state is terminal and that is the point. The goal is
+    // persistent — Start{} posts it once, the movement system steers from it
+    // every tick, and there is nothing to transition to. A terminal state is
+    // how the runtime expresses "no decisions left to make".
+}
+
+@ENTRY Chase

@@ -1,0 +1,42 @@
+======================================================================
+ FSMC DISASSEMBLY
+ file     Fsm/testai.fsmb  (188 bytes)
+ format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
+ check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
+======================================================================
+
+ SECTION MAP — 7 sections tile the file after the 36-byte header
+   [id]  section    file range           size     entries
+   [1]  Global     0x00000024 .. 0x00000024   0 B    0
+   [2]  Runtime    0x00000024 .. 0x00000053   47 B   3
+   [3]  Temporary  0x00000053 .. 0x00000053   0 B    0
+   [4]  State      0x00000053 .. 0x00000062   15 B   1
+   [5]  Token      0x00000062 .. 0x0000006E   12 B   1
+   [6]  AST        0x0000006E .. 0x000000B2   68 B   8
+   [7]  FSM        0x000000B2 .. 0x000000BC   10 B   1
+
+ SECTION [1] GLOBAL VARIABLES (0)
+
+ SECTION [2] RUNTIME VARIABLES (3)
+   #0  agent           NavMeshAgent          slot 0
+   #1  dest            Object3D              slot 1
+   #2  speed           float                 slot 2
+
+ SECTION [3] TEMPORARY VARIABLES (0)
+
+ SECTION [4] STATES (1)
+   #0  Chase           ast root #0
+
+ SECTION [5] TOKENS / INSTRUCTION STREAMS (per state, execution order)
+--- state #0 'Chase' — 1 instruction(s) ---
+   0   CALL    moveTowards(agent, dest, speed)   [fn 0x0625]
+
+ SECTION [6] AST (8 tokens) — per-state tree, pre-order (#[n] = token index)
+--- state #0 'Chase' ---
+#[0] STATE   [ENTRY]
+   #[1] ACTIONS
+      #[2] START   (runs once, on state entry)
+         #[3] CALL moveTowards(NavMeshAgent, Object3D, float)
+      #[7] UPDATE  (runs every tick)
+
+ SECTION [7] FSM ADJACENCY (goto transitions, in source order)
