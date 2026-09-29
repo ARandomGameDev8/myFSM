@@ -497,7 +497,7 @@ namespace RPGCharacterStats
             }
         }
 
-        internal static string TypeWord(StatType t)
+        public static string TypeWord(StatType t)
         {
             return t == StatType.Int ? "int" : t == StatType.Bool ? "bool" : "float";
         }

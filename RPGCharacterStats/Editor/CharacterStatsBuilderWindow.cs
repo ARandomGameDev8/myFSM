@@ -144,15 +144,13 @@ namespace RPGCharacterStats.EditorTools
             if (row.type != StatType.Bool && row.hasMin && row.hasMax && row.min > row.max)
                 return "min > max";
 
-            float d;
-            if (row.type != StatType.Bool && !float.TryParse(row.defaultValue, out d))
-                return "default \"" + row.defaultValue + "\" is not a number";
+            if (row.type == StatType.Bool) return null;
 
-            if (row.type != StatType.Bool)
-            {
-                if (row.hasMin && d < row.min) return "default below min";
-                if (row.hasMax && d > row.max) return "default above max";
-            }
+            float d;
+            if (!float.TryParse(row.defaultValue, out d))
+                return "default \"" + row.defaultValue + "\" is not a number";
+            if (row.hasMin && d < row.min) return "default below min";
+            if (row.hasMax && d > row.max) return "default above max";
             return null;
         }
 
