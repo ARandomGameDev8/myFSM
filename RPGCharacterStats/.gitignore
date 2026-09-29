@@ -1,6 +1,8 @@
 # .NET sandbox harness build outputs (same convention as myFSM-UnityRuntime)
-[Ss]andbox/bin/
-[Ss]andbox/obj/
+# The folder is named "Sandbox~" so Unity never imports it (no stub scripts,
+# no compiled RPGCharacterStatsSandbox.dll leaking into Assets).
+[Ss]andbox~/bin/
+[Ss]andbox~/obj/
 .vs/
 .idea/
 *.user

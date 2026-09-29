@@ -19,16 +19,19 @@ Full design: `Docs/RPG_Character_Stats_System_Design_Document.md` (the document 
 | `UI/` | `StatBar` and the five concrete bars | health/shield/stamina/magic/XP visuals |
 | `Editor/` | The four visual editors | Stats / Gameplay / Character / Registry windows |
 | `Samples/` | `RPGStats.charstat`, `RPGGameplay.gameplaystat`, `OrcWarriorFSM` | end-to-end example from the design doc |
-| `Sandbox/` | Headless compile + smoke-test harness | `dotnet run` verification, no Unity needed |
+| `Sandbox~/` | Headless compile + smoke-test harness | `dotnet run` verification, no Unity needed |
 
 ## Verification (no Unity required)
 
 ```bash
-cd RPGCharacterStats/Sandbox
+cd RPGCharacterStats/Sandbox~
 dotnet run
 ```
 
-The sandbox compiles the whole runtime against stub Unity types (same trick as
+The folder is named `Sandbox~` (trailing tilde) so **Unity ignores it entirely** —
+if the package folder is ever copied under a project's `Assets/`, the stub types
+and the compiled `RPGCharacterStatsSandbox.dll` are never imported (importing that
+dll makes every Unity type ambiguous, CS0433). The sandbox compiles the whole runtime against stub Unity types (same trick as
 `myFSM-UnityRuntime/Sandbox`) and runs the RPGCharacterStatsTests suite: the
 formula DSL (lexer, parser, dependency order, runtime recalc, blackboard), the
 `.charstat` round-trip, registry tags, and the spawn pipeline component matrix.
