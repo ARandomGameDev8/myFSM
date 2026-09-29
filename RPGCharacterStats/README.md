@@ -17,7 +17,7 @@ Full design: `Docs/RPG_Character_Stats_System_Design_Document.md` (the document 
 | `Definitions/` | Character definitions + registry | `CharacterDefinition` tree, `CharacterRegistry`, tags |
 | `Runtime/` | `Character` hierarchy + `CharacterBuilderServer` | spawn pipeline, 2D/3D movement controllers |
 | `UI/` | `StatBar` and the five concrete bars | health/shield/stamina/magic/XP visuals |
-| `Editor/` | The four visual editors | Stats / Gameplay / Character / Registry windows |
+| `Editor/` | The four visual editors + the server's inspector | Stats / Gameplay / Character / Registry windows; `CharacterBuilderServer`'s custom inspector opens them and spawns from the scene |
 | `Samples/` | `RPGStats.charstat`, `RPGGameplay.gameplaystat`, `OrcWarriorFSM` | end-to-end example from the design doc |
 | `Sandbox~/` | Headless compile + smoke-test harness | `dotnet run` verification, no Unity needed |
 

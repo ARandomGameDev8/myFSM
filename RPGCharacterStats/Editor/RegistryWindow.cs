@@ -109,8 +109,9 @@ namespace RPGCharacterStats.EditorTools
 
         /// <summary>Pull every saved CharacterDefinition asset into the
         /// registry so spawned characters survive editor restarts by
-        /// reloading the same assets.</summary>
-        private static void LoadDefinitions(CharacterBuilderServer server)
+        /// reloading the same assets. Public so the server's inspector can
+        /// reuse it (same library, two entry points).</summary>
+        public static void LoadDefinitions(CharacterBuilderServer server)
         {
             string[] guids = AssetDatabase.FindAssets("t:CharacterDefinition");
             for (int i = 0; i < guids.Length; i++)
