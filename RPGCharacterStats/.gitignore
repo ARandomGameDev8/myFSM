@@ -1,0 +1,6 @@
+# .NET sandbox harness build outputs (same convention as myFSM-UnityRuntime)
+[Ss]andbox/bin/
+[Ss]andbox/obj/
+.vs/
+.idea/
+*.user

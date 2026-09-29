@@ -1,0 +1,31 @@
+// RPGGameplay.gameplaystat — the section 23 example formulas, verbatim.
+// The mathematics: derived stats, one primary per formula, secondaries as
+// needed. Formulas that read other formulas' outputs (MaxHP reads Shield
+// here) are evaluated after them automatically (topological order).
+
+float MaxHP: (primary float Vitality, float K) => {
+    float base = Vitality * 10;
+    return clamp(base + K, 0, 9999);
+}
+
+bool ImmuneToPoison: (primary bool IsUndead) => {
+    return IsUndead;
+}
+
+int XPToNextLevel: (primary int Level, float Multiplier) => {
+    int base = Level * 100;
+    return floor(base * Multiplier);
+}
+
+float Power: (primary float Strength, float Dexterity, float Rage) => {
+    float raw = Strength * 2 + Dexterity * 0.5;
+    if (Rage > 0) {
+        raw = raw * (1 + Rage * 0.1);
+    }
+    return round(raw);
+}
+
+float EffectiveHP: (primary float Vitality, float ArmorMultiplier) => {
+    float hp = Vitality * 10 + 50;
+    return floor(hp * ArmorMultiplier);
+}

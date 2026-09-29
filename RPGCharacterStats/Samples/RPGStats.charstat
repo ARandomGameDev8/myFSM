@@ -1,0 +1,8 @@
+// RPGStats.charstat — the section 23 example preset, verbatim.
+// The vocabulary: what stats an RPG character of this kind can have.
+
+float Strength:  (min: 0, max: 999, default: 10)
+float Vitality:  (min: 0, max: 999, default: 10)
+float Dexterity: (min: 0, max: 999, default: 10)
+int Level:       (min: 1, max: 100, default: 1)
+bool IsUndead:   (default: false)
