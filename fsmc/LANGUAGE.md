@@ -381,7 +381,7 @@ Actions {
             temp Vector3 dir = normalize(directionTo(player, enemy)); // if-body frame
             moveTowards(agent, dir, 5.0f);            // Tier 3: one CALL
         } else if (lastDist < 3.0f) {
-            followTarget(agent, enemy);
+            moveTowards(agent, enemy, 4.0f); // live object goal
         } else {
             stopMovement(agent);
         }
@@ -598,18 +598,18 @@ Both failure modes list your argument types **and every candidate** with its
 full signature, e.g.:
 
 ```
-fsm.fsm:5:9: error: no overload of 'goTo' matches arguments (NavMeshAgent, int).
-Candidates: goTo(NavMeshAgent agent, Vector3 dest);
-            goTo(NavMeshAgent agent, Object3D dest);
-            goTo(Object3D agent, Vector3 dest);
-            goTo(Object3D agent, Object3D dest);
-            goTo(Object2D agent, Vector2 dest);
-            goTo(Object2D agent, Object2D dest)
+fsm.fsm:5:9: error: no overload of 'moveTowards' matches arguments (NavMeshAgent, int).
+Candidates: moveTowards(NavMeshAgent agent, Vector3 dest, float speed);
+            moveTowards(NavMeshAgent agent, Object3D dest, float speed);
+            moveTowards(Object3D agent, Vector3 dest, float speed);
+            moveTowards(Object3D agent, Object3D dest, float speed);
+            moveTowards(Object2D agent, Vector2 dest, float speed);
+            moveTowards(Object2D agent, Object2D dest, float speed)
 ```
 
 Practical consequences:
 
-- `goTo(agent, 5)` fails — there is no `(NavMeshAgent, int)` overload.
+- `moveTowards(agent, 5)` fails — there is no `(NavMeshAgent, int)` overload.
 - A `float` where a `double` is expected fails — pass a `double` expression.
 - 2D and 3D are separate overloads: `getPosition(Object3D)` returns `Vector3`,
   `getPosition(Object2D)` returns `Vector2`. Mixed (e.g. a `Camera3D` and an
@@ -626,9 +626,9 @@ them.
 | 2 — mutate | Writes engine state | statement only (`emit`, `setPosition`, …) | first argument (the mutated object) must **not** be a static `const` — pass a runtime `var` or `temp` |
 | 3 — Controller-driven | Navigation / steering / control that the Controller carries out over time | statement only | the driven object must be a **variable** (runtime `var` or `temp`) |
 
-The Tier 3 functions that drive an object — `goTo`, `followTarget`,
-`findShortestPathAndMove`, `follow`, `sprintTowards`, `moveTowards`,
-`stopMovement`, `lookAt` — take that object as their **first** argument, so
+The Tier 3 functions that drive an object — `findShortestPathAndMove`,
+`moveTowards`, `stopMovement`, `lookAt` — take that object as their **first**
+argument, so
 that argument has to be a variable: a literal, a static `const`, or the result
 of another call will not do. `wait` and `waitUntil` are Tier 3 as well but
 drive no object, so any expression is fine there (`wait(0.5f)`).
@@ -693,7 +693,9 @@ built-in function takes one (see §11 for the operators that do exist).
 
 ## 18. Built-in functions
 
-All 179 overloads (single source of truth: `lib/builtin_functions.cpp`).
+All 159 overloads (single source of truth: `lib/builtin_functions.cpp`;
+v0.5 retired goTo / followTarget / follow / sprintTowards — redundant with
+moveTowards — and slots 0x060A–0x0623 stay unused).
 `T` = tier (1 query / 2 mutate / 3 Controller-driven). Where a name has
 several overloads, each is listed on its own line.
 
@@ -794,11 +796,7 @@ several overloads, each is listed on its own line.
 | getNextWaypoint | 1 | `(int path) → Vector3` |
 | getPathLength | 1 | `(int path) → float` |
 | hasReachedDestination | 1 | `(NavMeshAgent agent, Vector3 tgt) → bool` ; `(NavMeshAgent agent, Object3D tgt) → bool` ; `(Object3D agent, Vector3 tgt) → bool` ; `(Object3D agent, Object3D tgt) → bool` ; `(Object2D agent, Vector2 tgt) → bool` ; `(Object2D agent, Object2D tgt) → bool` |
-| goTo | 3 | `(NavMeshAgent agent, Vector3 dest)` ; `(NavMeshAgent agent, Object3D dest)` ; `(Object3D agent, Vector3 dest)` ; `(Object3D agent, Object3D dest)` ; `(Object2D agent, Vector2 dest)` ; `(Object2D agent, Object2D dest)` |
-| followTarget | 3 | `(NavMeshAgent agent, Object3D tgt)` ; `(NavMeshAgent agent, Object2D tgt)` ; `(Object3D agent, Object3D tgt)` ; `(Object2D agent, Object2D tgt)` |
 | findShortestPathAndMove | 3 | `(NavMeshAgent agent, Vector3 tgt)` ; `(NavMeshAgent agent, Object3D tgt)` ; `(Object3D agent, Vector3 tgt)` ; `(Object3D agent, Object3D tgt)` ; `(Object2D agent, Vector2 tgt)` ; `(Object2D agent, Object2D tgt)` |
-| follow | 3 | `(NavMeshAgent agent, Object3D tgt)` ; `(NavMeshAgent agent, Object2D tgt)` ; `(Object3D agent, Object3D tgt)` ; `(Object2D agent, Object2D tgt)` |
-| sprintTowards | 3 | `(NavMeshAgent agent, Vector3 dest, float speedMult)` ; `(NavMeshAgent agent, Object3D dest, float speedMult)` ; `(Object3D agent, Vector3 dest, float speedMult)` ; `(Object3D agent, Object3D dest, float speedMult)` ; `(Object2D agent, Vector2 dest, float speedMult)` ; `(Object2D agent, Object2D dest, float speedMult)` |
 | moveTowards | 3 | `(NavMeshAgent agent, Vector3 dest, float speed)` ; `(NavMeshAgent agent, Object3D dest, float speed)` ; `(Object3D agent, Vector3 dest, float speed)` ; `(Object3D agent, Object3D dest, float speed)` ; `(Object2D agent, Vector2 dest, float speed)` ; `(Object2D agent, Object2D dest, float speed)` |
 | stopMovement | 3 | `(NavMeshAgent agent)` ; `(Object3D agent)` ; `(Object2D agent)` |
 
@@ -843,7 +841,7 @@ several overloads, each is listed on its own line.
 Every diagnostic is formatted `file:line:col: kind: message`:
 
 ```
-fsm.fsm:5:9:  error: no overload of 'goTo' matches arguments (NavMeshAgent, int). Candidates: ...
+fsm.fsm:5:9:  error: no overload of 'moveTowards' matches arguments (NavMeshAgent, int). Candidates: ...
 fsm.fsm:8:9:  warning: bare goto before any if: subsequent statements are dead code (this transition always fires)
 1 error, 1 warning
 ```

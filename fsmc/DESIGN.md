@@ -53,8 +53,7 @@ operate on a well-formed forest.
 
 ### Determinism
 
-* Single source of truth for names/IDs: `BuiltinTypes` (22 types) and
-  `BuiltinFunctions` (179 overloads) — `lib/`. Every type name is resolved via
+* Single source of truth for names/IDs: `BuiltinTypes` (22 types) and   `BuiltinFunctions` (159 overloads) — `lib/`. Every type name is resolved via
   `BuiltinTypes::find`, every function via `BuiltinFunctions::find`; no list is
   duplicated elsewhere.
 * The AST is an ordered forest; every container keeps declaration/execution
@@ -391,8 +390,8 @@ Tier 3: the driven object (first parameter) must be a variable — see §3.7.
   the mutated handle (must be a runtime variable or temp).
 * **Tier 3** — Controller-driven (navigation/steering/control). Statement
   level only; compiles to one `OpCall` like every other call. The overloads
-  that drive an object (`goTo`, `followTarget`, `findShortestPathAndMove`,
-  `follow`, `sprintTowards`, `moveTowards`, `stopMovement`, `lookAt`) take it
+  that drive an object (`findShortestPathAndMove`, `moveTowards`,
+  `stopMovement`, `lookAt`) take it
   as their first argument, which must therefore be a runtime variable or a
   temp (`requiresVariableTarget` in the registry). `wait` / `waitUntil` are
   Tier 3 but drive no object, so any expression is accepted.
@@ -426,7 +425,7 @@ is the only copy.
 
 ---
 
-## 5. Function registry (`BuiltinFunctions`, 179 overloads)
+## 5. Function registry (`BuiltinFunctions`, 159 overloads)
 
 IDs are **assigned once**, sequentially within each category's range, and are
 stable forever: adding an overload appends at the end of the category's used
@@ -567,32 +566,12 @@ Full ID table (name, id, tier, signature → return):
 | 0x0607 | hasReachedDestination | 1 | (Object3D agent, Object3D tgt) → bool |
 | 0x0608 | hasReachedDestination | 1 | (Object2D agent, Vector2 tgt) → bool |
 | 0x0609 | hasReachedDestination | 1 | (Object2D agent, Object2D tgt) → bool |
-| 0x060A | goTo | 3 | (NavMeshAgent agent, Vector3 dest) → void — drives `agent` |
-| 0x060B | goTo | 3 | (NavMeshAgent agent, Object3D dest) → void — drives `agent` |
-| 0x060C | goTo | 3 | (Object3D agent, Vector3 dest) → void — drives `agent` |
-| 0x060D | goTo | 3 | (Object3D agent, Object3D dest) → void — drives `agent` |
-| 0x060E | goTo | 3 | (Object2D agent, Vector2 dest) → void — drives `agent` |
-| 0x060F | goTo | 3 | (Object2D agent, Object2D dest) → void — drives `agent` |
-| 0x0610 | followTarget | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
-| 0x0611 | followTarget | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
-| 0x0612 | followTarget | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
-| 0x0613 | followTarget | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
 | 0x0614 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Vector3 tgt) → void — drives `agent` |
 | 0x0615 | findShortestPathAndMove | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
 | 0x0616 | findShortestPathAndMove | 3 | (Object3D agent, Vector3 tgt) → void — drives `agent` |
 | 0x0617 | findShortestPathAndMove | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
 | 0x0618 | findShortestPathAndMove | 3 | (Object2D agent, Vector2 tgt) → void — drives `agent` |
 | 0x0619 | findShortestPathAndMove | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
-| 0x061A | follow | 3 | (NavMeshAgent agent, Object3D tgt) → void — drives `agent` |
-| 0x061B | follow | 3 | (NavMeshAgent agent, Object2D tgt) → void — drives `agent` |
-| 0x061C | follow | 3 | (Object3D agent, Object3D tgt) → void — drives `agent` |
-| 0x061D | follow | 3 | (Object2D agent, Object2D tgt) → void — drives `agent` |
-| 0x061E | sprintTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speedMult) → void — drives `agent` |
-| 0x061F | sprintTowards | 3 | (NavMeshAgent agent, Object3D dest, float speedMult) → void — drives `agent` |
-| 0x0620 | sprintTowards | 3 | (Object3D agent, Vector3 dest, float speedMult) → void — drives `agent` |
-| 0x0621 | sprintTowards | 3 | (Object3D agent, Object3D dest, float speedMult) → void — drives `agent` |
-| 0x0622 | sprintTowards | 3 | (Object2D agent, Vector2 dest, float speedMult) → void — drives `agent` |
-| 0x0623 | sprintTowards | 3 | (Object2D agent, Object2D dest, float speedMult) → void — drives `agent` |
 | 0x0624 | moveTowards | 3 | (NavMeshAgent agent, Vector3 dest, float speed) → void — drives `agent` |
 | 0x0625 | moveTowards | 3 | (NavMeshAgent agent, Object3D dest, float speed) → void — drives `agent` |
 | 0x0626 | moveTowards | 3 | (Object3D agent, Vector3 dest, float speed) → void — drives `agent` |
@@ -639,10 +618,11 @@ Full ID table (name, id, tier, signature → return):
   removed overloads leave a permanent gap.
 * The category base + range bounds above are part of the module ABI: readers
   may reject out-of-range IDs.
-* `lib_functions` tests enforce: 179 overloads, unique IDs, reachability by
-  name, per-category sequential layout, and the per-overload
-  `requiresVariableTarget` flags (37 Tier 3 overloads set, `wait`/`waitUntil`
-  and every Tier 1/2 clear).
+* `lib_functions` tests enforce: 159 overloads (v0.5: goTo / followTarget /
+  follow / sprintTowards retired, slots 0x060A–0x0623 unused), unique IDs,
+  reachability by name, in-category monotone IDs with retirement gaps, and the
+  per-overload `requiresVariableTarget` flags (17 Tier 3 overloads set,
+  `wait`/`waitUntil` and every Tier 1/2 clear).
 
 In the table above, "drives `X`" marks a Tier 3 overload whose first parameter
 is the object it drives: the source must pass a runtime variable or a temp
@@ -707,11 +687,12 @@ signature; >1 match → ambiguous error, same list.
    `[4] state-addr [2] instr-count` per state — instead of one flat
    instruction list; makes each state's stream self-locating and the frame
    count cross-checkable against the state directory.
-3. **`goTo` has 6 overloads** — `{NavMeshAgent × {Vector3, Object3D}}`,
-   `{Object3D × {Vector3, Object3D}}`, `{Object2D × {Vector2, Object2D}}` —
-   i.e. `NavMeshAgent` (a 3D-only type) is not paired with `Object2D`. This
-   keeps Navigation at 45 overloads (0x0600–0x062C) and mirrors the
-   `hasReachedDestination`/`followTarget`/`follow` overload shapes.
+3. **One movement call**: the four point/follow movers — `goTo`,
+   `followTarget`, `follow`, `sprintTowards` (20 overloads, 0x060A–0x0623) —
+   were retired in v0.5: `moveTowards` covers all of them (an absolute speed
+   instead of base × multiplier, and an object destination is live either
+   way). Navigation is 23 overloads (0x0600–0x062C) with the retired slots
+   left as permanent gaps.
 4. **Runtime-variable ownership is not encoded at all** (module v0.3). The
    spec's handoff — an `owner` byte per runtime variable plus `CLAIM`/
    `RELEASE` instructions around Tier 3 calls — was dropped: the DSL makes no
@@ -772,12 +753,12 @@ CTest suites (hand-rolled framework, `fsmc_tests [filter]`):
 | Suite | Covers |
 |---|---|
 | `lib_types` | 22 types, name reachability, tag uniqueness, spec table (incl. `string` at 0x05 and `String` still unknown) |
-| `lib_functions` | 179 overloads, unique/stable IDs, sequential category ranges, spec overload counts, Tier-3 `requiresVariableTarget` flags |
+| `lib_functions` | 159 overloads, unique/stable IDs, in-category monotone ranges (retirement gaps allowed), spec overload counts, Tier-3 `requiresVariableTarget` flags |
 | `lexer` | keywords (case-sensitive, `Start`/`Update` included — and `Startx`/`xUpdate` staying identifiers), literal kinds (`int`/`float`/`double`), operators, `//` disambiguation, comments, strings, `@ENTRY`, line/col tracking |
 | `parser` | AST shape, unknown types/variables, const folding (precedence, `//` floor toward −∞, int/int→float), vector literals, operator type rules, string rejection, runtime-init rejection |
 | `scope` | in/out of scope, shadowing, same-block redeclaration, visible-from-declaration-onward, one frame per block (same block shares a frame; sibling branches do not), state-level temps (visible in Actions + Traversals; **not** visible in other states), file-level temp rejection, plus direct `ScopeStack` unit tests (unbounded nesting, innermost-first lookup, pop discards, unique frame ids) |
 | `phases` | the `Start{}`/`Update{}` rule set end to end: both blocks mandatory (and the two diagnostics when neither is present), each exactly once, `Start{}` first, empty phases allowed, every non-`temp` statement rejected directly in the `Actions` body (call / assignment / `if` / `goto`), `temp` declarations allowed there and visible in both phases, phase bodies as sibling frames (a `Start{}` temp unknown in `Update{}` and vice versa, one name reusable in both), `Start`/`Update` reserved as identifiers, `START`/`UPDATE` as `ACTIONS` children in the AST with no data and per-phase child lists, instruction order `Start` before `Update` (including a `temp` written between the phases, which keeps its source position in both the AST and the instruction stream), nested phase blocks rejected, a temp declared after a phase block invisible inside it, disassembly phase labels, the two `errors/` phase fixtures, validation rejecting a module that lost a phase container, and every fixture declaring both blocks |
-| `overloads` | `goTo` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
+| `overloads` | `moveTowards` success/failure with candidate lists, arity failure, unknown function, Tier-2 const rejection, Tier-3 driven-argument-must-be-a-variable (and `wait`/`waitUntil` accepting literals), temp targets, nested-call type propagation |
 | `traversals` | full failure matrix (empty body, no goto, extra statements, two gotos, else, else-if, temps) + bare-goto warning + adjacency with duplicates preserved |
 | `passes` | per-pass outputs (goto order, adjacency), single-entry rules, duplicate detection, nested-conditional fail / else-if chain succeed, bare-block fail, no CLAIM/RELEASE emitted for Tier-3 calls, structural temp ownership in the AST (each temp's declaration is a child of its owning block token — `STATE`, `ACTIONS` or `IF`), round-trip read-back & compare, corruption rejection, determinism |
 | `golden_bytes` | **pinned 392-byte module** for `tests/fixtures/minimal.fsm` (hand-verified; v0.5 adds the `START`/`UPDATE` container tokens to v0.4's 378 bytes), module version pinned to v0.5 + rejection of v0.1–v0.4 by name, header/offset tiling by independent walk, two-state module contents, byte-identical reruns |

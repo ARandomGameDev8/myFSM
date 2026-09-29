@@ -36,7 +36,7 @@
 #[0] STATE   [ENTRY]
    #[1] ACTIONS
       #[2] START   (runs once, on state entry)
-         #[3] CALL moveTowards(NavMeshAgent, Object3D, float)
-      #[7] UPDATE  (runs every tick)
+      #[3] UPDATE  (runs every tick)
+         #[4] CALL moveTowards(NavMeshAgent, Object3D, float)
 
  SECTION [7] FSM ADJACENCY (goto transitions, in source order)

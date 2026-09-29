@@ -111,6 +111,8 @@ Tests/
     Scripts/TopDownFollowCamera.cs   the follow rig the test adds to the Main Camera
   03-navmesh-maze/                   testai.fsm (188 bytes) + TestAI(.Manual)
     Scripts/MazeInput.cs             keyboard reads (G rebuild, B re-bake)
+    Scripts/MazeOverviewCamera.cs    overhead maze camera (F follows the runner)
+    Scripts/MazeTargetPlayer.cs      the WASD-playable chase target
   04-navmesh-moving-target/          pathchaser.fsm (513 bytes) + PathChaserAI(.Manual)
     Scripts/ChaseInput.cs            keyboard reads (M manual mode, WASD)
   01-state-transitions/Scripts/ZoneInput.cs   the same helper for test 01
@@ -414,7 +416,10 @@ afterwards that it really walked.
 Scene: an empty GameObject with **`MazeTestSetup`** on it. It finds or creates
 the `MazeGeneratorController` (ground plane + random maze + entry/exit markers +
 runtime-baked NavMesh) and creates the runner: capsule + `NavMeshAgent` +
-`TestAI` + the recorder.
+`TestAI` + the recorder. The Main Camera gets the **`MazeOverviewCamera`** rig:
+an overhead shot framing the whole maze (height computed from the grid size and
+FOV, 25° tilt so the walls read as walls), `F` toggles a top-down follow of the
+runner, and the shot re-frames itself after `G` rebuilds the maze.
 
 The maze shape has three knobs on the generator: `pathsFromStartToFinish` (1 =
 a perfect maze with exactly one simple path; N opens N−1 extra loops by
@@ -422,28 +427,34 @@ removing walls — "braiding"), `corridorStraightness` (0 = max windiness, 1 =
 long straight galleries — the average tightness) and `tightnessVariation` (0 =
 the same tightness everywhere, higher blends tight regions into loose ones via
 a coarse seeded noise field, so one maze contains both). The base maze is the
-iterative depth-first search, so every cell is reachable and entry → exit
-always has a route; braiding only removes walls, which cannot disconnect it.
+iterative
+depth-first search, so every cell is reachable and entry → exit always has a
+route; braiding only removes walls, which cannot disconnect it. `seed` 0 (the
+default) draws a fresh seed from the wall clock at every build — a NEW random
+maze every Play and every `G` press; any other value reproduces that maze.
 `MazeGeneratorController` proves that at runtime with a BFS over the same grid
 and logs the corridor length it found. Walls are cubes with colliders, laid on
 the ground plane's own height (`GroundY`), so raising the plane moves the maze
 with it. `G` rebuilds a new random maze (new NavMesh), `B` re-bakes the
 NavMesh.
 
-The target: assign one to the generator, or leave it empty — a static marker is
-created standing on the exit area at run time and used as the chase target
-instead. An assigned target may move (test 04's walker drops into the same
-scene); `FollowObject` mode re-reads it every tick.
+The target: assign one to the generator, or leave it empty — by default a
+PLAYABLE target is created standing on the exit area: a capsule you drive
+with **WASD/arrows** (`MazeTargetPlayer`, moved with `NavMeshAgent.Move`, so
+walls constrain it), and the runner chases you through your own maze.
+`spawnPlayerTarget = false` brings back the old static marker; an assigned
+target (test 04's walker) is used as-is. However the target moves,
+`FollowObject` mode re-reads its position every tick.
 
-The module (`testai.fsm`) posts the goal once in the entry state's `Start{}`:
-`moveTowards(agent, dest, speed)`. `agent` is auto-bound to the runner's
-`NavMeshAgent`; `dest` is the module's only `Object3D` slot, so auto-bind
-would point it at the runner itself — `TestAI.Manual.cs` overrides it with the
-maze's ActiveTarget; `speed` is seeded from `MazeTestSetup.runnerSpeed`. The
-state has no Traversals: it is terminal on purpose, the persistent goal does
-the rest, and the movement system drives the runner with Unity's own
-`NavMeshAgent.SetDestination` (pathfinding, avoidance and off-mesh links are
-the mesh's job).
+The module (`testai.fsm`) re-posts the goal every tick in `Update{}` — the
+re-post idiom: `moveTowards(agent, dest, speed)`, restated each tick with the
+current slot values. `agent` is auto-bound to the runner's `NavMeshAgent`;
+`dest` is the module's only `Object3D` slot, so auto-bind would point it at
+the runner itself — `TestAI.Manual.cs` overrides it with the maze's
+ActiveTarget; `speed` is seeded from `MazeTestSetup.runnerSpeed`. The state
+has no Traversals: it is terminal on purpose, and the movement system drives
+the runner with Unity's own `NavMeshAgent.SetDestination` (pathfinding,
+avoidance and off-mesh links are the mesh's job).
 
 Two facts decide the verdict:
 

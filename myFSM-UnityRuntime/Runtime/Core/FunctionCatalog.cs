@@ -1,4 +1,10 @@
-// myFSM Unity Runtime — built-in function catalog (179 overloads).
+// myFSM Unity Runtime — built-in function catalog (159 overloads).
+//
+// v0.5 note: 179 before the Navigation purge. goTo / followTarget / follow /
+// sprintTowards (20 overloads, slots 0x060A-0x0623) were removed as redundant
+// with moveTowards — a Point goal at base speed, an object goal that is live
+// either way, and an absolute speed cover all four. The slots stay retired:
+// older modules that reference them fail to load with "unknown function id".
 //
 // Mirrors fsmc/lib/builtin_functions (IDs, tiers, signatures) exactly.
 // IDs are stable forever: the runtime dispatches on them, so this table is
@@ -53,7 +59,7 @@ namespace MyFSM.Core
 
     public static class FunctionCatalog
     {
-        public const int ExpectedCount = 179;
+        public const int ExpectedCount = 159;
         public const ushort WaitId = 0x0A00;
         public const ushort WaitUntilId = 0x0A01;
         public const ushort EmitId = 0x0A02;
@@ -192,7 +198,11 @@ namespace MyFSM.Core
                 O(0x0507, "worldToScreen", "Camera", 1, "Vector2", false, "Camera2D cam", "Vector3 world"),
                 O(0x0508, "getViewport", "Camera", 1, "Vector2", false, "Camera3D cam"),
                 O(0x0509, "getViewport", "Camera", 1, "Vector2", false, "Camera2D cam"),
-                // Navigation (0x0600-0x062C, 45)
+                // Navigation (0x0600-0x062C, 23)
+                // Movement is moveTowards + findShortestPathAndMove + stopMovement.
+                // goTo/followTarget/follow/sprintTowards were REMOVED: redundant
+                // with moveTowards (point goal at base/multiplied speed, or object
+                // goal — live either way), and slots 0x060A-0x0623 stay retired.
                 O(0x0600, "findPath", "Navigation", 1, "int", false, "Vector3 from", "Vector3 to"),
                 O(0x0601, "findPath", "Navigation", 1, "int", false, "Vector2 from", "Vector2 to"),
                 O(0x0602, "getNextWaypoint", "Navigation", 1, "Vector3", false, "int path"),
@@ -203,32 +213,12 @@ namespace MyFSM.Core
                 O(0x0607, "hasReachedDestination", "Navigation", 1, "bool", false, "Object3D agent", "Object3D tgt"),
                 O(0x0608, "hasReachedDestination", "Navigation", 1, "bool", false, "Object2D agent", "Vector2 tgt"),
                 O(0x0609, "hasReachedDestination", "Navigation", 1, "bool", false, "Object2D agent", "Object2D tgt"),
-                O(0x060A, "goTo", "Navigation", 3, "void", true, "NavMeshAgent agent", "Vector3 dest"),
-                O(0x060B, "goTo", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D dest"),
-                O(0x060C, "goTo", "Navigation", 3, "void", true, "Object3D agent", "Vector3 dest"),
-                O(0x060D, "goTo", "Navigation", 3, "void", true, "Object3D agent", "Object3D dest"),
-                O(0x060E, "goTo", "Navigation", 3, "void", true, "Object2D agent", "Vector2 dest"),
-                O(0x060F, "goTo", "Navigation", 3, "void", true, "Object2D agent", "Object2D dest"),
-                O(0x0610, "followTarget", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D tgt"),
-                O(0x0611, "followTarget", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object2D tgt"),
-                O(0x0612, "followTarget", "Navigation", 3, "void", true, "Object3D agent", "Object3D tgt"),
-                O(0x0613, "followTarget", "Navigation", 3, "void", true, "Object2D agent", "Object2D tgt"),
                 O(0x0614, "findShortestPathAndMove", "Navigation", 3, "void", true, "NavMeshAgent agent", "Vector3 tgt"),
                 O(0x0615, "findShortestPathAndMove", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D tgt"),
                 O(0x0616, "findShortestPathAndMove", "Navigation", 3, "void", true, "Object3D agent", "Vector3 tgt"),
                 O(0x0617, "findShortestPathAndMove", "Navigation", 3, "void", true, "Object3D agent", "Object3D tgt"),
                 O(0x0618, "findShortestPathAndMove", "Navigation", 3, "void", true, "Object2D agent", "Vector2 tgt"),
                 O(0x0619, "findShortestPathAndMove", "Navigation", 3, "void", true, "Object2D agent", "Object2D tgt"),
-                O(0x061A, "follow", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D tgt"),
-                O(0x061B, "follow", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object2D tgt"),
-                O(0x061C, "follow", "Navigation", 3, "void", true, "Object3D agent", "Object3D tgt"),
-                O(0x061D, "follow", "Navigation", 3, "void", true, "Object2D agent", "Object2D tgt"),
-                O(0x061E, "sprintTowards", "Navigation", 3, "void", true, "NavMeshAgent agent", "Vector3 dest", "float speedMult"),
-                O(0x061F, "sprintTowards", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D dest", "float speedMult"),
-                O(0x0620, "sprintTowards", "Navigation", 3, "void", true, "Object3D agent", "Vector3 dest", "float speedMult"),
-                O(0x0621, "sprintTowards", "Navigation", 3, "void", true, "Object3D agent", "Object3D dest", "float speedMult"),
-                O(0x0622, "sprintTowards", "Navigation", 3, "void", true, "Object2D agent", "Vector2 dest", "float speedMult"),
-                O(0x0623, "sprintTowards", "Navigation", 3, "void", true, "Object2D agent", "Object2D dest", "float speedMult"),
                 O(0x0624, "moveTowards", "Navigation", 3, "void", true, "NavMeshAgent agent", "Vector3 dest", "float speed"),
                 O(0x0625, "moveTowards", "Navigation", 3, "void", true, "NavMeshAgent agent", "Object3D dest", "float speed"),
                 O(0x0626, "moveTowards", "Navigation", 3, "void", true, "Object3D agent", "Vector3 dest", "float speed"),

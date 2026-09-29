@@ -49,7 +49,7 @@ TEST(disassemble, two_state_shows_calls_without_claims_or_ownership) {
     // calls survive, with their resolved function ids
     ASSERT_TRUE(t.find("CALL") != std::string::npos);
     ASSERT_TRUE(t.find("moveTowards") != std::string::npos);
-    ASSERT_TRUE(t.find("followTarget") != std::string::npos);
+    ASSERT_TRUE(t.find("getPosition") != std::string::npos);
     ASSERT_TRUE(t.find("stopMovement") != std::string::npos);
     // ... but the claim/ownership vocabulary is gone from the dump entirely
     ASSERT_TRUE(t.find("CLAIM") == std::string::npos);

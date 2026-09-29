@@ -14,7 +14,9 @@ var Object3D     waypointB;
 State GoToA {
     Actions {
         Start {
-            goTo(agent, waypointA);   // Tier 3: one CALL; 'agent' must be a variable
+            moveTowards(agent, waypointA, 3.5f);  // Tier 3: one CALL; 'agent' must be a variable
+                                                  // (a waypoint is static, so the live object
+                                                  // goal behaves like a one-shot order)
         }
         Update { }                    // nothing per tick: Traversals polls arrival
     }
@@ -43,7 +45,7 @@ State PauseAtA {
 State GoToB {
     Actions {
         Start {
-            goTo(agent, waypointB);
+            moveTowards(agent, waypointB, 3.5f);
         }
         Update { }
     }

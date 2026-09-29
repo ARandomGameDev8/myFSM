@@ -20,7 +20,7 @@ State Chase {
                 temp Vector3 dir = normalize(directionTo(player, enemy)); // if body
                 moveTowards(agent, dir, 5.0f);
             } else if (lastDist < 3.0f) {
-                followTarget(agent, enemy);
+                moveTowards(agent, enemy, 4.0f); // live object goal
             } else {
                 stopMovement(agent);
             }

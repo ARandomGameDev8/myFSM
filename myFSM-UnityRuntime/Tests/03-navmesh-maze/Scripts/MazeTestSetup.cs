@@ -2,9 +2,11 @@
 // dropped onto an empty GameObject and played.
 //
 // It makes sure a maze exists (adding a MazeGeneratorController if the scene has
-// none), creates the runner — capsule + NavMeshAgent + the pre-compiled TestAI —
-// and adds the recorder. The maze bakes its NavMesh in its own Awake, so by the
-// time this component's Start runs there is an entry to place the runner on.
+// none), then creates the runner — capsule + NavMeshAgent + the pre-compiled TestAI —
+// and adds the recorder. The maze is rebuilt with a fresh random seed, so
+// every Play is a NEW maze; whatever the layout, the carver guarantees at
+// least one path from entry to exit (a spanning tree; braiding only removes
+// walls), and the build proves it with a BFS before the NavMesh is baked.
 //
 // The movement is entirely the runtime's: TestAI posts a persistent chase goal
 // with moveTowards(agent, target, speed); the runtime re-reads the target every
@@ -57,6 +59,10 @@ namespace MyFSM.Tests
                 if (runner.GetComponent<MazePathRecorder>() == null)
                     runner.gameObject.AddComponent<MazePathRecorder>();
             }
+
+            // Camera: park the Main Camera over the maze. Unity spawns it at the
+            // origin, eye height — which is inside the maze, staring at a wall.
+            AttachCameraRig();
         }
 
         /// <summary>The one setup in the scene, for the manual bindings to read
@@ -96,6 +102,28 @@ namespace MyFSM.Tests
                 return;
             }
             target.position = position;
+        }
+
+        /// <summary>
+        /// Puts the overview rig on the scene's Main Camera (creating a camera
+        /// first if the scene has none — a bare scene is meant to just work).
+        /// The rig frames the whole maze, reframes after G rebuilds it, and
+        /// follows the runner overhead while F is toggled.
+        /// </summary>
+        private void AttachCameraRig()
+        {
+            Camera cam = Camera.main;
+            if (cam == null)
+            {
+                GameObject go = new GameObject("Main Camera");
+                go.tag = "MainCamera";
+                cam = go.AddComponent<Camera>();
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = new Color(0.12f, 0.14f, 0.18f);
+                Debug.Log("[maze-03] no Main Camera in the scene — created one.", go);
+            }
+            if (cam.GetComponent<MazeOverviewCamera>() == null)
+                cam.gameObject.AddComponent<MazeOverviewCamera>();
         }
 
         private TestAI CreateRunner()

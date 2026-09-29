@@ -22,7 +22,7 @@ int findCallId(const fh::CompileResult& r, const std::string& fn) {
 }
 } // namespace
 
-TEST(overloads, goTo_nav_agent_vector3_resolves) {
+TEST(overloads, moveToward_nav_agent_vector3_resolves) {
     auto r = fh::compile(
         "var NavMeshAgent navAgent;\n"
         "var Vector3 pos;\n"
@@ -30,7 +30,7 @@ TEST(overloads, goTo_nav_agent_vector3_resolves) {
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(navAgent, pos);\n"
+        "        moveTowards(navAgent, pos, 3.0f);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -39,16 +39,16 @@ TEST(overloads, goTo_nav_agent_vector3_resolves) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    ASSERT_EQ(findCallId(r, "goTo"), int(0x060A)); // (NavMeshAgent, Vector3)
+    ASSERT_EQ(findCallId(r, "moveTowards"), int(0x0624)); // (NavMeshAgent, Vector3, float)
     // A Tier 3 driving call carries nothing but the resolved id, tier and
     // arguments: claim bindings are gone from the language and the module.
     const auto item = fh::actionStmts(r.src);
     ASSERT_EQ(item[0].tier, uint8_t(3));
-    ASSERT_EQ(item[0].args.size(), std::size_t(2));
+    ASSERT_EQ(item[0].args.size(), std::size_t(3));
     ASSERT_EQ(item[0].args[0]->var.kind, VarKind::Runtime);
 }
 
-TEST(overloads, goTo_obj2d_obj2d_resolves) {
+TEST(overloads, moveToward_obj2d_obj2d_resolves) {
     auto r = fh::compile(
         "var Object2D obj2d;\n"
         "var Object2D target;\n"
@@ -56,7 +56,7 @@ TEST(overloads, goTo_obj2d_obj2d_resolves) {
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(obj2d, target);\n"
+        "        moveTowards(obj2d, target, 2.0f);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -65,17 +65,17 @@ TEST(overloads, goTo_obj2d_obj2d_resolves) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    ASSERT_EQ(findCallId(r, "goTo"), int(0x060F)); // (Object2D, Object2D)
+    ASSERT_EQ(findCallId(r, "moveTowards"), int(0x0629)); // (Object2D, Object2D, float)
 }
 
-TEST(overloads, goTo_nav_agent_int_fails_with_candidates) {
+TEST(overloads, moveToward_nav_agent_int_fails_with_candidates) {
     auto r = fh::compile(
         "var NavMeshAgent navAgent;\n"
         "State A {\n"
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(navAgent, 5);\n"
+        "        moveTowards(navAgent, 5); // wrong arity now: the closest call needs a speed\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -84,19 +84,19 @@ TEST(overloads, goTo_nav_agent_int_fails_with_candidates) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
-    ASSERT_TRUE(fh::hasErrorContaining(r, "no overload of 'goTo' matches arguments (NavMeshAgent, int)"));
-    ASSERT_TRUE(fh::hasErrorContaining(r, "goTo(NavMeshAgent agent, Vector3 dest)"));
-    ASSERT_TRUE(fh::hasErrorContaining(r, "goTo(Object2D agent, Object2D dest)"));
+    ASSERT_TRUE(fh::hasErrorContaining(r, "no overload of 'moveTowards' matches arguments (NavMeshAgent, int)"));
+    ASSERT_TRUE(fh::hasErrorContaining(r, "moveTowards(NavMeshAgent agent, Vector3 dest, float speed)"));
+    ASSERT_TRUE(fh::hasErrorContaining(r, "moveTowards(Object2D agent, Object2D dest, float speed)"));
 }
 
-TEST(overloads, goTo_obj3d_int_fails) {
+TEST(overloads, moveToward_obj3d_int_fails) {
     auto r = fh::compile(
         "var Object3D obj3d;\n"
         "State A {\n"
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(obj3d, 5);\n"
+        "        moveTowards(obj3d, 5);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -105,10 +105,10 @@ TEST(overloads, goTo_obj3d_int_fails) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
-    ASSERT_TRUE(fh::hasErrorContaining(r, "no overload of 'goTo' matches arguments (Object3D, int)"));
+    ASSERT_TRUE(fh::hasErrorContaining(r, "no overload of 'moveTowards' matches arguments (Object3D, int)"));
 }
 
-TEST(overloads, goTo_object3d_vector3_resolves) {
+TEST(overloads, moveToward_object3d_vector3_resolves) {
     auto r = fh::compile(
         "var Object3D obj;\n"
         "var Vector3 pos;\n"
@@ -116,7 +116,7 @@ TEST(overloads, goTo_object3d_vector3_resolves) {
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(obj, pos);\n"
+        "        moveTowards(obj, pos, 1.0f);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -125,7 +125,7 @@ TEST(overloads, goTo_object3d_vector3_resolves) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    ASSERT_EQ(findCallId(r, "goTo"), int(0x060C)); // (Object3D, Vector3)
+    ASSERT_EQ(findCallId(r, "moveTowards"), int(0x0626)); // (Object3D, Vector3, float)
 }
 
 TEST(overloads, setPosition_picks_2d_overload) {
@@ -235,7 +235,7 @@ TEST(overloads, tier3_first_argument_must_be_a_variable) {
         "    Actions {\n"
         "        Start { }\n"
         "        Update {\n"
-        "        goTo(getNearestOfTag(pos, 1, 10.0f), pos);\n"
+        "        moveTowards(getNearestOfTag(pos, 1, 10.0f), pos, 1.0f);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -245,7 +245,7 @@ TEST(overloads, tier3_first_argument_must_be_a_variable) {
         "@ENTRY A\n");
     ASSERT_FALSE(r.ok);
     ASSERT_TRUE(fh::hasErrorContaining(
-        r, "Tier 3 function 'goTo' drives its first argument; that argument must be a "
+        r, "Tier 3 function 'moveTowards' drives its first argument; that argument must be a "
            "runtime or temporary variable"));
 }
 
@@ -279,7 +279,7 @@ TEST(overloads, tier3_temp_target_is_accepted) {
         "        Start { }\n"
         "        Update {\n"
         "        temp Object3D mover = other;\n"
-        "        goTo(mover, target);\n"
+        "        moveTowards(mover, target, 1.0f);\n"
         "        }\n"
         "    }\n"
         "    Traversals {\n"
@@ -288,8 +288,8 @@ TEST(overloads, tier3_temp_target_is_accepted) {
         "}\n"
         "@ENTRY A\n");
     ASSERT_TRUE(r.ok);
-    // one CALL, resolved to the (Object3D, Object3D) overload
-    ASSERT_EQ(findCallId(r, "goTo"), int(0x060D));
+    // one CALL, resolved to the (Object3D, Object3D, float) overload
+    ASSERT_EQ(findCallId(r, "moveTowards"), int(0x0627));
     ReadModule rm;
     std::string err;
     ASSERT_TRUE(readModule(r.module, rm, err));

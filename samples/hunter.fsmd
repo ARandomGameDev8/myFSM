@@ -1,6 +1,6 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/hunter.fsmb  (1464 bytes)
+ file     /tmp/hunter.fsmb  (1464 bytes)
  format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================
@@ -30,7 +30,7 @@
    #0  lastSeenDist    float         scope state body    state: Hunt
    #1  dist            float         scope Actions       state: Hunt
    #2  toPlayer        Vector3       scope else body     state: Hunt
-   #3  away            Vector3       scope Actions       state: Flee
+   #3  away            Vector3       scope Update        state: Flee
    #4  ticks           int           scope state body    state: Lost
    #5  dest            Vector3       scope Actions       state: Lost
 
@@ -55,7 +55,7 @@
 
 --- state #1 'Flee' — 4 instruction(s) ---
    0   ASSIGN  away = getFleeDirection(getPosition(hunter), getPosition(player))
-   1   CALL    sprintTowards(agent, away, 1.5f)   [fn 0x061E]
+   1   CALL    moveTowards(agent, away, 5.25f)   [fn 0x0624]
    2   GOTO    Hunt
    3   GOTO    Flee
 
@@ -96,11 +96,11 @@
 --- state #1 'Flee' ---
 #[47] STATE
    #[48] ACTIONS
-      #[49] TEMP Vector3 away
-      #[50] ASSIGN away = getFleeDirection(getPosition(hunter), getPosition(player))
-      #[56] START   (runs once, on state entry)
-      #[57] UPDATE  (runs every tick)
-         #[58] CALL sprintTowards(NavMeshAgent, Vector3, float)
+      #[49] START   (runs once, on state entry)
+      #[50] UPDATE  (runs every tick)
+         #[51] TEMP Vector3 away
+         #[52] ASSIGN away = getFleeDirection(getPosition(hunter), getPosition(player))
+         #[58] CALL moveTowards(NavMeshAgent, Vector3, float)
    #[62] TRAVERSALS
       #[63] IF    cond: ((health >= fleeBelow) && playerVisible)
          #[69] GOTO Hunt

@@ -18,6 +18,14 @@
 //                           blend tight regions into loose ones via a coarse
 //                           seeded noise field, so one maze contains both.
 //
+// Randomness: a maze is carved from a seed. seed 0 (the default) draws a
+// fresh seed from the wall clock every build — a NEW random maze every Play
+// and every G press. Any other value reproduces that exact maze. Whatever the
+// seed, there is always AT LEAST ONE path from entry to exit: the carver only
+// opens passages that join not-yet-connected cells (a spanning tree), braiding
+// only removes walls, and the build proves connectivity with a BFS before the
+// NavMesh is baked.
+//
 // The base maze is an iterative depth-first search over the cell grid: every
 // cell is visited exactly once and each carved passage joins two cells that
 // were not connected before. That is what guarantees "at least one path
@@ -32,6 +40,13 @@
 // moves the maze with it and nothing floats or sinks. The NavMesh bake
 // collects exactly those colliders (plus the ground), so the mesh follows the
 // ground plane too.
+//
+// Ground plane: fits the maze exactly — centred under it, sized to its extent
+// (plus one wall thickness, so the outer walls stand on it). There is
+// deliberately no walkable ground OUTSIDE the maze: the NavMesh then exists
+// only where the plane is, so an agent cannot slip out of the entry/exit
+// doors and take the around-the-outside shortcut to the target. Through the
+// corridors is the only route.
 //
 // Target: when `target` is empty a static marker is created standing on the
 // exit area at run time and used as the chase target instead. An assigned
@@ -64,8 +79,9 @@ namespace MyFSM.Tests
         public float cellSize = 2f;
         public float wallHeight = 2.5f;
         public float wallThickness = 0.35f;
-        [Tooltip("0 = pick a random seed each build, otherwise reproduce the same maze.")]
-        public int seed = 12345;
+        [Tooltip("0 = a new random maze every build (every Play, every G press). " +
+                 "Any other value reproduces that exact maze.")]
+        public int seed = 0;
 
         [Header("Maze shape")]
         [Tooltip("Independent routes entry -> exit. 1 = perfect maze (no loops); " +
@@ -84,14 +100,29 @@ namespace MyFSM.Tests
         [Tooltip("Ground plane. One is created when this is empty.")]
         public Transform groundPlane;
         public string groundName = "MazeGround";
-        public float groundMargin = 6f;
-        public float groundThickness = 0.2f;
+        [Tooltip("Fit the plane to the maze: centred under it, sized to its exact " +
+                 "extent plus one wall thickness. No walkable ground outside the " +
+                 "maze means no around-the-outside shortcut for the agent. Off: " +
+                 "the plane is kept as-is and the maze centres itself on it.")]
+        public bool fitGroundToMaze = true;
+        [Tooltip("Slack around the maze for the NavMesh bake bounds. The mesh can " +
+                 "never extend past the ground plane's own collider anyway.")]
+        public float bakeMargin = 2f;
 
         [Header("Actors")]
         [Tooltip("The runner, moved to the entry cell so it starts the maze at the entry.")]
         public TestAI runner;
-        [Tooltip("The chase target. Empty: a static marker is created on the exit area at run time.")]
+        [Tooltip("The chase target. Empty: a player-controllable target (WASD) is " +
+                 "created on the exit area, or a static marker when spawnPlayerTarget " +
+                 "is off.")]
         public Transform target;
+        [Tooltip("With no target assigned: create a PLAYABLE target (capsule + " +
+                 "NavMeshAgent + MazeTargetPlayer) standing on the exit — you move " +
+                 "it with WASD and the runner chases you. Off: the old static " +
+                 "marker instead.")]
+        public bool spawnPlayerTarget = true;
+        [Tooltip("Walk speed of the player-controllable target (u/s).")]
+        public float playerSpeed = 4.5f;
         [Tooltip("The walking target of test 04, also moved to the entry cell.")]
         public Transform targetWalker;
 
@@ -159,6 +190,10 @@ namespace MyFSM.Tests
         private Transform _container;
         private NavMeshData _navMeshData;
         private bool _navMeshAdded;
+        // Where the maze sits: its centre on the ground, set by EnsureGround
+        // (the component's own position, or the assigned plane's position).
+        private Vector3 _mazeCentre;
+        private bool _mazeCentreSet;
 
         // ------------------------------------------------------------------
 
@@ -184,7 +219,13 @@ namespace MyFSM.Tests
         /// <summary>Builds a maze (seed 0 = random), its markers, target, and NavMesh.</summary>
         public void Build(int withSeed)
         {
-            if (withSeed == 0) withSeed = Random.Range(1, int.MaxValue);
+            if (withSeed == 0)
+            {
+                // Wall-clock seed: a NEW maze every Play and every G press, even
+                // if Unity's own RNG was left deterministic by something else.
+                withSeed = (int)(System.DateTime.UtcNow.Ticks & 0x7FFFFFFF);
+                if (withSeed == 0) withSeed = 1;
+            }
             seed = withSeed;
             Random.InitState(withSeed);
 
@@ -205,6 +246,10 @@ namespace MyFSM.Tests
             PlaceActors();
 
             PathCells = CountPathCells();
+            if (PathCells < 0)
+                Debug.LogError("[maze] the maze came out disconnected — this should be "
+                               + "impossible (the carver builds a spanning tree and braiding "
+                               + "only removes walls). Please report it.", this);
             StraightDistance = Vector3.Distance(EntryPosition, ExitPosition);
 
             Debug.Log("[maze] seed " + withSeed + ", " + cellsX + "x" + cellsY + " cells of "
@@ -216,7 +261,9 @@ namespace MyFSM.Tests
                       + " | straight line " + StraightDistance.ToString("F1") + " m"
                       + " | shortest corridor route at least "
                       + PathLengthLowerBound.ToString("F1") + " m"
-                      + " | target " + (target != null ? target.name : "static (created)"), this);
+                      + " | target " + (target != null ? target.name
+                                        : DefaultTarget != null ? DefaultTarget.name + " (default)"
+                                        : "none"), this);
 
             if (buildNavMesh) BakeNavMesh();
         }
@@ -481,16 +528,34 @@ namespace MyFSM.Tests
                 {
                     found = GameObject.CreatePrimitive(PrimitiveType.Plane);
                     found.name = groundName;
-                    found.transform.position = Vector3.zero;
-                    // Unity's plane primitive is 10x10 units: scale to the maze
-                    // plus a margin, so the walls never hang over the edge.
-                    found.transform.localScale = new Vector3(
-                        (cellsX * cellSize + groundMargin) / 10f, 1f,
-                        (cellsY * cellSize + groundMargin) / 10f);
                 }
                 groundPlane = found.transform;
             }
+
             GroundY = groundPlane.position.y; // the plane's surface is its origin
+
+            if (fitGroundToMaze)
+            {
+                // The plane is the floor OF the maze: centred under it, sized to
+                // its exact extent plus the wall thickness, so the outer walls
+                // stand flush on it and nothing hangs over the edge. The maze is
+                // centred on this component's own position.
+                groundPlane.position = new Vector3(transform.position.x, GroundY,
+                                                   transform.position.z);
+                // Unity's plane primitive is 10x10 units.
+                groundPlane.localScale = new Vector3(
+                    (MazeWidth + wallThickness) / 10f, 1f,
+                    (MazeDepth + wallThickness) / 10f);
+                _mazeCentre = new Vector3(transform.position.x, GroundY,
+                                          transform.position.z);
+            }
+            else
+            {
+                // The plane is kept as-is; the maze centres itself on it.
+                _mazeCentre = new Vector3(groundPlane.position.x, GroundY,
+                                          groundPlane.position.z);
+            }
+            _mazeCentreSet = true;
         }
 
         private void CreateWallGeometry()
@@ -561,9 +626,10 @@ namespace MyFSM.Tests
         }
 
         /// <summary>
-        /// The chase target. An assigned `target` is used as-is (it may move);
-        /// with none, a static marker is created standing on the exit area —
-        /// collider-free, so it never blocks the bake or the agent.
+        /// The chase target. Priority: an assigned `target` (used as-is, may
+        /// move); else a PLAYABLE target — a capsule you drive with WASD,
+        /// standing on the exit area; else the old static marker. All are
+        /// collider-free (or agent-only), so they never block the bake.
         /// </summary>
         private void CreateTargetIfNeeded()
         {
@@ -573,11 +639,35 @@ namespace MyFSM.Tests
                 DefaultTarget = null;
                 return;
             }
-            // No assigned target: keep/repair the static exit marker so a rebuilt
-            // maze (new exit position) still has its chase target on top of it.
+            // No assigned target: keep/repair whatever default stands on the
+            // exit so a rebuilt maze (new exit position) still has its target.
             if (DefaultTarget != null)
             {
                 DefaultTarget.position = ExitPosition + new Vector3(0f, 0.6f, 0f);
+                return;
+            }
+
+            if (spawnPlayerTarget)
+            {
+                GameObject player = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                player.name = "MazeTargetPlayer";
+                player.transform.SetParent(transform, false);
+                player.transform.position = ExitPosition + new Vector3(0f, 0.5f, 0f);
+
+                NavMeshAgent agent = player.AddComponent<NavMeshAgent>();
+                agent.radius = agentRadius;
+                agent.height = 2f;
+                agent.speed = playerSpeed;
+                agent.acceleration = 40f;
+                agent.angularSpeed = 720f;
+                agent.stoppingDistance = 0f;
+                agent.autoBraking = false;
+
+                Renderer renderer = player.GetComponent<Renderer>();
+                if (renderer != null) renderer.material.color = new Color(0.2f, 0.8f, 1f);
+
+                player.AddComponent<MazeTargetPlayer>();
+                DefaultTarget = player.transform;
                 return;
             }
 
@@ -590,8 +680,8 @@ namespace MyFSM.Tests
             Collider collider = marker.GetComponent<Collider>();
             if (collider != null) Destroy(collider);
 
-            Renderer renderer = marker.GetComponent<Renderer>();
-            if (renderer != null) renderer.material.color = new Color(0.2f, 0.8f, 1f);
+            Renderer markerRenderer = marker.GetComponent<Renderer>();
+            if (markerRenderer != null) markerRenderer.material.color = new Color(0.2f, 0.8f, 1f);
 
             DefaultTarget = marker.transform;
         }
@@ -607,12 +697,36 @@ namespace MyFSM.Tests
             if (targetWalker != null) targetWalker.position = spawn;
         }
 
-        /// <summary>Centre of cell (x, y) on the ground.</summary>
+        /// <summary>Centre of cell (x, y) on the ground. The maze is centred on
+        /// the ground plane: cell (0,0) is at the south-west corner of the grid,
+        /// not at this component's position.</summary>
         public Vector3 CellCentre(int x, int y)
         {
-            return new Vector3(transform.position.x + x * cellSize,
-                               GroundY,
-                               transform.position.z + y * cellSize);
+            return MazeCentre + new Vector3((x - (cellsX - 1) * 0.5f) * cellSize,
+                                            0f,
+                                            (y - (cellsY - 1) * 0.5f) * cellSize);
+        }
+
+        /// <summary>Maze extent in metres (walls add a sliver on top of this).
+        /// Read by the overview camera to frame the whole grid.</summary>
+        public float MazeWidth { get { return cellsX * cellSize; } }
+        public float MazeDepth { get { return cellsY * cellSize; } }
+        /// <summary>Ground-level centre of the maze: the component's own
+        /// position (or, with fitGroundToMaze off, the assigned ground plane's
+        /// position). Everything — cells, markers, actors, the camera framing —
+        /// is derived from this one point.</summary>
+        public Vector3 MazeCentre
+        {
+            get
+            {
+                if (!_mazeCentreSet)
+                {
+                    _mazeCentre = new Vector3(transform.position.x,
+                                              groundPlane != null ? groundPlane.position.y : 0f,
+                                              transform.position.z);
+                }
+                return _mazeCentre;
+            }
         }
 
         // ------------------------------------------------------------------
@@ -627,12 +741,13 @@ namespace MyFSM.Tests
         {
             if (_navMeshAdded) { NavMeshInstance.Remove(); _navMeshAdded = false; }
 
-            float width = cellsX * cellSize + groundMargin;
-            float depth = cellsY * cellSize + groundMargin;
-            Vector3 centre = new Vector3(
-                transform.position.x + (cellsX - 1) * cellSize * 0.5f,
-                GroundY,
-                transform.position.z + (cellsY - 1) * cellSize * 0.5f);
+            // Bake bounds: the maze area plus a little slack. The mesh itself
+            // can never extend past the ground plane's collider — which stops
+            // exactly at the outer walls — so this margin only widens the
+            // collection box; there is still no walkable ground outside.
+            float width = MazeWidth + wallThickness + bakeMargin;
+            float depth = MazeDepth + wallThickness + bakeMargin;
+            Vector3 centre = MazeCentre;
             Bounds bounds = new Bounds(centre,
                 new Vector3(width, wallHeight * 2f, depth));
 

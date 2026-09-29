@@ -77,11 +77,7 @@ NOTES = {
 "getNextWaypoint":"Pops the next corner of a path id. Past the end it returns the last corner forever (no error).",
 "getPathLength":"Total length of the stored polyline; 0 for an unknown path (logs an error).",
 "hasReachedDestination":"Within the stopping distance of a point/object: the posted goal's stop distance if there is one, else the NavMeshAgent's, else 0.2.",
-"goTo":"Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. A non-finite destination is refused (see moveTowards).",
-"follow":"Posts a FollowObject goal: re-reads the target's position every tick, so it chases a moving object forever. Stops at **half** the agent's stopping distance — the tighter of the two follow calls.",
 "findShortestPathAndMove":"Posts a corner queue (PathCorners) and walks it.",
-"followTarget":"Same as `follow` but stops at the **full** stopping distance, so it keeps the agent's normal stand-off instead of closing in.",
-"sprintTowards":"Point goal at **base speed × multiplier** (multiplier is the 3rd argument; negative clamps to 0).",
 "moveTowards":"Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body: on a Rigidbody(2D) that is, verbatim, `rb.MovePosition(rb.position + (dest - rb.position).normalized * speed * Time.fixedDeltaTime)` once per physics step from FixedUpdate, with no stop distance and nothing else written to the body; `Move` for a CharacterController. With an **object** argument the target is re-read every step, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is.",
 "stopMovement":"Clears the goal (and stops a NavMeshAgent).",
 # --- Perception (0x0700-0x070D) ---
@@ -199,8 +195,10 @@ A("runtime offers, and the host API around them. Generated from")
 A("`Runtime/Core/FunctionCatalog.cs` (the same table the runtime dispatches on),")
 A("so the IDs, tiers and signatures here cannot drift from the implementation.")
 A("")
-A("Counts are asserted by `Sandbox/check.py`: **179 overloads, 92 distinct")
-A("functions, 11 categories**. Each catalog ID maps to exactly one `case` in the")
+A("Counts are asserted by `Sandbox/check.py`: **159 overloads, 88 distinct")
+A("functions, 11 categories** (v0.5: goTo / followTarget / follow /")
+A("sprintTowards were retired — redundant with moveTowards — and slots")
+A("0x060A–0x0623 stay unused). Each catalog ID maps to exactly one `case` in the")
 A("Unity dispatchers, and every ID sits in exactly one category range.")
 A("")
 A("---")
@@ -266,8 +264,7 @@ A("    rb.MovePosition(rb.position + dir * speed * Time.fixedDeltaTime);")
 A("}")
 A("```")
 A("")
-A("`speed` is the goal's speed (the call's argument for `moveTowards`, the agent's")
-A("base speed for `goTo`/`follow`, times the multiplier for `sprintTowards`),")
+A("`speed` is the call's argument for `moveTowards` (absolute, units/second),")
 A("`target.position` is the goal's destination (re-read every physics step for an")
 A("object target, a fixed point for a Vector3), both measured from the body's own")
 A("`rb.position`. Nothing is layered on top: no velocity is written, the step is")

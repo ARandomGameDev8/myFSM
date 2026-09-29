@@ -5,8 +5,10 @@ runtime offers, and the host API around them. Generated from
 `Runtime/Core/FunctionCatalog.cs` (the same table the runtime dispatches on),
 so the IDs, tiers and signatures here cannot drift from the implementation.
 
-Counts are asserted by `Sandbox/check.py`: **179 overloads, 92 distinct
-functions, 11 categories**. Each catalog ID maps to exactly one `case` in the
+Counts are asserted by `Sandbox/check.py`: **159 overloads, 88 distinct
+functions, 11 categories** (v0.5: goTo / followTarget / follow /
+sprintTowards were retired — redundant with moveTowards — and slots
+0x060A–0x0623 stay unused). Each catalog ID maps to exactly one `case` in the
 Unity dispatchers, and every ID sits in exactly one category range.
 
 ---
@@ -72,8 +74,7 @@ void FixedUpdate()
 }
 ```
 
-`speed` is the goal's speed (the call's argument for `moveTowards`, the agent's
-base speed for `goTo`/`follow`, times the multiplier for `sprintTowards`),
+`speed` is the call's argument for `moveTowards` (absolute, units/second),
 `target.position` is the goal's destination (re-read every physics step for an
 object target, a fixed point for a Vector3), both measured from the body's own
 `rb.position`. Nothing is layered on top: no velocity is written, the step is
@@ -260,7 +261,7 @@ Camera-space helpers: view tests and screen/world/viewport conversion.
 | `0x0508` | `getViewport(Camera3D cam) -> Vector2` | 1 | Camera pixelWidth/pixelHeight as a Vector2. |
 | `0x0509` | `getViewport(Camera2D cam) -> Vector2` | 1 |  |
 
-### Navigation — 45 overloads, 11 functions (`0x0600`–`0x062C`)
+### Navigation — 25 overloads, 7 functions (`0x0600`–`0x062C`)
 
 Path queries and goal-posting movement — the largest category, and the only one that spans all three tiers. Posting a goal never teleports: the movement system advances it a step per tick, and HOW that step is applied is decided by the components on the agent (NavMeshAgent, CharacterController, Rigidbody(2D), a bare Collider, or nothing — see §2 and the movement section of the README).
 
@@ -276,32 +277,12 @@ Path queries and goal-posting movement — the largest category, and the only on
 | `0x0607` | `hasReachedDestination(Object3D agent, Object3D tgt) -> bool` | 1 |  |
 | `0x0608` | `hasReachedDestination(Object2D agent, Vector2 tgt) -> bool` | 1 |  |
 | `0x0609` | `hasReachedDestination(Object2D agent, Object2D tgt) -> bool` | 1 |  |
-| `0x060A` | `goTo(NavMeshAgent agent, Vector3 dest) -> void` | 3 | Posts a Point goal at the agent's navigation speed. The destination is read **once, now**: an object argument is snapshotted, not chased — use `follow` to track something that moves. A non-finite destination is refused (see moveTowards). |
-| `0x060B` | `goTo(NavMeshAgent agent, Object3D dest) -> void` | 3 |  |
-| `0x060C` | `goTo(Object3D agent, Vector3 dest) -> void` | 3 |  |
-| `0x060D` | `goTo(Object3D agent, Object3D dest) -> void` | 3 |  |
-| `0x060E` | `goTo(Object2D agent, Vector2 dest) -> void` | 3 |  |
-| `0x060F` | `goTo(Object2D agent, Object2D dest) -> void` | 3 |  |
-| `0x0610` | `followTarget(NavMeshAgent agent, Object3D tgt) -> void` | 3 | Same as `follow` but stops at the **full** stopping distance, so it keeps the agent's normal stand-off instead of closing in. |
-| `0x0611` | `followTarget(NavMeshAgent agent, Object2D tgt) -> void` | 3 |  |
-| `0x0612` | `followTarget(Object3D agent, Object3D tgt) -> void` | 3 |  |
-| `0x0613` | `followTarget(Object2D agent, Object2D tgt) -> void` | 3 |  |
 | `0x0614` | `findShortestPathAndMove(NavMeshAgent agent, Vector3 tgt) -> void` | 3 | Posts a corner queue (PathCorners) and walks it. |
 | `0x0615` | `findShortestPathAndMove(NavMeshAgent agent, Object3D tgt) -> void` | 3 |  |
 | `0x0616` | `findShortestPathAndMove(Object3D agent, Vector3 tgt) -> void` | 3 |  |
 | `0x0617` | `findShortestPathAndMove(Object3D agent, Object3D tgt) -> void` | 3 |  |
 | `0x0618` | `findShortestPathAndMove(Object2D agent, Vector2 tgt) -> void` | 3 |  |
 | `0x0619` | `findShortestPathAndMove(Object2D agent, Object2D tgt) -> void` | 3 |  |
-| `0x061A` | `follow(NavMeshAgent agent, Object3D tgt) -> void` | 3 | Posts a FollowObject goal: re-reads the target's position every tick, so it chases a moving object forever. Stops at **half** the agent's stopping distance — the tighter of the two follow calls. |
-| `0x061B` | `follow(NavMeshAgent agent, Object2D tgt) -> void` | 3 |  |
-| `0x061C` | `follow(Object3D agent, Object3D tgt) -> void` | 3 |  |
-| `0x061D` | `follow(Object2D agent, Object2D tgt) -> void` | 3 |  |
-| `0x061E` | `sprintTowards(NavMeshAgent agent, Vector3 dest, float speedMult) -> void` | 3 | Point goal at **base speed × multiplier** (multiplier is the 3rd argument; negative clamps to 0). |
-| `0x061F` | `sprintTowards(NavMeshAgent agent, Object3D dest, float speedMult) -> void` | 3 |  |
-| `0x0620` | `sprintTowards(Object3D agent, Vector3 dest, float speedMult) -> void` | 3 |  |
-| `0x0621` | `sprintTowards(Object3D agent, Object3D dest, float speedMult) -> void` | 3 |  |
-| `0x0622` | `sprintTowards(Object2D agent, Vector2 dest, float speedMult) -> void` | 3 |  |
-| `0x0623` | `sprintTowards(Object2D agent, Object2D dest, float speedMult) -> void` | 3 |  |
 | `0x0624` | `moveTowards(NavMeshAgent agent, Vector3 dest, float speed) -> void` | 3 | Point goal at an **absolute** speed (units/second). Pass a destination POINT, not a direction. Each tick the agent takes one step of **direction x speed x time** through Unity's move call for its body: on a Rigidbody(2D) that is, verbatim, `rb.MovePosition(rb.position + (dest - rb.position).normalized * speed * Time.fixedDeltaTime)` once per physics step from FixedUpdate, with no stop distance and nothing else written to the body; `Move` for a CharacterController. With an **object** argument the target is re-read every step, so a constantly moving target is tracked; with a Vector3 it is a fixed point. A destination that is not finite (read from an unbound slot) is refused: no goal is posted and the agent stays where it is. |
 | `0x0625` | `moveTowards(NavMeshAgent agent, Object3D dest, float speed) -> void` | 3 |  |
 | `0x0626` | `moveTowards(Object3D agent, Vector3 dest, float speed) -> void` | 3 |  |
@@ -535,12 +516,12 @@ them logs `null handle` and yields a default.
 | `0x0300`–`0x0311` | Animation | 18 |
 | `0x0400`–`0x0411` | Physics | 18 |
 | `0x0500`–`0x0509` | Camera | 10 |
-| `0x0600`–`0x062C` | Navigation | 45 |
+| `0x0600`–`0x062C` | Navigation | 25 |
 | `0x0700`–`0x070D` | Perception | 14 |
 | `0x0800`–`0x0809` | Steering | 10 |
 | `0x0900`–`0x0901` | Sensing | 2 |
 | `0x0A00`–`0x0A02` | Control | 3 |
-| | **total** | **179** |
+| | **total** | **159** |
 
 ### 7.2 2D / 3D pairing
 

@@ -691,12 +691,13 @@ def main():
     with open(os.path.join(RUNTIME, "Core/FunctionCatalog.cs")) as f:
         cat = f.read()
     ids = [int(x, 16) for x in re.findall(r"O\(0x([0-9A-Fa-f]+),", cat)]
-    if len(ids) != 179 or len(set(ids)) != 179:
+    if len(ids) != 159 or len(set(ids)) != 159:
         fails += 1
-        print("CATALOG FAIL: %d rows, %d unique (want 179/179)"
+        print("CATALOG FAIL: %d rows, %d unique (want 159/159)"
               % (len(ids), len(set(ids))))
     else:
-        print("catalog ok: 179 unique overload rows")
+        print("catalog ok: 159 unique overload rows (goTo/followTarget/follow/"
+              "sprintTowards retired, slots 0x060A-0x0623 unused)")
 
     # 5. dispatcher cases both directions
     cases = []
@@ -716,7 +717,7 @@ def main():
         print("DISPATCH FAIL: missing=%s extra=%s dupes=%s"
               % ([hex(x) for x in missing], [hex(x) for x in extra], dupes))
     else:
-        print("dispatch ok: 179 catalog IDs <=> 179 cases")
+        print("dispatch ok: %d catalog IDs <=> %d cases" % (len(set(ids)), len(set(ids))))
 
     # 4. range coverage
     bad = [i for i in ids

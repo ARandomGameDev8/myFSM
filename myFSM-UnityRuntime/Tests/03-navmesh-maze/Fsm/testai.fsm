@@ -2,11 +2,16 @@
 //
 // moveTowards(NavMeshAgent, Object3D, speed) posts a FollowObject goal: the
 // runtime re-reads the target's position every tick and hands it to the
-// NavMeshAgent, which does the actual pathfinding through the maze. The goal
-// persists — the call happens once in Start{} and keeps steering forever, and
-// even after arrival the chase resumes on its own if the target wanders off.
-// (Test 02 re-posts moveTowards every tick instead, because there the speed
-// and destination are meant to be re-read; here one call is the point.)
+// NavMeshAgent, which does the actual pathfinding through the maze.
+//
+// The call lives in Update{}, the re-post idiom (like test 02's chaser): the
+// goal is restated every tick with the current slot values. With a target
+// that moves — here the WASD-driven MazeTargetPlayer — the restated call and
+// the persistent goal behave the same, but re-posting is the honest shape of
+// "chase whatever dest is right now": change the slot binding (or the target
+// itself) and the very next tick already steers at the new value, no leftover
+// goal from an older binding in between. Speed is likewise re-read every
+// tick, so MazeTestSetup.runnerSpeed changes apply live.
 
 var NavMeshAgent agent;  // slot 0 - the mover; auto-bound (unique tag) to this GameObject's agent
 var Object3D    dest;    // slot 1 - the chase target; bind by hand (TestAI.Manual.cs)
@@ -14,15 +19,15 @@ var float       speed;   // slot 2 - chase speed (u/s); bound from MazeTestSetup
 
 State Chase {
     Actions {
-        Start {
+        Start { }
+        Update {
             moveTowards(agent, dest, speed);
         }
-        Update { }
     }
-    // No Traversals: the state is terminal and that is the point. The goal is
-    // persistent — Start{} posts it once, the movement system steers from it
-    // every tick, and there is nothing to transition to. A terminal state is
-    // how the runtime expresses "no decisions left to make".
+    // No Traversals: the state is terminal and that is the point. The chase is
+    // restated every tick in Update{} and there is nothing to transition to.
+    // A terminal state is how the runtime expresses "no decisions left to
+    // make".
 }
 
 @ENTRY Chase

@@ -1,14 +1,15 @@
 // myFSM Unity Runtime — Navigation category (0x0600-0x062C, 45 overloads).
 //
 // Path queries over NavMesh (3D) with straight-line fallback, arrival tests,
-// and goal-posting movement: goTo / followTarget / findShortestPathAndMove /
-// follow / sprintTowards / moveTowards never teleport — they set a goal the
+// and goal-posting movement: findShortestPathAndMove / moveTowards /
+// stopMovement never teleport — they set a goal the
 // MovementSystem advances incrementally through the Unity call for the
 // agent's component: NavMeshAgent.SetDestination on a mesh,
 // Rigidbody(2D).MovePosition from FixedUpdate (rb.position + normalized
 // direction * speed * Time.fixedDeltaTime, the plain follower script),
 // CharacterController.Move, or a transform write when nothing can move it.
-// Object destinations are snapshotted at call time (goTo/sprint); follow*
+// Object destinations are snapshotted at call time by nothing any more —
+// moveTowards keeps them live;
 // and moveTowards(object) re-target live.
 
 using System.Collections.Generic;
@@ -34,32 +35,12 @@ namespace MyFSM.Unity
                 case 0x0607: return HasReachedObject(d, args, exec, false);
                 case 0x0608: return HasReachedPoint(d, args, exec, true);
                 case 0x0609: return HasReachedObject(d, args, exec, true);
-                case 0x060A: return GoToPoint(d, args, exec);
-                case 0x060B: return GoToObject(d, args, exec);
-                case 0x060C: return GoToPoint(d, args, exec);
-                case 0x060D: return GoToObject(d, args, exec);
-                case 0x060E: return GoToPoint(d, args, exec);
-                case 0x060F: return GoToObject(d, args, exec);
-                case 0x0610: return Follow(d, args, exec, 1f, "followTarget");
-                case 0x0611: return Follow(d, args, exec, 1f, "followTarget");
-                case 0x0612: return Follow(d, args, exec, 1f, "followTarget");
-                case 0x0613: return Follow(d, args, exec, 1f, "followTarget");
                 case 0x0614: return ShortestPathMove(d, args, exec, false);
                 case 0x0615: return ShortestPathMove(d, args, exec, true);
                 case 0x0616: return ShortestPathMove(d, args, exec, false);
                 case 0x0617: return ShortestPathMove(d, args, exec, true);
                 case 0x0618: return ShortestPathMove(d, args, exec, false);
                 case 0x0619: return ShortestPathMove(d, args, exec, true);
-                case 0x061A: return Follow(d, args, exec, 0.5f, "follow");
-                case 0x061B: return Follow(d, args, exec, 0.5f, "follow");
-                case 0x061C: return Follow(d, args, exec, 0.5f, "follow");
-                case 0x061D: return Follow(d, args, exec, 0.5f, "follow");
-                case 0x061E: return SprintToPoint(d, args, exec);
-                case 0x061F: return SprintToObject(d, args, exec);
-                case 0x0620: return SprintToPoint(d, args, exec);
-                case 0x0621: return SprintToObject(d, args, exec);
-                case 0x0622: return SprintToPoint(d, args, exec);
-                case 0x0623: return SprintToObject(d, args, exec);
                 case 0x0624: return MoveToPoint(d, args, exec);
                 case 0x0625: return MoveToObject(d, args, exec);
                 case 0x0626: return MoveToPoint(d, args, exec);
@@ -300,43 +281,6 @@ namespace MyFSM.Unity
             d.Movement.SetGoal(agent.HandleId, g);
         }
 
-        private static FsmValue GoToPoint(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
-        {
-            if (d.ResolveTransform(args[0], exec, "goTo") == null) return FsmValue.Void;
-            bool is2D = Is2DAgent(args[0]);
-            Vector3 dest = is2D
-                ? new Vector3(args[1].X, args[1].Y, 0f)
-                : FsmConvert.ToV3(args[1]);
-            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]), is2D, "goTo", exec);
-            return FsmValue.Void;
-        }
-
-        private static FsmValue GoToObject(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
-        {
-            if (d.ResolveTransform(args[0], exec, "goTo") == null) return FsmValue.Void;
-            Transform tt = d.ResolveTransform(args[1], exec, "goTo");
-            if (tt == null) return FsmValue.Void;
-            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]), Is2DAgent(args[0]),
-                      "goTo", exec);
-            return FsmValue.Void;
-        }
-
-        private static FsmValue Follow(FunctionDispatcher d, FsmValue[] args, AiExecution exec,
-                                       float stopScale, string fn)
-        {
-            if (d.ResolveTransform(args[0], exec, fn) == null) return FsmValue.Void;
-            if (d.ResolveTransform(args[1], exec, fn) == null) return FsmValue.Void;
-            MoveGoal g = new MoveGoal();
-            g.Mode = MoveMode.FollowObject;
-            g.Agent = args[0];
-            g.Target = args[1];
-            g.Speed = BaseSpeed(d, args[0]);
-            g.StopDistance = StopForNew(d, args[0]) * stopScale;
-            g.Is2D = Is2DAgent(args[0]);
-            d.Movement.SetGoal(args[0].HandleId, g);
-            return FsmValue.Void;
-        }
-
         private static FsmValue ShortestPathMove(FunctionDispatcher d, FsmValue[] args,
                                                  AiExecution exec, bool targetIsObject)
         {
@@ -375,39 +319,6 @@ namespace MyFSM.Unity
             g.Corners = corners;
             g.CornerIndex = 0;
             d.Movement.SetGoal(args[0].HandleId, g);
-            return FsmValue.Void;
-        }
-
-        private static FsmValue SprintToPoint(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
-        {
-            if (d.ResolveTransform(args[0], exec, "sprintTowards") == null) return FsmValue.Void;
-            float mult = args[2].F;
-            if (mult < 0f)
-            {
-                exec.Log.Warn("sprintTowards: negative multiplier clamped to 0");
-                mult = 0f;
-            }
-            bool is2D = Is2DAgent(args[0]);
-            Vector3 dest = is2D
-                ? new Vector3(args[1].X, args[1].Y, 0f)
-                : FsmConvert.ToV3(args[1]);
-            PostPoint(d, args[0], dest, BaseSpeed(d, args[0]) * mult, is2D, "sprintTowards", exec);
-            return FsmValue.Void;
-        }
-
-        private static FsmValue SprintToObject(FunctionDispatcher d, FsmValue[] args, AiExecution exec)
-        {
-            if (d.ResolveTransform(args[0], exec, "sprintTowards") == null) return FsmValue.Void;
-            Transform tt = d.ResolveTransform(args[1], exec, "sprintTowards");
-            if (tt == null) return FsmValue.Void;
-            float mult = args[2].F;
-            if (mult < 0f)
-            {
-                exec.Log.Warn("sprintTowards: negative multiplier clamped to 0");
-                mult = 0f;
-            }
-            PostPoint(d, args[0], tt.position, BaseSpeed(d, args[0]) * mult, Is2DAgent(args[0]),
-                      "sprintTowards", exec);
             return FsmValue.Void;
         }
 

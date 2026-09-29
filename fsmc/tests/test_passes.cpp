@@ -29,7 +29,7 @@ const char* kTwoState =
     "                temp Vector3 dir = normalize(directionTo(player, enemy)); // if body\n"
     "                moveTowards(agent, dir, 5.0f);\n"
     "            } else if (lastDist < 3.0f) {\n"
-    "                followTarget(agent, enemy);\n"
+    "                moveTowards(agent, enemy, 4.0f); // live object goal\n"
     "            } else {\n"
     "                stopMovement(agent);\n"
     "            }\n"
@@ -295,7 +295,7 @@ TEST(passes, tier3_calls_emit_no_claim_or_release) {
     ASSERT_TRUE(readModule(r.module, rm, err));
     ASSERT_TRUE(validateModule(rm, err));
 
-    // Chase drives 'agent' with moveTowards + followTarget + stopMovement:
+    // Chase drives 'agent' with 2x moveTowards + stopMovement:
     // 5 assigns (two temp inits, the Start{} seed, the if-body temp init and
     // the Update{} refresh) + 3 calls + 3 gotos = 11 instructions, no claim
     // traffic.

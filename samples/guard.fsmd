@@ -1,6 +1,6 @@
 ======================================================================
  FSMC DISASSEMBLY
- file     samples/guard.fsmb  (1181 bytes)
+ file     /tmp/guard.fsmb  (1181 bytes)
  format   fsmb v0.5 — magic 0x46534D44 ("FSMD"), little-endian
  check    OK — read back + full validation passed (every address, reference, function id and token type resolves)
 ======================================================================

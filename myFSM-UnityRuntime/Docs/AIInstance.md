@@ -125,9 +125,8 @@ void FixedUpdate()
 }
 ```
 
-`speed` is the goal's speed (the call's argument for `moveTowards`; the agent's
-base speed — `NavMeshAgent.speed` or 3.5 — for `goTo` / `follow`, times the
-multiplier for `sprintTowards`), `target.position` is the goal's destination
+`speed` is the call's argument for `moveTowards` (absolute, units/second),
+`target.position` is the goal's destination
 (re-read every physics step for an object target, a fixed point for a Vector3),
 and both are measured from the body's own `rb.position`. Nothing is layered on
 top: no velocity is written, the step is not clamped to the remaining distance,

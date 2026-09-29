@@ -8,8 +8,10 @@
 
 using namespace fsmc;
 
-TEST(lib_functions, total_overload_count_is_179) {
-    ASSERT_EQ(BuiltinFunctions::instance().all().size(), std::size_t(179));
+TEST(lib_functions, total_overload_count_is_159) {
+    // 179 overloads before the v0.5 purge; goTo/followTarget/follow/
+    // sprintTowards (20 overloads) were removed as redundant with moveTowards.
+    ASSERT_EQ(BuiltinFunctions::instance().all().size(), std::size_t(159));
 }
 
 TEST(lib_functions, every_overload_reachable_by_name) {
@@ -46,8 +48,11 @@ TEST(lib_functions, unknown_name_returns_empty) {
     ASSERT_TRUE(BuiltinFunctions::instance().find("nonexistent").empty());
 }
 
-TEST(lib_functions, ids_are_sequential_in_category_ranges) {
-    // Category base IDs (spec 0.5).
+TEST(lib_functions, ids_stay_in_category_ranges) {
+    // Category base IDs (spec 0.5). Gaps inside a category are legitimate:
+    // goTo/followTarget/follow/sprintTowards (0x060A-0x0623) were retired, so
+    // Navigation is no longer gapless — the ids must merely start at the base,
+    // never leave the range, and strictly increase.
     static const std::pair<const char*, uint16_t> bases[] = {
         {"Math", 0x0000}, {"Object", 0x0100}, {"Sprite", 0x0200},
         {"Animation", 0x0300}, {"Physics", 0x0400}, {"Camera", 0x0500},
@@ -64,8 +69,9 @@ TEST(lib_functions, ids_are_sequential_in_category_ranges) {
         ASSERT_TRUE(it != byCategory.end());
         const std::vector<uint16_t>& ids = it->second;
         ASSERT_TRUE(!ids.empty());
-        for (std::size_t i = 0; i < ids.size(); ++i) {
-            ASSERT_EQ(ids[i], base + uint16_t(i));
+        ASSERT_EQ(ids.front(), base);
+        for (std::size_t i = 1; i < ids.size(); ++i) {
+            ASSERT_TRUE(ids[i] > ids[i - 1]);
         }
         ASSERT_TRUE(ids.back() <= base + 0xFF);
     }
@@ -92,8 +98,7 @@ TEST(lib_functions, tiers_are_valid) {
 
 TEST(lib_functions, overload_counts_match_spec) {
     static const std::pair<const char*, std::size_t> counts[] = {
-        {"goTo", 6}, {"followTarget", 4}, {"findShortestPathAndMove", 6},
-        {"follow", 4}, {"sprintTowards", 6}, {"moveTowards", 6},
+        {"findShortestPathAndMove", 6}, {"moveTowards", 6},
         {"stopMovement", 3}, {"hasReachedDestination", 6}, {"getPosition", 4},
         {"raycast", 2}, {"getScale", 2}, {"sin", 1}, {"random", 1},
         {"emit", 1}, {"wait", 1}, {"waitUntil", 1}, {"lookAt", 2},
@@ -102,6 +107,11 @@ TEST(lib_functions, overload_counts_match_spec) {
     for (const auto& [name, n] : counts) {
         ASSERT_EQ(BuiltinFunctions::instance().find(name).size(), n);
     }
+    // the purged names are gone entirely
+    ASSERT_TRUE(BuiltinFunctions::instance().find("goTo").empty());
+    ASSERT_TRUE(BuiltinFunctions::instance().find("followTarget").empty());
+    ASSERT_TRUE(BuiltinFunctions::instance().find("follow").empty());
+    ASSERT_TRUE(BuiltinFunctions::instance().find("sprintTowards").empty());
 }
 
 // The claim tables are gone (module v0.3): what remains of them is the
@@ -116,8 +126,7 @@ TEST(lib_functions, tier3_target_driving_flags_match_spec) {
 
     // every overload of the object-driving Tier 3 functions requires a variable
     static const char* kDriving[] = {
-        "goTo", "followTarget", "findShortestPathAndMove", "follow",
-        "sprintTowards", "moveTowards", "stopMovement", "lookAt",
+        "findShortestPathAndMove", "moveTowards", "stopMovement", "lookAt",
     };
     std::size_t drivingOverloads = 0;
     for (const char* name : kDriving) {
@@ -129,7 +138,18 @@ TEST(lib_functions, tier3_target_driving_flags_match_spec) {
             ++drivingOverloads;
         }
     }
-    ASSERT_EQ(drivingOverloads, std::size_t(37)); // 6+4+6+4+6+6+3+2
+    ASSERT_EQ(drivingOverloads, std::size_t(17)); // 6+6+3+2
+
+    // the purged slots are retired: no overload answers on them any more
+    static const uint16_t kRetired[] = {
+        0x060A, 0x060B, 0x060C, 0x060D, 0x060E, 0x060F, // goTo
+        0x0610, 0x0611, 0x0612, 0x0613,                 // followTarget
+        0x061A, 0x061B, 0x061C, 0x061D,                 // follow
+        0x061E, 0x061F, 0x0620, 0x0621, 0x0622, 0x0623, // sprintTowards
+    };
+    for (uint16_t id : kRetired) {
+        EXPECT_TRUE(reg.findById(id) == nullptr);
+    }
 
     // wait / waitUntil are Tier 3 but drive no object: a literal is fine there
     ASSERT_TRUE(!drives(0x0A00)); // wait(float seconds)
@@ -137,8 +157,8 @@ TEST(lib_functions, tier3_target_driving_flags_match_spec) {
     ASSERT_EQ(reg.findById(0x0A00)->tier, uint8_t(3));
 
     // spot-check ids that used to carry claim lists
-    ASSERT_TRUE(drives(0x060A)); // goTo(NavMeshAgent, Vector3)     was position+velocity
-    ASSERT_TRUE(drives(0x061A)); // follow(NavMeshAgent, Object3D)  was position+velocity+rotation
+    ASSERT_TRUE(drives(0x0624)); // moveTowards(NavMeshAgent, Vector3, float)
+    ASSERT_TRUE(drives(0x0614)); // findShortestPathAndMove(NavMeshAgent, Vector3)
     ASSERT_TRUE(drives(0x0700)); // lookAt(Object3D, Object3D)      was src.rotation
     ASSERT_TRUE(drives(0x062A)); // stopMovement(NavMeshAgent)
 

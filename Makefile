@@ -30,7 +30,7 @@ test: build
 # Static checks for the Unity runtime and the test cases: syntax of every .cs
 # file, namespace usage, names used but declared nowhere (the CS0103 family -
 # a renamed class with a caller left behind, or a helper file that never made it
-# into a project), the 179-row function catalog and its dispatchers, and the
+# into a project), the 159-row function catalog and its dispatchers, and the
 # committed generated classes against their .fsmb modules. Run this before
 # copying the runtime into a project: it is what catches the errors Unity would
 # otherwise report after the copy.

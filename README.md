@@ -5,7 +5,7 @@ Reads one `.fsm` source file, emits one little-endian `.fsmb` binary (36-byte
 header + 7 sections), byte-for-byte deterministic.
 
 - **Writing `.fsm` files?** → [`fsmc/LANGUAGE.md`](fsmc/LANGUAGE.md) — the full
-  language reference: syntax of every feature, all 22 types, all 179 function
+  language reference: syntax of every feature, all 22 types, all 159 function
   overloads, type rules, scoping, and every compile error.
 - **Binary format / design** → [`fsmc/DESIGN.md`](fsmc/DESIGN.md)
 - **Ready-to-compile examples** → [`samples/`](samples/)
@@ -73,7 +73,7 @@ make clean                              # remove fsmc/build/
 
 ```sh
 ./bin/fsmc fsmc/tests/fixtures/minimal.fsm   # → minimal.fsmb (392 bytes, golden-pinned)
-./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (1050 bytes)
+./bin/fsmc fsmc/tests/fixtures/two_state.fsm # → two_state.fsmb (1062 bytes)
 ./bin/fsmc fsmc/tests/fixtures/errors/bad_overload.fsm   # exits 2 with a diagnostic
 ```
 
@@ -83,10 +83,10 @@ make clean                              # remove fsmc/build/
 fsmc/                  the compiler (CMake project)
   CMakeLists.txt       fsmc_lib + fsmc CLI + fsmc_tests, CTest wiring
   LANGUAGE.md          the full language reference (syntax of every feature)
-  DESIGN.md            normative binary layout, full 179-entry function ID
+  DESIGN.md            normative binary layout, full 159-entry function ID
                        table, retired-encoding notes, scope + overload rules,
                        and the 9 documented deviations from spec v0.3
-  lib/                 BuiltinTypes (22) / BuiltinFunctions (179) — pure data,
+  lib/                 BuiltinTypes (22) / BuiltinFunctions (159) — pure data,
                        the single source of truth for all types & functions
   include/  src/       hand-rolled lexer, recursive-descent parser, scope-stack
                        scoping (Start{}/Update{} phase blocks included),

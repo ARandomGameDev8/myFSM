@@ -14,7 +14,9 @@ Pure C# Unity runtime for myFSM: loads compiler-produced `.fsmb` modules
 - **Backend servers** (independent): main server (registry + DB + timetable),
   query server (OS-scheduler-like service desk for external systems) and two
   live broadcast servers (ordered + priority) for state changes.
-- **Functions**: Unity implementations of all 179 built-in overloads.
+- **Functions**: Unity implementations of all 159 built-in overloads
+  (goTo / followTarget / follow / sprintTowards were retired in v0.5 —
+  `moveTowards` covers them).
   Motion/rotation calls are incremental across ticks (NavMesh when available,
   manual `position += direction * speed * dt` otherwise) — never teleports,
   and manual movement is swept against colliders so bodies stop at walls and
@@ -33,7 +35,7 @@ Unity 2019+ and in the sandbox harness (`Sandbox/`).
 | [`Docs/BroadcastServers.md`](Docs/BroadcastServers.md) | Subscribing, ordered vs priority delivery, verdicts A/B/C, re-entrancy rules, pitfalls |
 | [`Docs/AIInstance.md`](Docs/AIInstance.md) | Base class part-by-part, generated child anatomy, where/how to bind manually, precedence |
 | [`Docs/Compiler.md`](Docs/Compiler.md) | Native lib + wrapper, manual/dynamic/burst compile, inspector workflow, failure modes |
-| [`Docs/Reference.md`](Docs/Reference.md) | **All 179 built-in functions** (ID, signature, tier, behaviour) + every override point and the host API |
+| [`Docs/Reference.md`](Docs/Reference.md) | **All 159 built-in functions** (ID, signature, tier, behaviour) + every override point and the host API |
 
 ## Layout
 
@@ -42,7 +44,7 @@ Runtime/
   Core/    no UnityEngine dependency (loader, values, tables, servers, DB)
     FsmbFormat.cs         .fsmb v0.5 constants (mirrors binary_format.hpp)
     FsmbReader.cs         decoder + validator (mirrors module_reader.cpp)
-    FunctionCatalog.cs    the 179 overloads (mirrors builtin_functions)
+    FunctionCatalog.cs    the 159 overloads (mirrors builtin_functions)
     FsmValue.cs           tagged runtime values, literal decoding
     VariableTable.cs      consts + runtime slots + scoped temps
     AiExecution.cs        per-AI context (servers, suspension, transitions)
@@ -75,7 +77,7 @@ myfsm-package.json   package manifest (name, version, install dir, file map)
 One `.fsmb` module loaded onto one GameObject is one AI. The module's states,
 phases (`Start{}`/`Update{}`), transitions and variables all come from the
 compiled file; the Unity side supplies bound scene objects, time, and the
-engine services behind the 179 built-in functions.
+engine services behind the 159 built-in functions.
 
 Every frame, each AI ticks itself in its own `Update()` (Unity component
 order — the main server never ticks AIs, it only keeps the registry). One
@@ -183,8 +185,7 @@ void FixedUpdate()
 }
 ```
 
-`speed` is the call's speed argument (or the agent's base speed for `goTo` /
-`follow`), `target.position` is the goal's destination (re-read every step for an
+`speed` is the call's speed argument, `target.position` is the goal's destination (re-read every step for an
 object target), and nothing is layered on top: no velocity is written, the step
 is not clamped, flattened or stopped short, and the goal is not dropped on
 arrival — a body standing on its destination is moved by a zero-length step until
@@ -197,9 +198,8 @@ Each agent logs the call it uses when that changes
 which makes the path taken visible instead of guessed. A `CharacterController` is
 driven along the ground plane — its gravity is added by the runtime, so a walker
 falls and lands instead of hovering at its goal's height. `moveTowards` with an
-OBJECT destination re-reads it every tick, as `follow`/`followTarget` do; `goTo`
-and `sprintTowards` take a Vector3 (or an object's position at call time);
-`lookAt` rotates gradually (through `MoveRotation` when the object has a body);
+OBJECT destination re-reads it every tick; with a Vector3 it walks to that fixed
+point; `lookAt` rotates gradually (through `MoveRotation` when the object has a body);
 movement never changes facing. The other 150+ overloads are direct engine
 mappings; engine-state failures (null handles, missing components) log and yield
 defaults, never exceptions.
@@ -238,10 +238,12 @@ Ambiguities in the design brief, resolved as follows:
   current tick finishes serving; in-flight motion continues while suspended
   (so `waitUntil(hasReachedDestination(...))` can become true). `waitUntil`
   re-evaluates its condition AST every tick.
-- **`follow` vs `followTarget`**: both live-track; `follow` stops closer
-  (0.5x stop distance). `moveTowards` given an OBJECT also live-tracks it (the
-  goal re-reads the object each tick); given a Vector3 it walks to that fixed
-  point. `goTo`/`sprintTowards` always take a point.
+- **`moveTowards`** is the one movement call: given an OBJECT it live-tracks
+  it (the goal re-reads the object each tick); given a Vector3 it walks to
+  that fixed point. Its speed argument is absolute (units/second).
+  goTo / followTarget / follow / sprintTowards were retired in v0.5 — they
+  only ever chose a stop distance or a speed formula on top of the same two
+  goal modes.
 - **`getPursuitPosition`**: one-second lead on the target's rigidbody
   velocity (`pos + vel`), else the current position.
 - **`getSeparationVector`**: samples up to `neighbors` nearby colliders
@@ -295,7 +297,7 @@ dotnet run -- Vectors/
 
 `Sandbox/check.py` needs only Python + pip packages (`tree-sitter`,
 `tree-sitter-c-sharp`) and validates .cs syntax plus catalog/dispatcher
-ID consistency (179/179 both directions).
+ID consistency (159/159 both directions).
 
 ## Installer (next)
 

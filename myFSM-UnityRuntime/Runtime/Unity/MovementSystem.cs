@@ -100,8 +100,8 @@ namespace MyFSM.Unity
     public enum MoveMode
     {
         None,
-        Point,        // fixed destination (goTo, sprintTowards, moveTowards)
-        FollowObject, // live re-target (follow, followTarget)
+        Point,        // fixed destination (moveTowards with a Vector3)
+        FollowObject, // live re-target (moveTowards with an object)
         PathCorners,  // corner queue (findShortestPathAndMove)
         LookAt        // gradual rotation (lookAt)
     }

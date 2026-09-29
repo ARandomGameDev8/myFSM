@@ -109,7 +109,7 @@ public static class SmokeTest
         Array.Sort(files);
         Console.WriteLine("vectors: " + files.Length);
         Check(files.Length > 0, "vectors present");
-        Check(FunctionCatalog.All.Length == 179, "catalog has 179 overloads");
+        Check(FunctionCatalog.All.Length == 159, "catalog has 159 overloads");
 
         TestReader(files);
         TestCoreExecution(files);

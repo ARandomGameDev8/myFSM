@@ -1,10 +1,12 @@
-// goTo has no (NavMeshAgent, int) overload.
+// moveTowards has no (NavMeshAgent, int) overload — and no arity-2 call:
+// the speed argument is mandatory. The diagnostic lists the argument types
+// plus every candidate signature.
 var NavMeshAgent navAgent;
 State A {
     Actions {
         Start { }
         Update {
-            goTo(navAgent, 5); // ERROR: no matching overload
+            moveTowards(navAgent, 5); // ERROR: no matching overload
         }
     }
     Traversals {

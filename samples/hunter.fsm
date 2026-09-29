@@ -42,10 +42,14 @@ State Hunt {
 
 State Flee {
     Actions {
-        temp Vector3 away = getFleeDirection(getPosition(hunter), getPosition(player));
         Start { }                         // fleeing needs no entry setup
         Update {
-            sprintTowards(agent, away, 1.5f);   // re-steered every tick
+            // The flee direction is recomputed every tick (the player moves),
+            // then the chase is restated: moveTowards is the one movement
+            // call — its speed argument is absolute (base speed was the old
+            // sprintTowards's job, times its multiplier).
+            temp Vector3 away = getFleeDirection(getPosition(hunter), getPosition(player));
+            moveTowards(agent, away, 5.25f);    // re-steered every tick
         }
     }
     Traversals {
