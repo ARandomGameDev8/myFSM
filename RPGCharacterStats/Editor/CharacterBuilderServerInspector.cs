@@ -55,7 +55,7 @@ namespace RPGCharacterStats.EditorTools
                 SpawnFromInspector(server, _spawnByName);
             EditorGUILayout.EndHorizontal();
 
-            if (GUILayout.Button("Load definitions from Assets"))
+            if (GUILayout.Button("Reload all from CharacterDB"))
                 RegistryWindow.LoadDefinitions(server);
 
             DrawSpawned(server);

@@ -24,20 +24,20 @@ namespace RPGCharacterStats.EditorTools
             GetWindow<RegistryWindow>("Character Registry");
         }
 
+        private void OnEnable()
+        {
+            // Show the database right away: a cold cache pulls everything once.
+            CharacterBuilderServer server = CharacterServerAccess.Resolve(false);
+            if (server != null && server.registry.entries.Count == 0)
+                server.LoadAllDefinitionsFromDb();
+        }
+
         private CharacterBuilderServer Server
         {
-            get
-            {
-                CharacterBuilderServer server = CharacterBuilderServer.Instance;
-                if (server == null)
-                {
-                    // Convenience for editor-time use: create the service if
-                    // a scene doesn't have it yet.
-                    GameObject go = new GameObject("CharacterBuilderServer");
-                    server = go.AddComponent<CharacterBuilderServer>();
-                }
-                return server;
-            }
+            // One shared resolution for every window: the alive singleton in
+            // play mode, else the scene's server, else create exactly one.
+            // Creating per access is what spawned duplicate "servers".
+            get { return CharacterServerAccess.Resolve(true); }
         }
 
         private void OnGUI()
@@ -101,29 +101,21 @@ namespace RPGCharacterStats.EditorTools
 
             EditorGUILayout.EndScrollView();
 
-            if (GUILayout.Button("Load definitions from Assets"))
+            if (GUILayout.Button("Reload all from CharacterDB"))
             {
                 LoadDefinitions(server);
             }
         }
 
-        /// <summary>Pull every saved CharacterDefinition asset into the
-        /// registry so spawned characters survive editor restarts by
-        /// reloading the same assets. Public so the server's inspector can
-        /// reuse it (same library, two entry points).</summary>
+        /// <summary>Reload the registry cache from the persistent CharacterDB.
+        /// Public so the server's inspector reuses it (same library, two
+        /// entry points).</summary>
         public static void LoadDefinitions(CharacterBuilderServer server)
         {
-            string[] guids = AssetDatabase.FindAssets("t:CharacterDefinition");
-            for (int i = 0; i < guids.Length; i++)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                CharacterDefinition def = AssetDatabase.LoadAssetAtPath<CharacterDefinition>(path);
-                if (def != null && !server.registry.ContainsId(def.characterID))
-                {
-                    server.registry.Add(def);
-                }
-            }
-            Debug.Log("[RPGStats] registry loaded " + guids.Length + " definition(s)");
+            int loaded = server.LoadAllDefinitionsFromDb();
+            Debug.Log("[RPGStats] CharacterDB → " + loaded + " definition(s) cached in the registry");
+            if (loaded == 0)
+                Debug.LogWarning("[RPGStats] CharacterDB is empty — build a character in RPG ▸ Character Builder first.");
         }
     }
 }

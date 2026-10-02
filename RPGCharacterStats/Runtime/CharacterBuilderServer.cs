@@ -17,6 +17,7 @@ using UnityEngine;
 
 namespace RPGCharacterStats
 {
+    [ExecuteAlways]
     public class CharacterBuilderServer : MonoBehaviour
     {
         public static CharacterBuilderServer Instance { get; private set; }
@@ -27,26 +28,76 @@ namespace RPGCharacterStats
         {
             if (Instance != null && Instance != this)
             {
+#if UNITY_EDITOR
+                // ExecuteAlways runs Awake in edit mode too, where Destroy
+                // is illegal — a duplicate is removed immediately instead.
+                if (!Application.isPlaying) DestroyImmediate(gameObject);
+                else Destroy(gameObject);
+#else
                 Destroy(gameObject);
+#endif
                 return;
             }
             Instance = this;
+        }
+
+        protected virtual void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
         }
 
         // ------------------------------------------------------------------
         // Public API (section 15)
         // ------------------------------------------------------------------
 
+        // ------------------------------------------------------------------
+        // Registry ownership (the single read/write path: DB + LRU cache)
+        // ------------------------------------------------------------------
+
+        /// <summary>The ONLY way a character enters the system: persist it
+        /// into the CharacterDB (Assets/Resources/CharacterDB — editor write)
+        /// and cache it in the registry. Editor windows never touch the cache
+        /// directly; the server owns every read and write.</summary>
+        public CharacterEntry SaveDefinition(CharacterDefinition def)
+        {
+            if (def == null) return null;
+            CharacterDB.Save(def);      // editor: asset write; runtime: no-op
+            return registry.Put(def);   // insert/update + LRU touch + evict
+        }
+
+        /// <summary>Pull every definition in the DB into the registry cache —
+        /// the Registry window's reload and the cold-cache path.</summary>
+        public int LoadAllDefinitionsFromDb()
+        {
+            List<CharacterDefinition> all = CharacterDB.LoadAll();
+            for (int i = 0; i < all.Count; i++)
+                registry.Put(all[i]);
+            return all.Count;
+        }
+
+        /// <summary>ID uniqueness across cache AND database.</summary>
+        public bool IsIdTaken(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            if (registry.ContainsId(id)) return true;   // cache-only check
+            return CharacterDB.LoadById(id) != null;
+        }
+
         /// <summary>Lookup by definition NAME first, then ID (section 15's
-        /// Spawn(string name) — the registry indexes both).</summary>
+        /// Spawn(string name) — the registry indexes both). Cache first; on a
+        /// miss the DB is read and the result cached (LRU).</summary>
         private CharacterEntry FindDefinitionEntry(string name)
         {
-            for (int i = 0; i < registry.entries.Count; i++)
-            {
-                CharacterDefinition d = registry.entries[i].definition;
-                if (d != null && d.characterName == name) return registry.entries[i];
-            }
-            return registry.FindById(name);
+            CharacterEntry entry = registry.FindByName(name);
+            if (entry != null) return entry;
+
+            entry = registry.FindById(name);   // touches; falls back to the DB by ID
+            if (entry != null) return entry;
+
+            // Name ≠ ID case: pull the whole DB into the cache once, retry.
+            if (LoadAllDefinitionsFromDb() > 0)
+                return registry.FindByName(name) ?? registry.FindById(name);
+            return null;
         }
 
         /// <summary>Spawn by definition name or ID — the tag serial is

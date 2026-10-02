@@ -15,7 +15,7 @@ Full design: `Docs/RPG_Character_Stats_System_Design_Document.md` (the document 
 | `CharacterStats/` | Character Stats system | `.charstat` parse/write, `CharacterStats`, `CharStatAsset` |
 | `GameplayStats/` | Formula DSL + runtime | `.gameplaystat` parse, compile to delegates, recalc server, `Blackboard` |
 | `Definitions/` | Character definitions + registry | `CharacterDefinition` tree, `CharacterRegistry`, tags |
-| `Runtime/` | `Character` hierarchy + `CharacterBuilderServer` | spawn pipeline, 2D/3D movement controllers |
+| `Runtime/` | `Character` hierarchy + `CharacterBuilderServer` + `CharacterDB` | spawn pipeline, 2D/3D movement controllers; definitions persist in `Assets/Resources/CharacterDB/` (one .asset per character, readable in builds via `Resources`), and the registry is the server's **LRU cache** in front of that DB — the server owns every read and write |
 | `UI/` | `StatBar` and the five concrete bars | health/shield/stamina/magic/XP visuals |
 | `Editor/` | The four visual editors + the server's inspector | Stats / Gameplay / Character / Registry windows; `CharacterBuilderServer`'s custom inspector opens them and spawns from the scene |
 | `Samples/` | `RPGStats.charstat`, `RPGGameplay.gameplaystat`, `OrcWarriorFSM` | end-to-end example from the design doc |

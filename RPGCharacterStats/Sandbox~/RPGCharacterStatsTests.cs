@@ -47,6 +47,12 @@ namespace RPGCharacterStatsTests
             RegistryTags();
             RegistrySearch();
 
+            Section("character DB + LRU cache");
+            DbCacheMiss();
+            LruEviction();
+            SpawnedEntriesPinned();
+            ServerSaveDefinitionOwnsWrites();
+
             Section("spawn pipeline (section 2.5 matrix)");
             Spawn3DPhysicsNPC();
             Spawn3DNonPhysicsPlayer();
@@ -534,6 +540,87 @@ namespace RPGCharacterStatsTests
             Expect(registry.ContainsId("orc_warrior"), "ContainsId finds the ID");
             Expect(!registry.ContainsId("troll"), "ContainsId rejects unknown IDs");
             Expect(registry.FindById("orc_warrior").definition == orc, "FindById returns the entry");
+        }
+
+        // ---- character DB + LRU cache ----
+
+        private static void DbCacheMiss()
+        {
+            PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            hero.characterID = "db_hero";
+            hero.characterName = "DbHero";
+            Resources.store["CharacterDB/db_hero"] = hero;
+
+            CharacterRegistry cache = new CharacterRegistry();
+            Expect(cache.entries.Count == 0, "cold cache starts empty");
+            CharacterEntry hit = cache.FindById("db_hero");
+            Expect(hit != null && hit.definition == hero, "cache miss loads from the DB");
+            Expect(cache.entries.Count == 1, "DB hit is cached");
+            Expect(!cache.ContainsId("ghost"), "ContainsId stays cache-only");
+            Expect(cache.FindById("ghost") == null, "unknown ID misses cleanly");
+        }
+
+        private static void LruEviction()
+        {
+            CharacterRegistry cache = new CharacterRegistry { capacity = 2 };
+
+            EnemyCharacterDefinition a = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            a.characterID = "lru_a"; a.characterName = "A";
+            EnemyCharacterDefinition b = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            b.characterID = "lru_b"; b.characterName = "B";
+            EnemyCharacterDefinition c = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            c.characterID = "lru_c"; c.characterName = "C";
+            Resources.store["CharacterDB/lru_a"] = a;
+            Resources.store["CharacterDB/lru_b"] = b;
+            Resources.store["CharacterDB/lru_c"] = c;
+
+            cache.Put(a);
+            cache.Put(b);
+            cache.FindById("lru_a");            // a is now most recently used
+            cache.Put(c);                        // overflow: b is the LRU → evicted
+            Expect(cache.ContainsId("lru_a"), "recently used survives eviction");
+            Expect(cache.ContainsId("lru_c"), "newest survives eviction");
+            Expect(!cache.ContainsId("lru_b"), "least recently used is evicted");
+            CharacterEntry reloaded = cache.FindById("lru_b");
+            Expect(reloaded != null && reloaded.definition == b,
+                "evicted entry reloads from the DB");
+        }
+
+        private static void SpawnedEntriesPinned()
+        {
+            CharacterRegistry cache = new CharacterRegistry { capacity = 1 };
+
+            EnemyCharacterDefinition held = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            held.characterID = "pinned"; held.characterName = "Pinned";
+            CharacterEntry heldEntry = cache.Add(held);
+            heldEntry.isSpawned = true;          // materialized → pinned
+
+            EnemyCharacterDefinition alsoHeld = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            alsoHeld.characterID = "pinned2"; alsoHeld.characterName = "Pinned2";
+            CharacterEntry alsoEntry = cache.Add(alsoHeld);
+            alsoEntry.isSpawned = true;          // pinned too → nothing evictable
+
+            Expect(cache.ContainsId("pinned"), "spawned entry is pinned (never evicted)");
+            Expect(cache.ContainsId("pinned2"), "all-pinned cache overflows softly");
+            Expect(cache.entries.Count == 2, "capacity is soft when everything is pinned");
+        }
+
+        private static void ServerSaveDefinitionOwnsWrites()
+        {
+            CharacterBuilderServer server = NewServer();
+            EnemyCharacterDefinition def = NewOrcDefinition();
+            def.characterID = "cache_orc";
+            def.characterName = "CacheOrc";
+
+            Expect(server.SaveDefinition(def) != null, "SaveDefinition caches the character");
+            Expect(server.registry.ContainsId("cache_orc"), "SaveDefinition registers the ID");
+            Expect(server.IsIdTaken("cache_orc"), "IsIdTaken sees the cache");
+            Expect(server.IsIdTaken("db_hero"), "IsIdTaken sees the DB");
+            Expect(!server.IsIdTaken("ghost"), "unknown ID is free");
+
+            Expect(server.Spawn("cache_orc") != null, "spawn goes through the cache");
+            CharacterEntry spawned = server.registry.FindById("cache_orc");
+            Expect(spawned != null && spawned.isSpawned, "spawn marks the entry");
         }
 
         // ---- spawn pipeline ----

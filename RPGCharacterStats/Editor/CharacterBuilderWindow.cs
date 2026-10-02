@@ -17,8 +17,6 @@ namespace RPGCharacterStats.EditorTools
 {
     public class CharacterBuilderWindow : EditorWindow
     {
-        private readonly CharacterRegistry _registry = new CharacterRegistry();
-
         // metadata
         private string _name = "";
         private string _id = "";
@@ -213,10 +211,11 @@ namespace RPGCharacterStats.EditorTools
         private void Build()
         {
             _buildErrors.Clear();
+            CharacterBuilderServer server = CharacterServerAccess.Resolve(true);
 
             if (string.IsNullOrEmpty(_name)) _buildErrors.Add("Name is required.");
             if (string.IsNullOrEmpty(_id)) _buildErrors.Add("Character ID is required.");
-            else if (_registry.ContainsId(_id)) _buildErrors.Add("Character ID \"" + _id + "\" is already in the registry.");
+            else if (server.IsIdTaken(_id)) _buildErrors.Add("Character ID \"" + _id + "\" is already in the database.");
 
             if (_schema.entries.Count == 0)
                 _buildErrors.Add("A .charstat file must be selected before values can be entered (7.5).");
@@ -269,24 +268,27 @@ namespace RPGCharacterStats.EditorTools
 
             if (_buildErrors.Count > 0) return;
 
-            // Build the definition asset next to the .charstat (or in Assets/).
+            // Single write path: the server persists the definition into the
+            // CharacterDB (Assets/Resources/CharacterDB) and caches it in its
+            // LRU registry. This window never writes the cache directly.
             CharacterDefinition def = CreateDefinitionAsset();
             if (def == null) return;
 
-            CharacterEntry entry = _registry.Add(def);
-            Debug.Log("[RPGStats] built " + def.characterName + " → registry entry " +
-                (entry != null ? "added" : "FAILED"));
-            _status = def.characterName + " built into the registry.";
+            CharacterEntry entry = server.SaveDefinition(def);
+            Debug.Log("[RPGStats] built " + def.characterName + " → " +
+                (entry != null ? "written to CharacterDB + cached in the registry"
+                               : "cache FAILED"));
+            _status = def.characterName + " saved to CharacterDB and registered.";
         }
 
         private string _status = "";
 
+        /// <summary>Creates and configures the in-memory definition. The
+        /// SERVER persists it (CharacterDB.Save → Assets/Resources/CharacterDB);
+        /// this method must not write assets itself, or characters would
+        /// exist in two places.</summary>
         private CharacterDefinition CreateDefinitionAsset()
         {
-            string dir = SaveDirectory();
-            string assetName = SafeAssetName(string.IsNullOrEmpty(_id) ? "NewCharacter" : _id);
-            string path = AssetDatabase.GenerateUniqueAssetPath(dir + "/" + assetName + ".asset");
-
             CharacterDefinition def;
             if (_kind == CharacterKind.Player)
             {
@@ -321,58 +323,9 @@ namespace RPGCharacterStats.EditorTools
                 }
             }
 
-            try
-            {
-                AssetDatabase.CreateAsset(def, path);
-                AssetDatabase.SaveAssets();
-            }
-            catch (System.Exception ex)
-            {
-                ScriptableObject.DestroyImmediate(def);
-                EditorUtility.DisplayDialog("Cannot create asset",
-                    path + "\n\n" + ex.Message +
-                    "\n\nDefinition assets must live inside the project's Assets folder.",
-                    "OK");
-                return null;
-            }
             return def;
         }
 
-        /// <summary>Where the definition asset is saved: next to the .charstat
-        /// when that file lives inside this project, otherwise under
-        /// Assets/RPGCharacterStats/Definitions (created on demand). An
-        /// OpenFilePanel path can point anywhere on disk — the repo checkout,
-        /// a sample pack — and AssetDatabase.CreateAsset only accepts
-        /// Assets-relative paths.</summary>
-        private string SaveDirectory()
-        {
-            if (!string.IsNullOrEmpty(_charStatPath))
-            {
-                string full = Path.GetFullPath(_charStatPath).Replace('\\', '/');
-                string relative = FileUtil.GetProjectRelativePath(full);
-                if (!string.IsNullOrEmpty(relative) && relative.StartsWith("Assets/"))
-                    return Path.GetDirectoryName(relative).Replace('\\', '/');
-            }
-            return EnsureFolder(EnsureFolder("Assets", "RPGCharacterStats"), "Definitions");
-        }
 
-        private static string EnsureFolder(string parent, string name)
-        {
-            string path = parent + "/" + name;
-            if (!AssetDatabase.IsValidFolder(path))
-                AssetDatabase.CreateFolder(parent, name);
-            return path;
-        }
-
-        /// <summary>Asset filename from a character ID: filesystem-invalid
-        /// characters become '_', surrounding whitespace is trimmed, and an
-        /// empty result falls back to NewCharacter.</summary>
-        private static string SafeAssetName(string name)
-        {
-            string trimmed = name.Trim();
-            foreach (char c in Path.GetInvalidFileNameChars())
-                trimmed = trimmed.Replace(c, '_');
-            return string.IsNullOrWhiteSpace(trimmed) ? "NewCharacter" : trimmed;
-        }
     }
 }

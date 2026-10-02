@@ -39,6 +39,7 @@ namespace UnityEngine
         public string menuName;
         public int order;
     }
+    public class ExecuteAlwaysAttribute : Attribute { }
     public class RangeAttribute : Attribute
     {
         public RangeAttribute(float min, float max) { }
@@ -71,6 +72,34 @@ namespace UnityEngine
         public static implicit operator bool(Object o)
         {
             return o != null && !o.destroyed;
+        }
+    }
+
+    /// <summary>Sandbox stand-in for Unity's Resources: tests seed this
+    /// store the way Assets/Resources/CharacterDB is populated in a real
+    /// project, so the DB cache-miss paths are exercised headless.</summary>
+    public static class Resources
+    {
+        public static readonly Dictionary<string, Object> store =
+            new Dictionary<string, Object>();
+
+        public static T Load<T>(string path) where T : Object
+        {
+            Object found;
+            return store.TryGetValue(path, out found) ? found as T : null;
+        }
+
+        public static T[] LoadAll<T>(string path) where T : Object
+        {
+            List<T> hits = new List<T>();
+            foreach (KeyValuePair<string, Object> kv in store)
+            {
+                if (!kv.Key.StartsWith(path) || kv.Key.Length <= path.Length) continue;
+                if (kv.Key[path.Length] != '/') continue;
+                T asT = kv.Value as T;
+                if (asT != null) hits.Add(asT);
+            }
+            return hits.ToArray();
         }
     }
 
