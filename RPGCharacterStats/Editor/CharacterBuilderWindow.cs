@@ -115,7 +115,17 @@ namespace RPGCharacterStats.EditorTools
                     _gameplayStatText.Split('\n').Length + " lines). Compatibility is validated on Build.", MessageType.None);
 
             EditorGUILayout.Space();
-            if (GUILayout.Button("Build", GUILayout.Height(30))) Build();
+            if (GUILayout.Button("Build", GUILayout.Height(30)))
+            {
+                // Never let an exception unwind through OnGUI — it corrupts
+                // the layout state ("Invalid GUILayout state") for the rest
+                // of the session until the window is closed and reopened.
+                try { Build(); }
+                catch (System.Exception ex)
+                {
+                    EditorUtility.DisplayDialog("Build failed", ex.Message, "OK");
+                }
+            }
 
             for (int i = 0; i < _buildErrors.Count; i++)
                 EditorGUILayout.HelpBox(_buildErrors[i], MessageType.Error);
@@ -273,8 +283,8 @@ namespace RPGCharacterStats.EditorTools
 
         private CharacterDefinition CreateDefinitionAsset()
         {
-            string dir = string.IsNullOrEmpty(_charStatPath) ? "Assets" : Path.GetDirectoryName(_charStatPath).Replace('\\', '/');
-            string assetName = string.IsNullOrEmpty(_id) ? "NewCharacter" : _id;
+            string dir = SaveDirectory();
+            string assetName = SafeAssetName(string.IsNullOrEmpty(_id) ? "NewCharacter" : _id);
             string path = AssetDatabase.GenerateUniqueAssetPath(dir + "/" + assetName + ".asset");
 
             CharacterDefinition def;
@@ -311,9 +321,58 @@ namespace RPGCharacterStats.EditorTools
                 }
             }
 
-            AssetDatabase.CreateAsset(def, path);
-            AssetDatabase.SaveAssets();
+            try
+            {
+                AssetDatabase.CreateAsset(def, path);
+                AssetDatabase.SaveAssets();
+            }
+            catch (System.Exception ex)
+            {
+                ScriptableObject.DestroyImmediate(def);
+                EditorUtility.DisplayDialog("Cannot create asset",
+                    path + "\n\n" + ex.Message +
+                    "\n\nDefinition assets must live inside the project's Assets folder.",
+                    "OK");
+                return null;
+            }
             return def;
+        }
+
+        /// <summary>Where the definition asset is saved: next to the .charstat
+        /// when that file lives inside this project, otherwise under
+        /// Assets/RPGCharacterStats/Definitions (created on demand). An
+        /// OpenFilePanel path can point anywhere on disk — the repo checkout,
+        /// a sample pack — and AssetDatabase.CreateAsset only accepts
+        /// Assets-relative paths.</summary>
+        private string SaveDirectory()
+        {
+            if (!string.IsNullOrEmpty(_charStatPath))
+            {
+                string full = Path.GetFullPath(_charStatPath).Replace('\\', '/');
+                string relative = FileUtil.GetProjectRelativePath(full);
+                if (!string.IsNullOrEmpty(relative) && relative.StartsWith("Assets/"))
+                    return Path.GetDirectoryName(relative).Replace('\\', '/');
+            }
+            return EnsureFolder(EnsureFolder("Assets", "RPGCharacterStats"), "Definitions");
+        }
+
+        private static string EnsureFolder(string parent, string name)
+        {
+            string path = parent + "/" + name;
+            if (!AssetDatabase.IsValidFolder(path))
+                AssetDatabase.CreateFolder(parent, name);
+            return path;
+        }
+
+        /// <summary>Asset filename from a character ID: filesystem-invalid
+        /// characters become '_', surrounding whitespace is trimmed, and an
+        /// empty result falls back to NewCharacter.</summary>
+        private static string SafeAssetName(string name)
+        {
+            string trimmed = name.Trim();
+            foreach (char c in Path.GetInvalidFileNameChars())
+                trimmed = trimmed.Replace(c, '_');
+            return string.IsNullOrWhiteSpace(trimmed) ? "NewCharacter" : trimmed;
         }
     }
 }
