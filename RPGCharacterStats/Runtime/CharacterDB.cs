@@ -326,30 +326,20 @@ namespace RPGCharacterStats
             return guids;
         }
 
-        private static string ScriptGuidOfType(Type type)
+        private static string ScriptGuidOf(string file)
         {
-            string name = type.FullName;
-            if (string.IsNullOrEmpty(name))
-            {
-                name = type.Name;
-            }
-            else
-            {
-                int comma = name.IndexOf(',');
-                if (comma > 0)
-                {
-                    name = name.Substring(0, comma).Trim();
-                }
-            }
-
-            if (Type.GetType(name, false) != null) return name;
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type candidate = assembly.GetType(name, false);
-                if (candidate != null && !candidate.IsAbstract) return name;
-            }
-            return null;
+            // The legacy format stored the script GUID literally in the asset's
+            // m_Script line; a stale/removed script still leaves that line
+            // behind with a GUID that no longer resolves. Read it so the
+            // heal pass can tell a broken row from a row of a different
+            // (still-healthy) script class.
+            System.Text.RegularExpressions.Match match =
+                System.Text.RegularExpressions.Regex.Match(
+                    System.IO.File.ReadAllText(file),
+                    @"m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})");
+            return match.Success ? match.Groups[1].Value.ToLowerInvariant() : null;
         }
+
         /// <summary>Re-link a row whose m_Script guid went stale: identify the
         /// class from its serialized field layout (PlayerCharacterDefinition
         /// serializes "inputAxisPrefix"; NPC definitions serialize
