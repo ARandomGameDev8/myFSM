@@ -319,8 +319,18 @@ namespace RPGCharacterStats
                 {
                     Type type = types[t];
                     if (type.IsAbstract || !type.IsSubclassOf(typeof(CharacterDefinition))) continue;
-                    string guid = ScriptGuidOfType(type);
-                    if (guid != null) guids.Add(guid);
+                    string fullName = type.FullName;
+                    if (string.IsNullOrEmpty(fullName)) fullName = type.Name;
+                    Type hit = Type.GetType(fullName, false);
+                    if (hit == null)
+                    {
+                        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                        {
+                            hit = assembly.GetType(fullName, false);
+                            if (hit != null && !hit.IsAbstract) break;
+                        }
+                    }
+                    if (hit != null) guids.Add(fullName);
                 }
             }
             return guids;
@@ -369,7 +379,18 @@ namespace RPGCharacterStats
             }
             if (type == null) return false;
 
-            string newGuid = ScriptGuidOfType(type);
+            string fullName = type.FullName;
+            if (string.IsNullOrEmpty(fullName)) fullName = type.Name;
+            Type hit = Type.GetType(fullName, false);
+            if (hit == null)
+            {
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    hit = assembly.GetType(fullName, false);
+                    if (hit != null && !hit.IsAbstract) break;
+                }
+            }
+            string newGuid = hit != null ? fullName : null;
             if (string.IsNullOrEmpty(newGuid)) return false;
 
             string replaced = System.Text.RegularExpressions.Regex.Replace(
