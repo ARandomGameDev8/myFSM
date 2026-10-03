@@ -55,6 +55,12 @@ namespace RPGCharacterStats
             if (registry == null) registry = new CharacterRegistry();
             ClearStaleSpawnBookkeeping();
 
+            // A cache row can outlive its definition reference (an in-memory
+            // definition dies on a domain reload; a legacy .asset reference
+            // that broke comes back as Unity's fake-null). The DB is the
+            // truth: drop the dangling rows, then refill from the records.
+            if (registry.HasNullDefinitions()) registry.RemoveNullDefinitions();
+
             if (registry.entries.Count == 0 && LoadAllDefinitionsFromDb() > 0)
             {
                 Debug.Log("[RPGStats] registry cache was cold — reloaded " +
@@ -85,6 +91,8 @@ namespace RPGCharacterStats
         /// the Registry window's reload and the cold-cache path.</summary>
         public int LoadAllDefinitionsFromDb()
         {
+            if (registry.HasNullDefinitions()) registry.RemoveNullDefinitions();
+
             List<CharacterDefinition> all = CharacterDB.LoadAll();
             for (int i = 0; i < all.Count; i++)
                 registry.Put(all[i]);

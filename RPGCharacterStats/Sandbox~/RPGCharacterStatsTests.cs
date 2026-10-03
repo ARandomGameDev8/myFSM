@@ -55,6 +55,13 @@ namespace RPGCharacterStatsTests
             ServerSaveDefinitionOwnsWrites();
             RegistrySurvivesDeserialization();
             ServerReloadsColdRegistryOnEnable();
+            ServerReplacesDanglingDefinitionRows();
+
+            Section("character record format (JSON)");
+            RecordRoundTripsPlayer();
+            RecordRoundTripsNPC();
+            RecordSurvivesMissingScript();
+            CorruptRecordsNeverThrow();
 
             Section("spawn pipeline (section 2.5 matrix)");
             Spawn3DPhysicsNPC();
@@ -553,12 +560,16 @@ namespace RPGCharacterStatsTests
             PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
             hero.characterID = "db_hero";
             hero.characterName = "DbHero";
-            Resources.store["CharacterDB/db_hero"] = hero;
+            Resources.store["CharacterDB/db_hero"] = new TextAsset(CharacterDB.EncodeRecord(hero));
 
             CharacterRegistry cache = new CharacterRegistry();
             Expect(cache.entries.Count == 0, "cold cache starts empty");
             CharacterEntry hit = cache.FindById("db_hero");
-            Expect(hit != null && hit.definition == hero, "cache miss loads from the DB");
+            Expect(hit != null && hit.definition != null
+                && hit.definition is PlayerCharacterDefinition
+                && hit.definition.characterID == "db_hero"
+                && hit.definition.characterName == "DbHero",
+                "cache miss loads the JSON record from the DB");
             Expect(cache.entries.Count == 1, "DB hit is cached");
             Expect(!cache.ContainsId("ghost"), "ContainsId stays cache-only");
             Expect(cache.FindById("ghost") == null, "unknown ID misses cleanly");
@@ -574,9 +585,9 @@ namespace RPGCharacterStatsTests
             b.characterID = "lru_b"; b.characterName = "B";
             EnemyCharacterDefinition c = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
             c.characterID = "lru_c"; c.characterName = "C";
-            Resources.store["CharacterDB/lru_a"] = a;
-            Resources.store["CharacterDB/lru_b"] = b;
-            Resources.store["CharacterDB/lru_c"] = c;
+            Resources.store["CharacterDB/lru_a"] = new TextAsset(CharacterDB.EncodeRecord(a));
+            Resources.store["CharacterDB/lru_b"] = new TextAsset(CharacterDB.EncodeRecord(b));
+            Resources.store["CharacterDB/lru_c"] = new TextAsset(CharacterDB.EncodeRecord(c));
 
             cache.Put(a);
             cache.Put(b);
@@ -586,7 +597,7 @@ namespace RPGCharacterStatsTests
             Expect(cache.ContainsId("lru_c"), "newest survives eviction");
             Expect(!cache.ContainsId("lru_b"), "least recently used is evicted");
             CharacterEntry reloaded = cache.FindById("lru_b");
-            Expect(reloaded != null && reloaded.definition == b,
+            Expect(reloaded != null && reloaded.definition != null && reloaded.definition.characterID == "lru_b",
                 "evicted entry reloads from the DB");
         }
 
@@ -635,8 +646,8 @@ namespace RPGCharacterStatsTests
             orc.characterID = "ser_orc"; orc.characterName = "Orc";
             PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
             hero.characterID = "ser_hero"; hero.characterName = "Hero";
-            Resources.store["CharacterDB/ser_orc"] = orc;
-            Resources.store["CharacterDB/ser_hero"] = hero;
+            Resources.store["CharacterDB/ser_orc"] = new TextAsset(CharacterDB.EncodeRecord(orc));
+            Resources.store["CharacterDB/ser_hero"] = new TextAsset(CharacterDB.EncodeRecord(hero));
 
             original.Put(orc);
             CharacterEntry heroEntry = original.Put(hero);
@@ -674,7 +685,7 @@ namespace RPGCharacterStatsTests
             reloaded.FindById("ser_orc");            // orc → most recently used
             EnemyCharacterDefinition third = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
             third.characterID = "ser_third"; third.characterName = "Third";
-            Resources.store["CharacterDB/ser_third"] = third;
+            Resources.store["CharacterDB/ser_third"] = new TextAsset(CharacterDB.EncodeRecord(third));
             reloaded.Put(third);                     // capacity 2: hero is LRU-front but PINNED → orc goes
             Expect(reloaded.ContainsId("ser_hero") && reloaded.ContainsId("ser_third"),
                 "post-reload eviction respects pinning");
@@ -687,7 +698,7 @@ namespace RPGCharacterStatsTests
         {
             PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
             hero.characterID = "cold_hero"; hero.characterName = "ColdHero";
-            Resources.store["CharacterDB/cold_hero"] = hero;
+            Resources.store["CharacterDB/cold_hero"] = new TextAsset(CharacterDB.EncodeRecord(hero));
 
             CharacterBuilderServer server = NewServer();
             server.registry = new CharacterRegistry();   // the Play → Stop scenario: cache came back empty
@@ -710,11 +721,134 @@ namespace RPGCharacterStatsTests
             Expect(server.registry.entries.Count == before, "warm cache is left alone on enable");
         }
 
+        private static void ServerReplacesDanglingDefinitionRows()
+        {
+            PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            hero.characterID = "dangle_hero";
+            hero.characterName = "DangleHero";
+            Resources.store["CharacterDB/dangle_hero"] = new TextAsset(CharacterDB.EncodeRecord(hero));
+
+            // What a domain reload can leave behind: a cached row whose
+            // definition reference died (in-memory definition / broken asset ref).
+            CharacterBuilderServer server = NewServer();
+            CharacterRegistry cache = new CharacterRegistry();
+            CharacterEntry dangling = new CharacterEntry();
+            dangling.tag = new CharacterTag("DeadRow", 0);
+            cache.entries.Add(dangling);
+            server.registry = cache;
+            InvokeOnEnable(server);
+
+            Expect(!server.registry.HasNullDefinitions(), "dangling definition rows are dropped on enable");
+            CharacterEntry loaded = server.registry.FindById("dangle_hero");
+            Expect(loaded != null && loaded.definition != null && loaded.definition.characterID == "dangle_hero",
+                "the DB record replaces the dangling row");
+        }
+
         private static void InvokeOnEnable(CharacterBuilderServer server)
         {
             typeof(CharacterBuilderServer)
                 .GetMethod("OnEnable", BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null)
                 .Invoke(server, null);
+        }
+
+        // ---- character record format (JSON, GUID-proof) ----
+
+        private static void RecordRoundTripsPlayer()
+        {
+            PlayerCharacterDefinition def = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            def.characterID = "rec_hero";
+            def.characterName = "RecHero";
+            def.description = "hero\nwith \"quotes\" and\nnewlines";
+            def.dimension = CharacterDimension.ThreeD;
+            def.kind = CharacterKind.Player;
+            def.physicsMode = PhysicsMode.NonPhysics;
+            def.charStatText = SampleCharStat;
+            def.gameplayStatText = SampleFormulas;
+            def.inputAxisPrefix = "P1_";
+            def.statValues.Add(StatValueOverride.Float("Vitality", 42.5f));
+            def.statValues.Add(StatValueOverride.Int("Level", 7));
+            def.statValues.Add(StatValueOverride.Bool("IsUndead", true));
+
+            CharacterDefinition decoded = CharacterDB.DecodeRecord(CharacterDB.EncodeRecord(def));
+
+            Expect(decoded is PlayerCharacterDefinition, "record decodes back to the same class");
+            if (decoded == null) return;
+            Expect(decoded.characterID == "rec_hero" && decoded.characterName == "RecHero",
+                "identity survives the record round-trip");
+            Expect(decoded.description == def.description, "text with quotes/newlines survives");
+            Expect(decoded.dimension == def.dimension && decoded.kind == def.kind
+                && decoded.physicsMode == def.physicsMode, "configuration survives");
+            Expect(decoded.charStatText == def.charStatText
+                && decoded.gameplayStatText == def.gameplayStatText, "stat sources survive");
+            Expect(((PlayerCharacterDefinition)decoded).inputAxisPrefix == "P1_", "player field survives");
+
+            Expect(decoded.statValues.Count == 3, "all three overrides survive");
+            Expect(decoded.statValues[0].statName == "Vitality"
+                && Mathf.Approximately(decoded.statValues[0].floatValue, 42.5f), "float override survives");
+            Expect(decoded.statValues[1].statName == "Level" && decoded.statValues[1].intValue == 7,
+                "int override survives");
+            Expect(decoded.statValues[2].statName == "IsUndead" && decoded.statValues[2].boolValue,
+                "bool override survives");
+
+            Expect(CharacterDB.DecodeRecord(CharacterDB.EncodeRecord(decoded)).characterID == "rec_hero",
+                "re-saving a decoded record round-trips again");
+        }
+
+        private static void RecordRoundTripsNPC()
+        {
+            EnemyCharacterDefinition orc = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            orc.characterID = "rec_orc";
+            orc.characterName = "RecOrc";
+            orc.kind = CharacterKind.NPC;
+            orc.aiInstanceType = new SerializedType { typeName = "RPGCharacterStats.OrcWarriorFSM, Assembly-CSharp" };
+
+            CharacterDefinition decoded = CharacterDB.DecodeRecord(CharacterDB.EncodeRecord(orc));
+
+            Expect(decoded is EnemyCharacterDefinition, "NPC record decodes back to the same class");
+            Expect(decoded != null && ((NPCCharacterDefinition)decoded).aiInstanceType.typeName == orc.aiInstanceType.typeName,
+                "AI script reference survives (stored by NAME, not by GUID)");
+        }
+
+        private static void RecordSurvivesMissingScript()
+        {
+            PlayerCharacterDefinition def = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            def.characterID = "ghosted";
+            def.characterName = "Ghosted";
+            def.kind = CharacterKind.Player;
+            def.statValues.Add(StatValueOverride.Float("Vitality", 9f));
+
+            // Simulate the class disappearing (script deleted / package moved):
+            // the saved class name no longer resolves anywhere.
+            string orphaned = CharacterDB.EncodeRecord(def)
+                .Replace("RPGCharacterStats.PlayerCharacterDefinition", "Gone.WithTheRefactor");
+
+            CharacterDefinition decoded = CharacterDB.DecodeRecord(orphaned);
+            Expect(decoded != null && decoded is PlayerCharacterDefinition,
+                "record whose class vanished still loads on the kind fallback");
+            Expect(decoded.characterID == "ghosted" && decoded.characterName == "Ghosted",
+                "fallback keeps every field the fallback class has");
+            Expect(decoded.statValues.Count == 1 && Mathf.Approximately(decoded.statValues[0].floatValue, 9f),
+                "overrides survive the fallback load");
+        }
+
+        private static void CorruptRecordsNeverThrow()
+        {
+            Expect(CharacterDB.DecodeRecord(null) == null, "null record decodes to nothing");
+            Expect(CharacterDB.DecodeRecord("") == null, "empty record decodes to nothing");
+            Expect(CharacterDB.DecodeRecord("not json at all") == null, "garbage record decodes to nothing");
+
+            // LoadAll skips unreadable rows instead of blowing up the server.
+            PlayerCharacterDefinition good = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            good.characterID = "good_row";
+            good.characterName = "GoodRow";
+            Resources.store["CharacterDB/good_row"] = new TextAsset(CharacterDB.EncodeRecord(good));
+            Resources.store["CharacterDB/garbage_row"] = new TextAsset("{{{ nope");
+
+            List<CharacterDefinition> all = CharacterDB.LoadAll();
+            Expect(all.Exists(delegate (CharacterDefinition d) { return d != null && d.characterID == "good_row"; }),
+                "LoadAll reads healthy records");
+            Expect(!all.Exists(delegate (CharacterDefinition d) { return d != null && d.characterID == "garbage_row"; }),
+                "LoadAll skips unreadable records");
         }
 
         // ---- spawn pipeline ----

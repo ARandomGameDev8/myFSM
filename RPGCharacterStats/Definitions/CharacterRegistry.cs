@@ -183,6 +183,33 @@ namespace RPGCharacterStats
             return FindInCache(characterID) != null;
         }
 
+        // ---- dangling rows (the cache self-cleans; the DB is the truth) ----
+
+        /// <summary>True when any cached row lost its definition reference —
+        /// after a domain reload that referenced an in-memory definition, or
+        /// when a legacy row's serialized asset reference came back dead.
+ /// Such rows are cold-cache material: the DB rebuilds them.</summary>
+        public bool HasNullDefinitions()
+        {
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (entries[i].definition == null) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Drop every row whose definition reference is dead. A cache
+        /// losing cached rows is its job — the DB still has the record.</summary>
+        public void RemoveNullDefinitions()
+        {
+            for (int i = entries.Count - 1; i >= 0; i--)
+            {
+                if (entries[i].definition != null) continue;
+                Lru.Remove(entries[i]);
+                entries.RemoveAt(i);
+            }
+        }
+
         // ---- tag allocation (section 14) ----
 
         public CharacterTag AllocateTag(string name)

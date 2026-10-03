@@ -11,6 +11,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
 
 namespace UnityEngine
 {
@@ -121,6 +124,318 @@ namespace UnityEngine
         public static T CreateInstance<T>() where T : ScriptableObject, new()
         {
             return new T();
+        }
+
+        /// <summary>The non-generic overload CharacterDB's record decoder uses
+        /// for definition classes resolved from a saved type name.</summary>
+        public static ScriptableObject CreateInstance(Type type)
+        {
+            return (ScriptableObject)Activator.CreateInstance(type);
+        }
+    }
+
+    public class TextAsset : Object
+    {
+        public string text;
+
+        public TextAsset() { }
+
+        public TextAsset(string text)
+        {
+            this.text = text;
+        }
+    }
+
+    // ---- JSON (JsonUtility) ----
+    //
+    // Field-based reflection JSON matching the JsonUtility semantics the
+    // package relies on: public instance fields only (no properties), enums
+    // as integers, lists, nested [Serializable] classes, no managed
+    // UnityEngine.Object references. Records written here read back the same
+    // under Unity's real JsonUtility and vice versa (unknown fields are
+    // ignored by FromJsonOverwrite on both sides).
+
+    public static class JsonUtility
+    {
+        public static string ToJson(object obj)
+        {
+            return JsonWriter.Value(obj);
+        }
+
+        public static T FromJson<T>(string json)
+        {
+            T instance = (T)Activator.CreateInstance(typeof(T));
+            JsonBinder.Overwrite(instance, json);
+            return instance;
+        }
+
+        public static void FromJsonOverwrite(string json, object objectToOverwrite)
+        {
+            JsonBinder.Overwrite(objectToOverwrite, json);
+        }
+    }
+
+    internal static class JsonWriter
+    {
+        public static string Value(object value)
+        {
+            StringBuilder sb = new StringBuilder();
+            Write(sb, value);
+            return sb.ToString();
+        }
+
+        private static void Write(StringBuilder sb, object value)
+        {
+            if (value == null) { sb.Append("null"); return; }
+            Type t = value.GetType();
+
+            if (t == typeof(string)) { String(sb, (string)value); return; }
+            if (t == typeof(bool)) { sb.Append((bool)value ? "true" : "false"); return; }
+            if (t.IsEnum
+                || t == typeof(int) || t == typeof(long) || t == typeof(short) || t == typeof(byte)
+                || t == typeof(uint) || t == typeof(ulong) || t == typeof(ushort) || t == typeof(sbyte))
+            {
+                sb.Append(System.Convert.ToInt64(value).ToString(CultureInfo.InvariantCulture));
+                return;
+            }
+            if (t == typeof(float))
+            {
+                float f = (float)value;
+                sb.Append(float.IsNaN(f) || float.IsInfinity(f)
+                    ? "0"
+                    : f.ToString("R", CultureInfo.InvariantCulture));
+                return;
+            }
+            if (t == typeof(double))
+            {
+                double d = (double)value;
+                sb.Append(double.IsNaN(d) || double.IsInfinity(d)
+                    ? "0"
+                    : d.ToString("R", CultureInfo.InvariantCulture));
+                return;
+            }
+
+            if (value is System.Collections.IList)
+            {
+                sb.Append('[');
+                System.Collections.IList list = (System.Collections.IList)value;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    Write(sb, list[i]);
+                }
+                sb.Append(']');
+                return;
+            }
+
+            // Plain serializable object: public instance fields, in order.
+            sb.Append('{');
+            FieldInfo[] fields = t.GetFields(BindingFlags.Public | BindingFlags.Instance);
+            bool first = true;
+            for (int i = 0; i < fields.Length; i++)
+            {
+                FieldInfo f = fields[i];
+                if (f.IsInitOnly || f.IsStatic) continue;
+                if (typeof(Object).IsAssignableFrom(f.FieldType)) continue;   // no managed refs in records
+                if (!first) sb.Append(',');
+                first = false;
+                String(sb, f.Name);
+                sb.Append(':');
+                Write(sb, f.GetValue(value));
+            }
+            sb.Append('}');
+        }
+
+        private static void String(StringBuilder sb, string s)
+        {
+            sb.Append('"');
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\t') sb.Append("\\t");
+                else sb.Append(c);
+            }
+            sb.Append('"');
+        }
+    }
+
+    internal static class JsonParser
+    {
+        public static object Parse(string json)
+        {
+            int index = 0;
+            return ParseValue(json, ref index);
+        }
+
+        private static object ParseValue(string json, ref int i)
+        {
+            SkipSpace(json, ref i);
+            if (i >= json.Length) throw new ArgumentException("unexpected end of JSON");
+            char c = json[i];
+
+            if (c == '{') return ParseObject(json, ref i);
+            if (c == '[') return ParseArray(json, ref i);
+            if (c == '"') return ParseString(json, ref i);
+            if (c == 't') { Expect(json, ref i, "true"); return true; }
+            if (c == 'f') { Expect(json, ref i, "false"); return false; }
+            if (c == 'n') { Expect(json, ref i, "null"); return null; }
+            return ParseNumber(json, ref i);
+        }
+
+        private static Dictionary<string, object> ParseObject(string json, ref int i)
+        {
+            Dictionary<string, object> map = new Dictionary<string, object>();
+            i++;   // {
+            SkipSpace(json, ref i);
+            if (i < json.Length && json[i] == '}') { i++; return map; }
+
+            while (true)
+            {
+                SkipSpace(json, ref i);
+                string key = ParseString(json, ref i);
+                SkipSpace(json, ref i);
+                if (i >= json.Length || json[i] != ':')
+                    throw new ArgumentException("expected ':' in JSON object");
+                i++;
+                map[key] = ParseValue(json, ref i);
+                SkipSpace(json, ref i);
+                if (i >= json.Length) throw new ArgumentException("unterminated JSON object");
+                if (json[i] == ',') { i++; continue; }
+                if (json[i] == '}') { i++; return map; }
+                throw new ArgumentException("expected ',' or '}' in JSON object");
+            }
+        }
+
+        private static List<object> ParseArray(string json, ref int i)
+        {
+            List<object> list = new List<object>();
+            i++;   // [
+            SkipSpace(json, ref i);
+            if (i < json.Length && json[i] == ']') { i++; return list; }
+
+            while (true)
+            {
+                list.Add(ParseValue(json, ref i));
+                SkipSpace(json, ref i);
+                if (i >= json.Length) throw new ArgumentException("unterminated JSON array");
+                if (json[i] == ',') { i++; continue; }
+                if (json[i] == ']') { i++; return list; }
+                throw new ArgumentException("expected ',' or ']' in JSON array");
+            }
+        }
+
+        private static string ParseString(string json, ref int i)
+        {
+            i++;   // opening quote
+            StringBuilder sb = new StringBuilder();
+            while (i < json.Length)
+            {
+                char c = json[i++];
+                if (c == '"') return sb.ToString();
+                if (c == '\\')
+                {
+                    if (i >= json.Length) break;
+                    char e = json[i++];
+                    if (e == '"') sb.Append('"');
+                    else if (e == '\\') sb.Append('\\');
+                    else if (e == '/') sb.Append('/');
+                    else if (e == 'n') sb.Append('\n');
+                    else if (e == 'r') sb.Append('\r');
+                    else if (e == 't') sb.Append('\t');
+                    else if (e == 'u' && i + 4 <= json.Length)
+                    {
+                        sb.Append((char)System.Convert.ToInt32(json.Substring(i, 4), 16));
+                        i += 4;
+                    }
+                    else sb.Append(e);
+                }
+                else sb.Append(c);
+            }
+            throw new ArgumentException("unterminated JSON string");
+        }
+
+        private static object ParseNumber(string json, ref int i)
+        {
+            int start = i;
+            while (i < json.Length && json[i] != ',' && json[i] != ']' && json[i] != '}'
+                   && json[i] != ' ' && json[i] != '\t' && json[i] != '\n' && json[i] != '\r') i++;
+            string token = json.Substring(start, i - start);
+
+            long l;
+            if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out l)) return l;
+            double d;
+            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return d;
+            throw new ArgumentException("bad JSON number: " + token);
+        }
+
+        private static void Expect(string json, ref int i, string word)
+        {
+            if (i + word.Length > json.Length || json.Substring(i, word.Length) != word)
+                throw new ArgumentException("bad JSON literal near index " + i);
+            i += word.Length;
+        }
+
+        private static void SkipSpace(string json, ref int i)
+        {
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\t' || json[i] == '\n' || json[i] == '\r')) i++;
+        }
+    }
+
+    internal static class JsonBinder
+    {
+        public static void Overwrite(object target, string json)
+        {
+            if (target == null || string.IsNullOrEmpty(json)) return;
+            Apply(target, JsonParser.Parse(json));
+        }
+
+        private static void Apply(object target, object graph)
+        {
+            Dictionary<string, object> map = graph as Dictionary<string, object>;
+            if (map == null) return;
+
+            FieldInfo[] fields = target.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
+            for (int i = 0; i < fields.Length; i++)
+            {
+                FieldInfo f = fields[i];
+                if (f.IsInitOnly || f.IsStatic) continue;
+                if (!map.ContainsKey(f.Name)) continue;
+                object value = map[f.Name];
+                if (value == null) continue;
+                f.SetValue(target, BindValue(value, f.FieldType));
+            }
+        }
+
+        private static object BindValue(object value, Type targetType)
+        {
+            if (targetType == typeof(string)) return value is string ? value : value.ToString();
+            if (targetType.IsEnum) return Enum.ToObject(targetType, System.Convert.ToInt64(value));
+            if (targetType == typeof(int)) return System.Convert.ToInt32(value);
+            if (targetType == typeof(long)) return System.Convert.ToInt64(value);
+            if (targetType == typeof(float)) return (float)System.Convert.ToDouble(value);
+            if (targetType == typeof(double)) return System.Convert.ToDouble(value);
+            if (targetType == typeof(bool)) return System.Convert.ToBoolean(value);
+
+            if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                System.Collections.IList list = (System.Collections.IList)Activator.CreateInstance(targetType);
+                List<object> items = value as List<object>;
+                if (items != null)
+                {
+                    Type element = targetType.GetGenericArguments()[0];
+                    for (int i = 0; i < items.Count; i++) list.Add(BindValue(items[i], element));
+                }
+                return list;
+            }
+
+            // Nested serializable class: build it and fill its fields.
+            object instance = Activator.CreateInstance(targetType);
+            Apply(instance, value);
+            return instance;
         }
     }
 
