@@ -35,6 +35,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using UnityEngine;
 
@@ -327,24 +328,28 @@ namespace RPGCharacterStats
 
         private static string ScriptGuidOfType(Type type)
         {
-            UnityEditor.MonoScript script = UnityEditor.MonoScript.FromType(type);
-            if (script == null) return null;
-            string path = UnityEditor.AssetDatabase.GetAssetPath(script);
-            if (string.IsNullOrEmpty(path)) return null;
-            string guid = UnityEditor.AssetDatabase.AssetPathToGUID(path);
-            return string.IsNullOrEmpty(guid) ? null : guid;
-        }
+            string name = type.FullName;
+            if (string.IsNullOrEmpty(name))
+            {
+                name = type.Name;
+            }
+            else
+            {
+                int comma = name.IndexOf(',');
+                if (comma > 0)
+                {
+                    name = name.Substring(0, comma).Trim();
+                }
+            }
 
-        /// <summary>The m_Script guid of an .asset file, or null when the file
-        /// has no script reference (not a definition asset).</summary>
-        private static string ScriptGuidOf(string file)
-        {
-            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
-                System.IO.File.ReadAllText(file),
-                @"m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})");
-            return match.Success ? match.Groups[1].Value.ToLowerInvariant() : null;
+            if (Type.GetType(name, false) != null) return name;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type candidate = assembly.GetType(name, false);
+                if (candidate != null && !candidate.IsAbstract) return name;
+            }
+            return null;
         }
-
         /// <summary>Re-link a row whose m_Script guid went stale: identify the
         /// class from its serialized field layout (PlayerCharacterDefinition
         /// serializes "inputAxisPrefix"; NPC definitions serialize
