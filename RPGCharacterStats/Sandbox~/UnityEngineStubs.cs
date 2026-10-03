@@ -40,6 +40,19 @@ namespace UnityEngine
         public int order;
     }
     public class ExecuteAlwaysAttribute : Attribute { }
+
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
+    public class RequireComponentAttribute : Attribute
+    {
+        public RequireComponentAttribute(Type requiredType) { }
+    }
+
+    public sealed class DisallowMultipleComponentAttribute : Attribute { }
+
+    public sealed class AddComponentMenuAttribute : Attribute
+    {
+        public AddComponentMenuAttribute(string menuName) { }
+    }
     public class RangeAttribute : Attribute
     {
         public RangeAttribute(float min, float max) { }
@@ -642,6 +655,38 @@ namespace UnityEngine
     {
         public Vector3 center;
         public Vector3 extents;
+    }
+
+    // ---- input ----
+
+    public enum KeyCode
+    {
+        None = 0,
+        Backspace = 8,
+        Tab = 9,
+        Return = 13,
+        Escape = 27,
+        Space = 32,
+        LeftArrow = 276,
+        UpArrow = 273,
+        RightArrow = 275,
+        DownArrow = 274,
+        A = 97,
+        D = 100,
+        S = 115,
+        W = 119,
+    }
+
+    /// <summary>Legacy Input Manager stub: always "no key pressed". The real
+    /// controller code paths that read it are driven through public Tick
+    /// methods in the headless tests instead.</summary>
+    public static class Input
+    {
+        public static bool GetKey(KeyCode key) { return false; }
+        public static bool GetKeyDown(KeyCode key) { return false; }
+        public static bool GetKeyUp(KeyCode key) { return false; }
+        public static float GetAxis(string axisName) { return 0f; }
+        public static float GetAxisRaw(string axisName) { return 0f; }
     }
 
     // ---- environment ----

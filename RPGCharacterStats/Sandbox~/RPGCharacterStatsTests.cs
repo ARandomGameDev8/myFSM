@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 using RPGCharacterStats;
 
@@ -52,10 +53,13 @@ namespace RPGCharacterStatsTests
             LruEviction();
             SpawnedEntriesPinned();
             ServerSaveDefinitionOwnsWrites();
+            RegistrySurvivesDeserialization();
+            ServerReloadsColdRegistryOnEnable();
 
             Section("spawn pipeline (section 2.5 matrix)");
             Spawn3DPhysicsNPC();
             Spawn3DNonPhysicsPlayer();
+            PlayerControllerDrivesAndFalls();
             Spawn2DPhysicsPlayer();
             Spawn2DNonPhysicsPlayer();
             Spawn3DNonPhysicsNPC();
@@ -623,6 +627,96 @@ namespace RPGCharacterStatsTests
             Expect(spawned != null && spawned.isSpawned, "spawn marks the entry");
         }
 
+        private static void RegistrySurvivesDeserialization()
+        {
+            CharacterRegistry original = new CharacterRegistry { capacity = 2 };
+
+            EnemyCharacterDefinition orc = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            orc.characterID = "ser_orc"; orc.characterName = "Orc";
+            PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            hero.characterID = "ser_hero"; hero.characterName = "Hero";
+            Resources.store["CharacterDB/ser_orc"] = orc;
+            Resources.store["CharacterDB/ser_hero"] = hero;
+
+            original.Put(orc);
+            CharacterEntry heroEntry = original.Put(hero);
+            original.AllocateTag("Orc");            // _001
+            original.AllocateTag("Orc");            // _002 — next is _003
+
+            GameObject instance = new GameObject("SerHero");
+            PlayerCharacter heroChar = instance.AddComponent<PlayerCharacter>();
+            original.MarkSpawned(heroEntry, new CharacterTag("Hero", 1), heroChar);
+
+            // What Unity does on a play-mode scene reload: a FRESH object whose
+            // serialized fields (capacity, entries, tagSerials) came back. The
+            // runtime-only LRU/dictionary state rebuilds lazily.
+            CharacterRegistry reloaded = new CharacterRegistry { capacity = original.capacity };
+            reloaded.entries.AddRange(original.entries);
+            for (int i = 0; i < original.tagSerials.Count; i++)
+            {
+                reloaded.tagSerials.Add(new CharacterRegistry.TagSerial
+                {
+                    name = original.tagSerials[i].name,
+                    nextSerial = original.tagSerials[i].nextSerial
+                });
+            }
+            reloaded.ForgetRuntimeState();
+
+            Expect(reloaded.ContainsId("ser_orc") && reloaded.ContainsId("ser_hero"),
+                "definitions survive a deserialization round-trip");
+            CharacterEntry reloadedHero = reloaded.FindById("ser_hero");
+            Expect(reloadedHero.isSpawned && reloadedHero.instance == heroChar,
+                "spawned bookkeeping survives the round-trip");
+            Expect(reloaded.AllocateTag("Orc").ToString() == "Orc_003",
+                "tag serials continue after a reload (not _001 again)");
+
+            // The rebuilt LRU still respects recency + pinning + DB fallback.
+            reloaded.FindById("ser_orc");            // orc → most recently used
+            EnemyCharacterDefinition third = ScriptableObject.CreateInstance<EnemyCharacterDefinition>();
+            third.characterID = "ser_third"; third.characterName = "Third";
+            Resources.store["CharacterDB/ser_third"] = third;
+            reloaded.Put(third);                     // capacity 2: hero is LRU-front but PINNED → orc goes
+            Expect(reloaded.ContainsId("ser_hero") && reloaded.ContainsId("ser_third"),
+                "post-reload eviction respects pinning");
+            Expect(!reloaded.ContainsId("ser_orc"), "post-reload eviction still drops the LRU entry");
+            Expect(reloaded.FindById("ser_orc") != null,
+                "evicted entry still reloads from the DB after a reload");
+        }
+
+        private static void ServerReloadsColdRegistryOnEnable()
+        {
+            PlayerCharacterDefinition hero = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            hero.characterID = "cold_hero"; hero.characterName = "ColdHero";
+            Resources.store["CharacterDB/cold_hero"] = hero;
+
+            CharacterBuilderServer server = NewServer();
+            server.registry = new CharacterRegistry();   // the Play → Stop scenario: cache came back empty
+            InvokeOnEnable(server);
+
+            CharacterEntry entry = server.registry.FindById("cold_hero");
+            Expect(entry != null, "cold cache auto-reloads from the CharacterDB on enable");
+
+            // Stale bookkeeping (the instance died with play mode) is cleaned up.
+            entry.isSpawned = true;
+            entry.instance = null;
+            entry.spawnedAs = new CharacterTag("ColdHero", 1);
+            InvokeOnEnable(server);
+            Expect(!entry.isSpawned && entry.instance == null && entry.spawnedAs == null,
+                "stale spawn bookkeeping is cleared on enable");
+
+            // A warm cache is neither duplicated nor clobbered.
+            int before = server.registry.entries.Count;
+            InvokeOnEnable(server);
+            Expect(server.registry.entries.Count == before, "warm cache is left alone on enable");
+        }
+
+        private static void InvokeOnEnable(CharacterBuilderServer server)
+        {
+            typeof(CharacterBuilderServer)
+                .GetMethod("OnEnable", BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null)
+                .Invoke(server, null);
+        }
+
         // ---- spawn pipeline ----
 
         private static EnemyCharacterDefinition NewOrcDefinition()
@@ -683,7 +777,49 @@ namespace RPGCharacterStatsTests
             Expect(c.rigidbody3D != null && c.rigidbody3D.isKinematic, "rigidbody is kinematic (no physics fight)");
             Expect(!c.rigidbody3D.useGravity, "gravity OFF");
             Expect(c is PlayerCharacter, "spawned as PlayerCharacter");
-            Expect(((PlayerCharacter)c).movement is CharacterControllerMovement, "CC movement strategy attached");
+            PlayerCharacter pc = (PlayerCharacter)c;
+            PlayerController controller = c.GetComponent<PlayerController>();
+            Expect(controller != null, "PlayerController attached (WASD + Space + gravity, no camera)");
+            Expect(pc.movement == null, "no internal strategy — PlayerController is the single mover");
+            Expect(pc.input.x == 0f && !pc.input.jumpHeld, "PlayerInput field starts neutral");
+        }
+
+        private static void PlayerControllerDrivesAndFalls()
+        {
+            CharacterBuilderServer server = NewServer();
+            PlayerCharacterDefinition def = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            def.characterID = "player_hero";
+            def.characterName = "Hero";
+            def.dimension = CharacterDimension.ThreeD;
+            def.kind = CharacterKind.Player;
+            def.physicsMode = PhysicsMode.NonPhysics;
+            def.charStatText = SampleCharStat;
+            server.registry.Add(def);
+
+            Character c = server.Spawn("player_hero");
+            PlayerController controller = c.GetComponent<PlayerController>();
+            if (controller == null) { Fail("player controller ticks", "no PlayerController on the spawn"); return; }
+
+            Time.deltaTime = 0.1f;
+            Vector3 start = c.transform.position;
+
+            controller.Tick(new PlayerInput { x = 1f, y = 0f, jumpHeld = false });
+            ExpectNear(c.transform.position.x - start.x, controller.moveSpeed * 0.1f, 0.001f,
+                "one tick moves +X by moveSpeed · dt");
+            Expect(c.controller.moveCalls == 1, "exactly one CharacterController.Move per tick");
+            Expect(Mathf.Approximately(c.GetComponent<PlayerCharacter>().input.x, 1f),
+                "input adapter fills PlayerCharacter.input");
+
+            // Not grounded: gravity accumulates downward every tick.
+            float yAfterFirst = c.transform.position.y;
+            controller.Tick(new PlayerInput());
+            Expect(c.transform.position.y < yAfterFirst, "gravity pulls the player down");
+
+            // Grounded + Space: the jump reaches the configured height.
+            c.controller.isGrounded = true;
+            controller.Tick(new PlayerInput { jumpHeld = true });
+            Expect(c.transform.position.y > yAfterFirst, "grounded + Space jumps");
+            Time.deltaTime = 0f;
         }
 
         private static void Spawn2DPhysicsPlayer()

@@ -46,6 +46,22 @@ namespace RPGCharacterStats
             if (Instance == this) Instance = null;
         }
 
+        protected virtual void OnEnable()
+        {
+            // Runs in edit mode (ExecuteAlways) and on every play-mode start.
+            // This is what makes the registry survive the Play → Stop cycle:
+            // the serialized state comes back with the scene, stale spawn
+            // bookkeeping is dropped, and a cold cache re-reads the DB.
+            if (registry == null) registry = new CharacterRegistry();
+            ClearStaleSpawnBookkeeping();
+
+            if (registry.entries.Count == 0 && LoadAllDefinitionsFromDb() > 0)
+            {
+                Debug.Log("[RPGStats] registry cache was cold — reloaded " +
+                          registry.entries.Count + " character(s) from the CharacterDB");
+            }
+        }
+
         // ------------------------------------------------------------------
         // Public API (section 15)
         // ------------------------------------------------------------------
@@ -352,7 +368,13 @@ namespace RPGCharacterStats
                 }
                 else if (def.dimension == CharacterDimension.ThreeD)
                 {
-                    player.movement = new CharacterControllerMovement();
+                    // The section 2.5 CharacterController case: attach the
+                    // user-facing PlayerController (WASD + Space + gravity,
+                    // no camera). It is the single mover — the internal
+                    // CharacterControllerMovement strategy stays unset so
+                    // nothing ever double-applies motion to the capsule.
+                    player.gameObject.AddComponent<PlayerController>();
+                    player.movement = null;
                 }
                 else
                 {
@@ -381,9 +403,8 @@ namespace RPGCharacterStats
             return registry.entries;
         }
 
-        /// <summary>Editor/test convenience: registry rows survive play-mode
-        /// reloads only through their definition assets, so this clears stale
-        /// spawn bookkeeping without dropping definitions.</summary>
+        /// <summary>Editor/test convenience: clears ALL spawn bookkeeping
+        /// without dropping the cached definitions.</summary>
         public void ClearSpawnBookkeeping()
         {
             for (int i = 0; i < registry.entries.Count; i++)
@@ -391,6 +412,27 @@ namespace RPGCharacterStats
                 registry.entries[i].instance = null;
                 registry.entries[i].isSpawned = false;
                 registry.entries[i].spawnedAs = null;
+            }
+        }
+
+        /// <summary>A play-mode spawn dies with play mode, but the serialized
+        /// entry it left behind would keep claiming isSpawned forever. Drop
+        /// bookkeeping whose instance no longer exists — edit-mode-spawned
+        /// characters keep theirs (their GameObjects are real scene objects).
+        /// The Unity-side `== null` catches Unity's fake-null for destroyed
+        /// components; the headless sandbox uses plain references.</summary>
+        private void ClearStaleSpawnBookkeeping()
+        {
+            for (int i = 0; i < registry.entries.Count; i++)
+            {
+                CharacterEntry e = registry.entries[i];
+                if (!e.isSpawned) continue;
+                if (e.instance == null)
+                {
+                    e.instance = null;
+                    e.isSpawned = false;
+                    e.spawnedAs = null;
+                }
             }
         }
     }

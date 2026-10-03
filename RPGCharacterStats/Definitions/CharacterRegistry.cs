@@ -11,6 +11,12 @@
 // Eviction never drops a materialized (spawned) entry — those are pinned;
 // if everything is pinned the cache overflows softly until one despawns.
 // The DB keeps every character forever — eviction only un-caches it.
+//
+// The whole cache STATE is Unity-serializable (a [Serializable] class of
+// serializable fields) so it survives play-mode scene reloads and domain
+// reloads: `entries` and the per-name tag serials go through the serializer,
+// while the recency list and the serial dictionary are runtime-only and are
+// rebuilt lazily from that serialized state on first use.
 
 using System;
 using System.Collections.Generic;
@@ -35,21 +41,42 @@ namespace RPGCharacterStats
 
     /// <summary>The LRU character cache the server keeps in front of the
     /// CharacterDB (section 17's searchable library).</summary>
+    [Serializable]
     public class CharacterRegistry
     {
         /// <summary>Max cached entries. Spawned entries are pinned and never
         /// evicted; 0 or less means unlimited.</summary>
         public int capacity = 32;
 
-        public readonly List<CharacterEntry> entries = new List<CharacterEntry>();
+        // NOTE: Unity-serializable state. Public, non-readonly, serializable
+        // element types only — this is what makes the registry survive the
+        // edit-mode ⇄ play-mode scene reload instead of coming back empty.
+        public List<CharacterEntry> entries = new List<CharacterEntry>();
+
+        /// <summary>Serialized next-tag-serial per definition name, so tags
+        /// follow the "_001, _002" pattern the doc shows ("OrcWarrior" → 3
+        /// means the next tag is _003). One row per name; the runtime
+        /// dictionary is rebuilt from these rows after a deserialization.</summary>
+        [Serializable]
+        public class TagSerial
+        {
+            public string name;
+            public int nextSerial;
+        }
+
+        public List<TagSerial> tagSerials = new List<TagSerial>();
+
+        // ---- runtime-only state (rebuilt lazily after a deserialization) ----
 
         /// <summary>Recency order, front = least recently used. Mirrors the
-        /// cached subset of <see cref="entries"/>.</summary>
-        private readonly List<CharacterEntry> _lru = new List<CharacterEntry>();
+        /// cached subset of <see cref="entries"/>. Private ⇒ never serialized;
+        /// <see cref="Lru"/> rebuilds it from <see cref="entries"/> (insertion
+        /// order) the first time it is touched after a reload.</summary>
+        [NonSerialized] private List<CharacterEntry> _lru;
 
-        /// <summary>Next serial number per definition name, so tags follow the
-        /// "_001, _002" pattern the doc shows.</summary>
-        private readonly Dictionary<string, int> _nextSerial = new Dictionary<string, int>();
+        /// <summary>Runtime index over <see cref="tagSerials"/>; rebuilt
+        /// lazily. Private ⇒ never serialized.</summary>
+        [NonSerialized] private Dictionary<string, int> _nextSerial;
 
         // ---- add / find ----
 
@@ -160,13 +187,39 @@ namespace RPGCharacterStats
 
         public CharacterTag AllocateTag(string name)
         {
+            Dictionary<string, int> serials = NextSerials;
             int serial;
-            if (!_nextSerial.TryGetValue(name, out serial))
+            if (!serials.TryGetValue(name, out serial))
             {
                 serial = 1;
             }
-            _nextSerial[name] = serial + 1;
+            serials[name] = serial + 1;
+
+            // Keep the serialized rows in sync so the counter survives
+            // play-mode reloads and domain reloads (no "_001 again" after).
+            TagSerial row = null;
+            for (int i = 0; i < tagSerials.Count; i++)
+            {
+                if (tagSerials[i].name == name) { row = tagSerials[i]; break; }
+            }
+            if (row == null)
+            {
+                row = new TagSerial();
+                row.name = name;
+                tagSerials.Add(row);
+            }
+            row.nextSerial = serial + 1;
+
             return new CharacterTag(name, serial);
+        }
+
+        /// <summary>Drops the runtime-only state so the next touch rebuilds it
+        /// from the serialized fields — exactly what a deserialization does.
+        /// The headless tests use this to simulate a Unity scene reload.</summary>
+        internal void ForgetRuntimeState()
+        {
+            _lru = null;
+            _nextSerial = null;
         }
 
         // ---- spawn bookkeeping (section 16's last step) ----
@@ -179,6 +232,38 @@ namespace RPGCharacterStats
         }
 
         // ---- LRU internals ----
+
+        /// <summary>Recency list accessor: lazily rebuilt from the serialized
+        /// <see cref="entries"/> whenever the runtime state is missing (right
+        /// after a deserialization).</summary>
+        private List<CharacterEntry> Lru
+        {
+            get
+            {
+                if (_lru == null)
+                {
+                    _lru = new List<CharacterEntry>(entries.Count);
+                    for (int i = 0; i < entries.Count; i++) _lru.Add(entries[i]);
+                }
+                return _lru;
+            }
+        }
+
+        /// <summary>Serial dictionary accessor: lazily rebuilt from the
+        /// serialized <see cref="tagSerials"/> rows.</summary>
+        private Dictionary<string, int> NextSerials
+        {
+            get
+            {
+                if (_nextSerial == null)
+                {
+                    _nextSerial = new Dictionary<string, int>();
+                    for (int i = 0; i < tagSerials.Count; i++)
+                        _nextSerial[tagSerials[i].name] = tagSerials[i].nextSerial;
+                }
+                return _nextSerial;
+            }
+        }
 
         /// <summary>Cache-only lookup: no recency refresh, no DB fallback.
         /// </summary>
@@ -195,8 +280,9 @@ namespace RPGCharacterStats
 
         private void Touch(CharacterEntry entry)
         {
-            _lru.Remove(entry);
-            _lru.Add(entry);   // most recently used at the back
+            List<CharacterEntry> lru = Lru;
+            lru.Remove(entry);
+            lru.Add(entry);   // most recently used at the back
         }
 
         /// <summary>Enforce capacity: drop least-recently-used entries that
@@ -208,18 +294,19 @@ namespace RPGCharacterStats
         private void Evict(CharacterEntry keep)
         {
             if (capacity <= 0) return;
+            List<CharacterEntry> lru = Lru;
             while (entries.Count > capacity)
             {
                 CharacterEntry victim = null;
-                for (int i = 0; i < _lru.Count; i++)
+                for (int i = 0; i < lru.Count; i++)
                 {
-                    CharacterEntry candidate = _lru[i];
+                    CharacterEntry candidate = lru[i];
                     if (candidate == keep || candidate.isSpawned) continue;
                     victim = candidate;
                     break;
                 }
                 if (victim == null) break;   // only pinned/new entries: soft overflow
-                _lru.Remove(victim);
+                lru.Remove(victim);
                 entries.Remove(victim);
             }
         }
