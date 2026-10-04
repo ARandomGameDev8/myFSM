@@ -912,9 +912,14 @@ namespace RPGCharacterStatsTests
             Expect(!c.rigidbody3D.useGravity, "gravity OFF");
             Expect(c is PlayerCharacter, "spawned as PlayerCharacter");
             PlayerCharacter pc = (PlayerCharacter)c;
-            PlayerController controller = c.GetComponent<PlayerController>();
-            Expect(controller != null, "PlayerController attached (WASD + Space + gravity, no camera)");
-            Expect(pc.movement == null, "no internal strategy — PlayerController is the single mover");
+            // The player is self-contained: one MonoBehaviour (PlayerMovement)
+            // reads WASD/Space, applies gravity by hand, and calls
+            // CharacterController.Move. The user-facing PlayerController is a
+            // proper WASD/Space CharacterController mover with no camera, and
+            // it is the single thing that moves the character — nothing else.
+            PlayerMovement movement = c.GetComponent<PlayerMovement>();
+            Expect(movement != null, "PlayerMovement attached (WASD + Space + gravity, no camera)");
+            Expect(pc.movement != null, "the character carries its movement as a real component");
             Expect(pc.input.x == 0f && !pc.input.jumpHeld, "PlayerInput field starts neutral");
         }
 
@@ -931,14 +936,14 @@ namespace RPGCharacterStatsTests
             server.registry.Add(def);
 
             Character c = server.Spawn("player_hero");
-            PlayerController controller = c.GetComponent<PlayerController>();
-            if (controller == null) { Fail("player controller ticks", "no PlayerController on the spawn"); return; }
+            PlayerMovement movement = c.GetComponent<PlayerMovement>();
+            if (movement == null) { Fail("player movement ticks", "no PlayerMovement on the spawn"); return; }
 
             Time.deltaTime = 0.1f;
             Vector3 start = c.transform.position;
 
-            controller.Tick(new PlayerInput { x = 1f, y = 0f, jumpHeld = false });
-            ExpectNear(c.transform.position.x - start.x, controller.moveSpeed * 0.1f, 0.001f,
+            movement.Tick(new PlayerInput { x = 1f, y = 0f, jumpHeld = false });
+            ExpectNear(c.transform.position.x - start.x, movement.moveSpeed * 0.1f, 0.001f,
                 "one tick moves +X by moveSpeed · dt");
             Expect(c.controller.moveCalls == 1, "exactly one CharacterController.Move per tick");
             Expect(Mathf.Approximately(c.GetComponent<PlayerCharacter>().input.x, 1f),
@@ -946,12 +951,12 @@ namespace RPGCharacterStatsTests
 
             // Not grounded: gravity accumulates downward every tick.
             float yAfterFirst = c.transform.position.y;
-            controller.Tick(new PlayerInput());
+            movement.Tick(new PlayerInput());
             Expect(c.transform.position.y < yAfterFirst, "gravity pulls the player down");
 
             // Grounded + Space: the jump reaches the configured height.
             c.controller.isGrounded = true;
-            controller.Tick(new PlayerInput { jumpHeld = true });
+            movement.Tick(new PlayerInput { jumpHeld = true });
             Expect(c.transform.position.y > yAfterFirst, "grounded + Space jumps");
             Time.deltaTime = 0f;
         }
@@ -975,7 +980,7 @@ namespace RPGCharacterStatsTests
             Expect(Mathf.Approximately(c.rigidbody2D.gravityScale, 1f), "2D gravity scale 1");
             Expect(c.collider2D != null, "2D Player has a Collider2D");
             Expect(c.controller == null, "2D Player never gets a 3D CharacterController");
-            Expect(((PlayerCharacter)c).movement is PhysicsPlayerMovement, "physics movement strategy attached");
+            Expect(c.GetComponent<PlayerMovement>() != null, "2D Player carries a PlayerMovement component that drives it");
         }
 
         private static void Spawn2DNonPhysicsPlayer()
@@ -996,7 +1001,7 @@ namespace RPGCharacterStatsTests
             Expect(Mathf.Approximately(c.rigidbody2D.gravityScale, 0f), "2D gravity scale 0");
             Expect(c.rigidbody2D.isKinematic, "2D non-physics Player body is kinematic");
             Expect(c.collider2D != null, "2D non-physics Player still has a collider");
-            Expect(((PlayerCharacter)c).movement is Kinematic2DMovement, "kinematic 2D movement attached");
+            Expect(c.GetComponent<PlayerMovement>() != null, "2D non-physics Player carries a PlayerMovement component that drives it");
         }
 
         private static void Spawn3DNonPhysicsNPC()

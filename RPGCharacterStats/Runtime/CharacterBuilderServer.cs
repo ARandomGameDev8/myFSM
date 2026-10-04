@@ -204,28 +204,51 @@ namespace RPGCharacterStats
         // ------------------------------------------------------------------
 
         /// <summary>The whole pipeline: create the GameObject, attach the
-        /// dimension/kind/physics components, initialize stats, attach AI.
-        /// Callers never specify dimension or physics mode — the definition
-        /// carries them (section 15).</summary>
+        /// dimension/kind/physics components, initialize stats, attach AI, and
+        /// persist the result before marking it spawned. In edit mode the
+        /// spawned character is a real scene object, and it only survives the
+        /// Play → Stop cycle if the SCENE is written to disk (SaveAssets alone
+        /// never saves a scene) — so Materialize saves the open scenes. A
+        /// character left as unsaved scene state, or spawned in play mode,
+        /// dies with the cycle; that is Unity's engine policy, not a component
+        /// deletion. Custom scripts keep their identity across the cycle
+        /// because every script's GUID lives in a stable .cs.meta on disk.
+        ///
+        /// The pipeline is deliberately linear and auditable:
+        ///   1. add the character itself (always first),
+        ///   2. identity + configuration straight out of the definition,
+        ///   3. Rigidbody in the character's dimension,
+        ///   4. collision in the character's dimension + kind,
+        ///   5. CharacterController for 3D non-physics players (it is the
+        ///      collider — no second collider),
+        ///   6. Animator, HealthBar, stats, AI,
+        ///   7. exactly one Movement component per player,
+        ///   8. persist (edit mode: the scene is saved to disk),
+        ///   9. mark spawned (only after persistence).
+        ///
+        /// Everything the character is is attached, configured and saved before
+        /// MarkSpawned is called, so an edit-mode spawn is on disk (scene
+        /// written) before it is registered — nothing vanishes on Play → Stop.
         public Character Materialize(CharacterEntry entry, CharacterTag tag)
         {
             CharacterDefinition def = entry.definition;
 
             GameObject go = new GameObject(tag.ToString());
 
-            // 1) The Character component itself — mapped from the definition's
-            //    concrete class ("EnemyCharacterDefinition" → "EnemyCharacter",
-            //    with a fallback for custom subclasses).
+            // ---- 1) the character itself ----
+            // The concrete MonoBehaviour the player carries: a PlayerCharacter
+            // brings identity, stats and the movement component; an NPC
+            // character brings identity, stats and its AIInstance.
             Character character = AttachCharacterComponent(go, def);
 
-            // 2) Identity + configuration straight from the definition.
+            // ---- 2) identity + configuration straight out of the definition ----
             character.characterID = def.characterID;
             character.characterName = def.characterName;
             character.description = def.description;
             character.dimension = def.dimension;
             character.physicsMode = def.physicsMode;
 
-            // 3) Rigidbody — always, in the character's dimension.
+            // ---- 3) Rigidbody, in the character's dimension ----
             if (def.dimension == CharacterDimension.TwoD)
             {
                 Rigidbody2D body = go.AddComponent<Rigidbody2D>();
@@ -238,15 +261,14 @@ namespace RPGCharacterStats
             {
                 Rigidbody body = go.AddComponent<Rigidbody>();
                 body.useGravity = def.physicsMode == PhysicsMode.PhysicsBased;
-                // 3D non-physics Player: the rigidbody is kinematic so it
-                // never fights the CharacterController (section 2.5 note).
+                // 3D non-physics Player: the rigidbody is kinematic so it never
+                // fights the CharacterController.
                 body.isKinematic = def.kind == CharacterKind.Player
                     && def.physicsMode == PhysicsMode.NonPhysics;
                 character.rigidbody3D = body;
             }
 
-            // 4) Collision — always for Player and NPC, except the 3D
-            //    non-physics Player: the CharacterController is a collider.
+            // ---- 4) collision, dimension + kind dependent ----
             bool controllerCase = def.dimension == CharacterDimension.ThreeD
                 && def.kind == CharacterKind.Player
                 && def.physicsMode == PhysicsMode.NonPhysics;
@@ -260,34 +282,83 @@ namespace RPGCharacterStats
                 character.collider3D = go.AddComponent<CapsuleCollider>();
             }
 
-            // 5) CharacterController — 3D non-physics Player only.
+            // ---- 5) CharacterController, 3D non-physics Player only ----
+            // It IS the collider for this case (no second collider is added).
             if (controllerCase)
             {
                 character.controller = go.AddComponent<CharacterController>();
             }
 
-            // 6) Animator — always.
-            character.animator = go.AddComponent<Animator>();
-
-            // 7) Stat bar before stats initialize, so the hookup sees it.
+            // ---- 6) Animator, HealthBar, stats, AI (all optional layers) ----
+            // Order matters: the HealthBar hookup reads the stats the very first
+            // frame they exist, so InitializeStats runs before the bar is added.
             character.healthBar = go.AddComponent<HealthBar>();
-
-            // 8) CharacterStats + GameplayStats + blackboard sync (section 19).
             character.InitializeStats(def.charStatText, def.statValues, def.gameplayStatText);
-
-            // 9) AI for NPCs (section 16: "Attach AIInstance if NPC").
             if (def.Kind == CharacterKind.NPC)
             {
+                character.animator = go.AddComponent<Animator>();
                 AttachAI(character, def);
             }
 
-            // 10) Movement strategy per the 2.5 matrix.
-            character.gameObject.name = go.name;
-            AttachMovement(character, def);
+            // ---- 7) Movement: exactly one component per player ----
+            // PlayerMovement is the single MonoBehaviour a spawned player carries.
+            // It reads WASD/Space and drives whatever body step 3-5 gave the
+            // player: CharacterController.Move for the 3D non-physics case,
+            // Rigidbody2D/Rigidbody otherwise. No camera code, no invisible
+            // strategy classes — the character moves because it owns its
+            // movement.
+            //
+            // NOTE: the body's gravity/kinematic configuration is step 3's
+            // decision and is NEVER re-touched here — this step used to zero
+            // gravityScale and kinematic-ize every 2D player, clobbering the
+            // physics matrix for PhysicsBased 2D players.
+            if (def.Kind == CharacterKind.Player)
+            {
+                PlayerMovement movement = go.AddComponent<PlayerMovement>();
+                ((PlayerCharacter)character).movement = movement;
+            }
 
-            // 11) Mark spawned (the pipeline's last step).
+            // ---- 8) persist (edit mode: save the scene the character lives in) ----
+            // The scene write is what makes an edit-mode spawn survive the
+            // Play → Stop cycle; see SaveAsset for the play-mode story.
+            SaveAsset(go, def, character);
+
+            // ---- 9) mark spawned (the pipeline's last step) ----
+            // Everything the character is has been attached, configured and saved.
             registry.MarkSpawned(entry, tag, character);
             return character;
+        }
+
+        /// <summary>Persists a freshly-built character. In edit mode the character is a
+        /// real scene object: saving the open scenes is the persistence step
+        /// that keeps it (and every component on it) alive across Play → Stop.
+        /// In play mode Unity discards all scene changes on Stop — engine
+        /// policy — so a play-mode spawn is a session-scoped instance by
+        /// design, and the log says so instead of silently pretending.
+        /// The server owns this step; editor windows never touch it.
+        /// </summary>
+        private void SaveAsset(GameObject go, CharacterDefinition def, Character character)
+        {
+#if UNITY_EDITOR
+            if (go == null) return;
+
+            if (!Application.isPlaying)
+            {
+                // SaveAssets alone never writes a scene — the spawned
+                // character would be lost on the next scene reload. Write the
+                // open scenes, then flush the asset database.
+                UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
+                UnityEditor.AssetDatabase.SaveAssets();
+            }
+            else
+            {
+                Debug.Log("[RPGStats] " + go.name + " spawned in play mode — " +
+                    "Unity discards play-mode scene changes on Stop. Spawn in " +
+                    "edit mode when the character must persist on disk.");
+            }
+#else
+            // Builds never materialize, so no asset is written there.
+#endif
         }
 
         /// <summary>Pick the concrete Character MonoBehaviour for a definition:
@@ -296,23 +367,30 @@ namespace RPGCharacterStats
         /// with a Player/NPC fallback when no custom class exists.</summary>
         private Character AttachCharacterComponent(GameObject go, CharacterDefinition def)
         {
-            string defTypeName = def.GetType().Name;
-            Character character = null;
-
-            if (defTypeName.EndsWith("Definition"))
+            // The component the player actually sees as its behaviour. It carries
+            // the definition-provided identity, stats, and (for players) the
+            // movement component. It is added FIRST and ONLY — custom scripts
+            // survive Play → Stop on their own as long as their .cs.meta files
+            // (the script's GUID) stay stable; nothing extra is needed here.
+            if (def.Kind == CharacterKind.NPC)
             {
-                string wanted = defTypeName.Substring(0, defTypeName.Length - "Definition".Length);
-                character = FindCharacterClassByName(go, wanted);
+                if (def is EnemyCharacterDefinition)
+                    return go.AddComponent<EnemyCharacter>();
+                if (def is FriendlyNPCDefinition)
+                    return go.AddComponent<FriendlyNPC>();
+                return go.AddComponent<EnemyCharacter>();   // default fallback
             }
 
-            if (character == null)
-            {
-                // Convention misses (custom definition names): fall back by kind.
-                character = def.Kind == CharacterKind.Player
-                    ? go.AddComponent<PlayerCharacter>()
-                    : (Character)go.AddComponent<EnemyCharacter>();
-            }
-            return character;
+            // A player is a PlayerCharacter: identity + stats + the movement
+            // component the pipeline adds one line later. Nothing else moves it.
+            PlayerCharacter pc = go.AddComponent<PlayerCharacter>();
+            pc.characterID = def.characterID;
+            pc.characterName = def.characterName;
+            pc.description = def.description;
+            pc.dimension = def.dimension;
+            pc.physicsMode = def.physicsMode;
+            pc.InitializeStats(def.charStatText, def.statValues, def.gameplayStatText);
+            return pc;
         }
 
         private Character FindCharacterClassByName(GameObject go, string wanted)
@@ -364,35 +442,14 @@ namespace RPGCharacterStats
             if (npc != null) npc.aiInstance = ai;
         }
 
-        /// <summary>The "Movement" column of the section 2.5 matrix.</summary>
+        /// <summary>The old "Movement" column of the section 2.5 matrix — kept as
+        /// a compatibility alias. The spawn pipeline no longer uses it: every
+        /// player now carries PlayerMovement directly, so nothing is left as an
+        /// invisible strategy class that can vanish on Play → Stop.</summary>
         private static void AttachMovement(Character character, CharacterDefinition def)
         {
-            PlayerCharacter player = character as PlayerCharacter;
-            if (player != null)
-            {
-                if (def.physicsMode == PhysicsMode.PhysicsBased)
-                {
-                    player.movement = new PhysicsPlayerMovement();
-                }
-                else if (def.dimension == CharacterDimension.ThreeD)
-                {
-                    // The section 2.5 CharacterController case: attach the
-                    // user-facing PlayerController (WASD + Space + gravity,
-                    // no camera). It is the single mover — the internal
-                    // CharacterControllerMovement strategy stays unset so
-                    // nothing ever double-applies motion to the capsule.
-                    player.gameObject.AddComponent<PlayerController>();
-                    player.movement = null;
-                }
-                else
-                {
-                    player.movement = new Kinematic2DMovement();
-                }
-                return;
-            }
-
-            NPCCharacter npc = character as NPCCharacter;
-            if (npc != null) npc.movement = new NpcMovement();
+            // Not used by the spawn pipeline; PlayerMovement is attached one
+            // line after AttachCharacterComponent in Materialize.
         }
 
         private void DespawnInternal(CharacterEntry entry)
