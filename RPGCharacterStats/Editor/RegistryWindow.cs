@@ -42,68 +42,86 @@ namespace RPGCharacterStats.EditorTools
 
         private void OnGUI()
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Search:", GUILayout.Width(50));
-            _search = EditorGUILayout.TextField(_search);
-            EditorGUILayout.EndHorizontal();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("Search:", GUILayout.Width(50));
+                string search = EditorGUILayout.TextField(_search);
+                if (search != _search)
+                {
+                    _search = search;
+                    GUIUtility.ExitGUI();
+                }
+            }
 
             CharacterBuilderServer server = Server;
             List<CharacterEntry> hits = server.registry.Search(_search);
 
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
-            if (hits.Count == 0)
+            using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
             {
-                EditorGUILayout.HelpBox(
-                    "No characters. Build one in RPG ▸ Character Builder, or load .charstat/.gameplaystat assets.", MessageType.Info);
-            }
-
-            for (int i = 0; i < hits.Count; i++)
-            {
-                CharacterEntry entry = hits[i];
-                CharacterDefinition def = entry.definition;
-                if (def == null) continue;
-
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.BeginHorizontal();
-
-                EditorGUILayout.LabelField(def.characterName, EditorStyles.boldLabel, GUILayout.Width(140));
-                EditorGUILayout.LabelField(def.Kind == CharacterKind.Player ? "Player" : "NPC", GUILayout.Width(50));
-                EditorGUILayout.LabelField(def.dimension == CharacterDimension.TwoD ? "2D" : "3D", GUILayout.Width(30));
-                EditorGUILayout.LabelField(
-                    def.physicsMode == PhysicsMode.PhysicsBased ? "Physics" : "Non-physics", GUILayout.Width(90));
-
-                if (GUILayout.Button("Edit", GUILayout.Width(60)))
+                _scroll = scroll.scrollPosition;
+                if (hits.Count == 0)
                 {
-                    Selection.activeObject = def;
-                    EditorGUIUtility.PingObject(def);
+                    EditorGUILayout.HelpBox(
+                        "No characters. Build one in RPG ▸ Character Builder, or load .charstat/.gameplaystat assets.", MessageType.Info);
                 }
 
-                if (entry.isSpawned)
+                for (int i = 0; i < hits.Count; i++)
                 {
-                    if (GUILayout.Button("Despawn", GUILayout.Width(70)))
+                    CharacterEntry entry = hits[i];
+                    CharacterDefinition def = entry.definition;
+                    if (def == null) continue;
+
+                    using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
-                        server.DespawnByTag(entry.spawnedAs ?? entry.tag);
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            EditorGUILayout.LabelField(def.characterName, EditorStyles.boldLabel, GUILayout.Width(140));
+                            EditorGUILayout.LabelField(def.Kind == CharacterKind.Player ? "Player" : "NPC", GUILayout.Width(50));
+                            EditorGUILayout.LabelField(def.dimension == CharacterDimension.TwoD ? "2D" : "3D", GUILayout.Width(30));
+                            EditorGUILayout.LabelField(
+                                def.physicsMode == PhysicsMode.PhysicsBased ? "Physics" : "Non-physics", GUILayout.Width(90));
+
+                            if (GUILayout.Button("Edit", GUILayout.Width(60)))
+                            {
+                                Selection.activeObject = def;
+                                EditorGUIUtility.PingObject(def);
+                            }
+
+                            if (entry.isSpawned)
+                            {
+                                if (GUILayout.Button("Despawn", GUILayout.Width(70)))
+                                {
+                                    EditorActionGuard.Run("Despawn failed", delegate
+                                    {
+                                        server.DespawnByTag(entry.spawnedAs ?? entry.tag);
+                                    });
+                                    GUIUtility.ExitGUI();
+                                }
+                            }
+                            else if (GUILayout.Button("Spawn", GUILayout.Width(70)))
+                            {
+                                EditorActionGuard.Run("Spawn failed", delegate
+                                {
+                                    server.Spawn(def.characterID);
+                                });
+                                GUIUtility.ExitGUI();
+                            }
+                        }
+
+                        EditorGUILayout.LabelField("ID: " + def.characterID +
+                            (entry.isSpawned ? "   |   spawned as " + entry.spawnedAs : ""),
+                            EditorStyles.miniLabel);
                     }
                 }
-                else if (GUILayout.Button("Spawn", GUILayout.Width(70)))
-                {
-                    server.Spawn(def.characterID);
-                }
-
-                EditorGUILayout.EndHorizontal();
-
-                EditorGUILayout.LabelField("ID: " + def.characterID +
-                    (entry.isSpawned ? "   |   spawned as " + entry.spawnedAs : ""),
-                    EditorStyles.miniLabel);
-
-                EditorGUILayout.EndVertical();
             }
-
-            EditorGUILayout.EndScrollView();
 
             if (GUILayout.Button("Reload all from CharacterDB"))
             {
-                LoadDefinitions(server);
+                EditorActionGuard.Run("Reload CharacterDB failed", delegate
+                {
+                    LoadDefinitions(server);
+                });
+                GUIUtility.ExitGUI();
             }
         }
 

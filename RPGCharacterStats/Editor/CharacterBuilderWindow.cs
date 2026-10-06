@@ -49,86 +49,102 @@ namespace RPGCharacterStats.EditorTools
 
         private void OnGUI()
         {
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
-
-            EditorGUILayout.LabelField("Identity", EditorStyles.boldLabel);
-            _name = EditorGUILayout.TextField("Name", _name);
-            _id = EditorGUILayout.TextField("Character ID", _id);
-            _description = EditorGUILayout.TextField("Description", _description);
-
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Configuration", EditorStyles.boldLabel);
-            _dimension = (CharacterDimension)EditorGUILayout.EnumPopup("Dimension", _dimension);
-            _kind = (CharacterKind)EditorGUILayout.EnumPopup("Kind", _kind);
-            _physics = (PhysicsMode)EditorGUILayout.EnumPopup("Physics", _physics);
-
-            if (_kind == CharacterKind.NPC)
+            using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
             {
-                _aiScript = (MonoScript)EditorGUILayout.ObjectField("AI Script", _aiScript, typeof(MonoScript), false);
-                if (_aiScript != null)
+                _scroll = scroll.scrollPosition;
+
+                EditorGUILayout.LabelField("Identity", EditorStyles.boldLabel);
+                _name = EditorGUILayout.TextField("Name", _name);
+                _id = EditorGUILayout.TextField("Character ID", _id);
+                _description = EditorGUILayout.TextField("Description", _description);
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Configuration", EditorStyles.boldLabel);
+                _dimension = (CharacterDimension)EditorGUILayout.EnumPopup("Dimension", _dimension);
+                CharacterKind selectedKind = (CharacterKind)EditorGUILayout.EnumPopup("Kind", _kind);
+                if (selectedKind != _kind)
                 {
-                    string problem = AIInstanceContract.Validate(
-                        _aiScript.GetClass(), _aiScript.text);
-                    if (problem != null)
-                        EditorGUILayout.HelpBox(problem, MessageType.Error);
-                    else
-                        EditorGUILayout.HelpBox(_aiScript.name + " is a valid partial AIInstance subclass.", MessageType.Info);
+                    _kind = selectedKind;
+                    GUIUtility.ExitGUI();
                 }
-            }
+                _physics = (PhysicsMode)EditorGUILayout.EnumPopup("Physics", _physics);
 
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("CharStat file", EditorStyles.boldLabel);
-            EditorGUILayout.BeginHorizontal();
-            _charStatPath = EditorGUILayout.TextField(_charStatPath);
-            if (GUILayout.Button("Browse...", GUILayout.Width(80)))
-            {
-                string path = EditorUtility.OpenFilePanel("Load .charstat", "Assets", "charstat");
-                if (!string.IsNullOrEmpty(path)) LoadCharStat(path);
-            }
-            EditorGUILayout.EndHorizontal();
-
-            if (_schema.entries.Count > 0)
-            {
-                EditorGUILayout.LabelField("Character values", EditorStyles.boldLabel);
-                DrawValueFields();
-            }
-
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("GameplayStat file", EditorStyles.boldLabel);
-            EditorGUILayout.BeginHorizontal();
-            _gameplayStatPath = EditorGUILayout.TextField(_gameplayStatPath);
-            if (GUILayout.Button("Browse...", GUILayout.Width(80)))
-            {
-                string path = EditorUtility.OpenFilePanel("Load .gameplaystat", "Assets", "gameplaystat");
-                if (!string.IsNullOrEmpty(path))
+                if (_kind == CharacterKind.NPC)
                 {
-                    _gameplayStatPath = path;
-                    _gameplayStatText = File.ReadAllText(path);
+                    MonoScript selectedAIScript = (MonoScript)EditorGUILayout.ObjectField(
+                        "AI Script", _aiScript, typeof(MonoScript), false);
+                    if (selectedAIScript != _aiScript)
+                    {
+                        _aiScript = selectedAIScript;
+                        GUIUtility.ExitGUI();
+                    }
+                    if (_aiScript != null)
+                    {
+                        string problem = AIInstanceContract.Validate(
+                            _aiScript.GetClass(), _aiScript.text);
+                        if (problem != null)
+                            EditorGUILayout.HelpBox(problem, MessageType.Error);
+                        else
+                            EditorGUILayout.HelpBox(_aiScript.name + " is a valid partial AIInstance subclass.", MessageType.Info);
+                    }
                 }
-            }
-            EditorGUILayout.EndHorizontal();
 
-            if (!string.IsNullOrEmpty(_gameplayStatText))
-                EditorGUILayout.HelpBox("GameplayStat file loaded (" +
-                    _gameplayStatText.Split('\n').Length + " lines). Compatibility is validated on Build.", MessageType.None);
-
-            EditorGUILayout.Space();
-            if (GUILayout.Button("Build", GUILayout.Height(30)))
-            {
-                // Never let an exception unwind through OnGUI — it corrupts
-                // the layout state ("Invalid GUILayout state") for the rest
-                // of the session until the window is closed and reopened.
-                try { Build(); }
-                catch (System.Exception ex)
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("CharStat file", EditorStyles.boldLabel);
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    EditorUtility.DisplayDialog("Build failed", ex.Message, "OK");
+                    _charStatPath = EditorGUILayout.TextField(_charStatPath);
+                    if (GUILayout.Button("Browse...", GUILayout.Width(80)))
+                    {
+                        string path = EditorUtility.OpenFilePanel("Load .charstat", "Assets", "charstat");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            LoadCharStat(path);
+                            GUIUtility.ExitGUI();
+                        }
+                    }
                 }
+
+                if (_schema.entries.Count > 0)
+                {
+                    EditorGUILayout.LabelField("Character values", EditorStyles.boldLabel);
+                    DrawValueFields();
+                }
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("GameplayStat file", EditorStyles.boldLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    _gameplayStatPath = EditorGUILayout.TextField(_gameplayStatPath);
+                    if (GUILayout.Button("Browse...", GUILayout.Width(80)))
+                    {
+                        string path = EditorUtility.OpenFilePanel("Load .gameplaystat", "Assets", "gameplaystat");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            _gameplayStatPath = path;
+                            EditorActionGuard.Run("Load GameplayStat failed", delegate
+                            {
+                                _gameplayStatText = File.ReadAllText(path);
+                            });
+                            GUIUtility.ExitGUI();
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_gameplayStatText))
+                    EditorGUILayout.HelpBox("GameplayStat file loaded (" +
+                        _gameplayStatText.Split('\n').Length + " lines). Compatibility is validated on Build.", MessageType.None);
+
+                EditorGUILayout.Space();
+                if (GUILayout.Button("Build", GUILayout.Height(30)))
+                {
+                    EditorActionGuard.Run("Build failed", Build);
+                    GUIUtility.ExitGUI();
+                }
+
+                for (int i = 0; i < _buildErrors.Count; i++)
+                    EditorGUILayout.HelpBox(_buildErrors[i], MessageType.Error);
             }
-
-            for (int i = 0; i < _buildErrors.Count; i++)
-                EditorGUILayout.HelpBox(_buildErrors[i], MessageType.Error);
-
-            EditorGUILayout.EndScrollView();
         }
 
         /// <section 7.2: value fields generated from the selected .charstat,

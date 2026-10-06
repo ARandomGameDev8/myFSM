@@ -37,6 +37,26 @@ python3 install.py --help           # all flags
    `.myfsm-install.json` receipt (source, version, date, file count),
    prints next steps.
 
+## Unity script GUID safety
+
+Unity serializes a scene or prefab's `MonoBehaviour` reference using the GUID
+in that script's `.meta` file. The source package currently does not ship
+`.meta` files, so Unity creates project-local ones on first import. A clean
+installer upgrade now preserves matching existing `.meta` sidecars (and their
+GUIDs), while dropping metadata for assets removed from the new payload. The
+existing project's metadata wins for retained assets; payload metadata is used
+for new assets and on first install.
+
+This protection applies to clean upgrades through this installer. If you
+manually delete the installed folder or its `.meta` files, Unity will mint new
+GUIDs and existing scene/prefab components can become **Missing Script**.
+Keep the local metadata, and check Console for compile errors if a component is
+missing despite its GUID still resolving. The installer tests can be run with:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
 ## Non-interactive use
 
 ```bash

@@ -656,7 +656,7 @@ def resolve_overwrite(dest, project, auto_yes):
         return "merge"
     print("Destination already has files:\n  %s" % dest)
     print("  1) Overwrite-merge (copy over; stale files may linger)")
-    print("  2) Clean first, then install (deletes the destination dir)")
+    print("  2) Clean code first, then install (preserve matching Unity .meta GUIDs)")
     print("  3) Abort")
     while True:
         choice = prompt("Pick", "1")
@@ -672,7 +672,10 @@ def resolve_overwrite(dest, project, auto_yes):
             if norm in protected:
                 print("Refusing to clean a protected root; pick merge or abort.")
                 continue
-            if confirm("Delete %s and reinstall?" % norm, default_yes=False):
+            if confirm(
+                    "Replace %s and reinstall? Matching Unity .meta files will be kept "
+                    "to preserve script GUIDs." % norm,
+                    default_yes=False):
                 return "clean"
 
 
@@ -685,6 +688,95 @@ def should_skip(rel, excludes):
         if rel == ex or rel.startswith(ex + "/"):
             return True
     return False
+
+
+def manifest_install_paths(payload_root, manifest):
+    """All files and directories the manifest installs, including sidecar metas."""
+    excludes = manifest.get("exclude") or []
+    paths = set()
+    for entry in manifest["files"]:
+        rel = entry.strip().replace("\\", "/").rstrip("/")
+        if not rel or should_skip(rel, excludes):
+            continue
+        src = os.path.join(payload_root, rel)
+        if os.path.isdir(src):
+            for dirpath, dirnames, filenames in os.walk(src):
+                rel_dir = os.path.relpath(dirpath, payload_root).replace(os.sep, "/")
+                if should_skip(rel_dir, excludes):
+                    dirnames[:] = []
+                    continue
+                paths.add(rel_dir)
+                dirnames[:] = [name for name in dirnames
+                               if not should_skip(rel_dir + "/" + name, excludes)]
+                for filename in filenames:
+                    relpath = (rel_dir + "/" + filename).replace("\\", "/")
+                    if not should_skip(relpath, excludes):
+                        paths.add(relpath)
+        elif os.path.isfile(src):
+            paths.add(rel)
+        else:
+            continue
+
+        # A folder's own .meta is a sibling, not a file beneath that folder,
+        # and a standalone file's .meta may not be covered by another manifest
+        # entry. Treat both as installable when the payload supplies them.
+        sidecar = src + ".meta"
+        sidecar_rel = rel + ".meta"
+        if os.path.isfile(sidecar) and not should_skip(sidecar_rel, excludes):
+            paths.add(sidecar_rel)
+    return paths
+
+
+def collect_existing_meta_files(root):
+    """Read Unity-generated .meta files before a clean reinstall deletes them."""
+    saved = {}
+    if not os.path.isdir(root):
+        return saved
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.endswith(".meta"):
+                continue
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            with open(full, "rb") as fh:
+                saved[rel] = fh.read()
+    return saved
+
+
+def restore_matching_meta_files(saved, payload_root, manifest, dest):
+    """Restore old GUIDs only for assets still present in the new payload.
+
+    Existing project-local metadata wins for assets that are still installed,
+    preserving scene references. Payload metas remain in place for new assets;
+    orphaned metas for removed assets are intentionally dropped.
+    """
+    install_paths = manifest_install_paths(payload_root, manifest)
+    restored = 0
+    for rel_meta, contents in saved.items():
+        rel_meta = rel_meta.replace("\\", "/")
+        if not rel_meta.endswith(".meta"):
+            continue
+        asset_path = rel_meta[:-5]
+        if asset_path not in install_paths:
+            continue  # the asset was removed from this version of the payload
+        target = os.path.join(dest, *rel_meta.split("/"))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as fh:
+            fh.write(contents)
+        restored += 1
+    return restored
+
+
+def _copy_sidecar_meta(src, target, rel, excludes):
+    """Copy a manifest entry's sibling .meta (notably root folders/files)."""
+    sidecar = src + ".meta"
+    sidecar_rel = rel + ".meta"
+    if not os.path.isfile(sidecar) or should_skip(sidecar_rel, excludes):
+        return 0
+    out = target + ".meta"
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    shutil.copy2(sidecar, out)
+    return 1
 
 
 def copy_entries(payload_root, manifest, dest):
@@ -707,10 +799,12 @@ def copy_entries(payload_root, manifest, dest):
                     os.makedirs(os.path.dirname(out), exist_ok=True)
                     shutil.copy2(full, out)
                     copied += 1
+            copied += _copy_sidecar_meta(src, target, rel, excludes)
         elif os.path.isfile(src):
             os.makedirs(os.path.dirname(target) or dest, exist_ok=True)
             shutil.copy2(src, target)
             copied += 1
+            copied += _copy_sidecar_meta(src, target, rel, excludes)
         else:
             warn("manifest entry missing from payload, skipped: %s" % rel)
     return copied
@@ -865,13 +959,17 @@ def main(argv=None):
             return fail(str(ex))
         info("Destination: %s" % dest)
         mode = "fresh"
+        saved_meta_files = {}
         if existing_install(dest):
             try:
                 mode = resolve_overwrite(dest, project, auto_yes)
             except ValueError as ex:
                 return fail(str(ex))
             if mode == "clean":
-                shutil.rmtree(dest)
+                # Unity serializes MonoBehaviour references as GUIDs from
+                # .meta files. This package does not ship those sidecars, so
+                # preserve the project-local ones for assets that still exist.
+                saved_meta_files = collect_existing_meta_files(dest)
 
         # --- Stage 6: install
         print("\n[6/6] Installing (%s)..." % ("overwrite-merge" if mode == "merge"
@@ -880,9 +978,16 @@ def main(argv=None):
             print("  %s v%s  ->  %s" % (manifest.get("name"), manifest.get("version"), dest))
             if not confirm("Install?", default_yes=True):
                 return fail("aborted by user")
+        if mode == "clean" and os.path.isdir(dest):
+            # Defer deletion until after the final install confirmation.
+            shutil.rmtree(dest)
         copied = copy_entries(pkg_root, manifest, dest)
         if copied == 0:
             return fail("nothing was copied; refusing to write a receipt")
+        preserved = restore_matching_meta_files(saved_meta_files, pkg_root, manifest, dest)
+        if preserved:
+            info("Preserved %d existing Unity .meta file(s) so script GUIDs remain stable." %
+                 preserved)
         receipt = write_receipt(dest, manifest, payload.label, copied)
     except (ValueError, OSError) as ex:
         # Expected failures (bad input, network/dns, git, permissions):

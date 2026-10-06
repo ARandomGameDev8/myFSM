@@ -47,16 +47,35 @@ namespace RPGCharacterStats.EditorTools
             _toSpawn = (CharacterDefinition)EditorGUILayout.ObjectField(
                 "Definition", _toSpawn, typeof(CharacterDefinition), false);
             if (GUILayout.Button("Spawn selected definition"))
-                SpawnFromInspector(server, _toSpawn != null ? _toSpawn.characterID : null);
+            {
+                EditorActionGuard.Run("Spawn failed", delegate
+                {
+                    SpawnFromInspector(server, _toSpawn != null ? _toSpawn.characterID : null);
+                });
+                GUIUtility.ExitGUI();
+            }
 
-            EditorGUILayout.BeginHorizontal();
-            _spawnByName = EditorGUILayout.TextField(_spawnByName);
-            if (GUILayout.Button("Spawn by name", GUILayout.Width(110)))
-                SpawnFromInspector(server, _spawnByName);
-            EditorGUILayout.EndHorizontal();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                _spawnByName = EditorGUILayout.TextField(_spawnByName);
+                if (GUILayout.Button("Spawn by name", GUILayout.Width(110)))
+                {
+                    EditorActionGuard.Run("Spawn failed", delegate
+                    {
+                        SpawnFromInspector(server, _spawnByName);
+                    });
+                    GUIUtility.ExitGUI();
+                }
+            }
 
             if (GUILayout.Button("Reload all from CharacterDB"))
-                RegistryWindow.LoadDefinitions(server);
+            {
+                EditorActionGuard.Run("Reload CharacterDB failed", delegate
+                {
+                    RegistryWindow.LoadDefinitions(server);
+                });
+                GUIUtility.ExitGUI();
+            }
 
             DrawSpawned(server);
         }
@@ -89,8 +108,13 @@ namespace RPGCharacterStats.EditorTools
                 if (server.registry.entries[i].isSpawned) spawnedCount++;
 
             EditorGUILayout.Space();
-            _showSpawned = EditorGUILayout.Foldout(_showSpawned,
+            bool showSpawned = EditorGUILayout.Foldout(_showSpawned,
                 "Spawned characters (" + spawnedCount + ")");
+            if (showSpawned != _showSpawned)
+            {
+                _showSpawned = showSpawned;
+                GUIUtility.ExitGUI();
+            }
             if (!_showSpawned) return;
 
             for (int i = 0; i < server.registry.entries.Count; i++)
@@ -99,21 +123,26 @@ namespace RPGCharacterStats.EditorTools
                 if (!entry.isSpawned || entry.definition == null || entry.instance == null)
                     continue;
 
-                EditorGUILayout.BeginHorizontal();
-
-                EditorGUILayout.LabelField(
-                    entry.definition.characterName + "  →  " + entry.spawnedAs,
-                    GUILayout.MinWidth(150));
-
-                if (GUILayout.Button("Select", GUILayout.Width(55)))
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    Selection.activeGameObject = entry.instance.gameObject;
-                    EditorGUIUtility.PingObject(entry.instance.gameObject);
-                }
-                if (GUILayout.Button("Despawn", GUILayout.Width(65)))
-                    server.DespawnByTag(entry.spawnedAs ?? entry.tag);
+                    EditorGUILayout.LabelField(
+                        entry.definition.characterName + "  →  " + entry.spawnedAs,
+                        GUILayout.MinWidth(150));
 
-                EditorGUILayout.EndHorizontal();
+                    if (GUILayout.Button("Select", GUILayout.Width(55)))
+                    {
+                        Selection.activeGameObject = entry.instance.gameObject;
+                        EditorGUIUtility.PingObject(entry.instance.gameObject);
+                    }
+                    if (GUILayout.Button("Despawn", GUILayout.Width(65)))
+                    {
+                        EditorActionGuard.Run("Despawn failed", delegate
+                        {
+                            server.DespawnByTag(entry.spawnedAs ?? entry.tag);
+                        });
+                        GUIUtility.ExitGUI();
+                    }
+                }
             }
 
             if (spawnedCount == 0)

@@ -67,7 +67,7 @@ namespace RPGCharacterStats.EditorTools
             GuidProbeTag probe = character.gameObject.AddComponent<GuidProbeTag>();
             probe.attachedAt = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             EditorUtility.SetDirty(probe);
-            EditorSceneManager_MarkSceneDirty();
+            SaveProbeScene();
 
             Debug.Log("[Probe] spawned " + character.gameObject.name + " at " +
                 probe.attachedAt + " — now press PLAY, then STOP, then run menu 2.\n" +
@@ -113,7 +113,12 @@ namespace RPGCharacterStats.EditorTools
             }
 
             GuidProbeTag tag = probe.GetComponent<GuidProbeTag>();
-            if (tag != null) { tag.survivedStops++; EditorUtility.SetDirty(tag); }
+            if (tag != null)
+            {
+                tag.survivedStops++;
+                EditorUtility.SetDirty(tag);
+                SaveProbeScene();
+            }
 
             string verdict = missing == 0
                 ? "PASS — every component survived, including the custom scripts."
@@ -187,13 +192,16 @@ namespace RPGCharacterStats.EditorTools
             return sb.ToString();
         }
 
-        private static void EditorSceneManager_MarkSceneDirty()
+        private static void SaveProbeScene()
         {
-            // Keep the probe object in the scene across the Play → Stop cycle
-            // (edit-mode spawns are real scene objects; they serialize with the
-            // scene the moment it is marked dirty and saved).
-            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
-                UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+            // Materialize saves before the probe tag is added. Save again so
+            // this diagnostic tests script GUID/reload behavior rather than an
+            // unsaved Edit Mode change being rolled back by the editor.
+            UnityEngine.SceneManagement.Scene scene =
+                UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(scene);
+            UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
+            UnityEditor.AssetDatabase.SaveAssets();
         }
     }
 }

@@ -17,11 +17,13 @@ AssetDatabase
 Attribute
 BitConverter
 CallingConvention
+CameraClearFlags
 Console
 Convert
 Dictionary
 Directory
 EditorApplication
+EditorGUI
 EditorGUILayout
 EditorSceneManager
 EditorStyles
@@ -30,6 +32,7 @@ Encoding
 Exception
 File
 GUILayout
+GUIUtility
 HashSet
 Input
 IntPtr

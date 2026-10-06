@@ -50,45 +50,67 @@ namespace RPGCharacterStats.EditorTools
 
         private void OnGUI()
         {
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            if (GUILayout.Button("New", EditorStyles.toolbarButton)) NewDocument();
-            if (GUILayout.Button("Load", EditorStyles.toolbarButton)) LoadFile();
-            if (GUILayout.Button("Save", EditorStyles.toolbarButton)) SaveFile();
-
-            if (EditorGUILayout.DropdownButton(new GUIContent("Presets"), FocusType.Passive, EditorStyles.toolbarDropDown))
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                GenericMenu menu = new GenericMenu();
-                menu.AddItem(new GUIContent("Save as Preset..."), false, SaveAsPreset);
-                string[] presets = FindPresets();
-                if (presets.Length > 0) menu.AddSeparator("");
-                for (int i = 0; i < presets.Length; i++)
+                if (GUILayout.Button("New", EditorStyles.toolbarButton))
                 {
-                    string path = presets[i];
-                    menu.AddItem(new GUIContent(Path.GetFileNameWithoutExtension(path)), false,
-                        delegate { LoadFrom(path); });
+                    EditorActionGuard.Run("New document failed", NewDocument);
+                    GUIUtility.ExitGUI();
                 }
-                menu.ShowAsContext();
-            }
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
+                if (GUILayout.Button("Load", EditorStyles.toolbarButton))
+                {
+                    EditorActionGuard.Run("Load failed", LoadFile);
+                    GUIUtility.ExitGUI();
+                }
+                if (GUILayout.Button("Save", EditorStyles.toolbarButton))
+                    EditorActionGuard.Run("Save failed", SaveFile);
 
-            EditorGUILayout.BeginHorizontal();
-            _charStatPath = EditorGUILayout.TextField("CharStat file", _charStatPath);
-            if (GUILayout.Button("Browse...", GUILayout.Width(80)))
-            {
-                string path = EditorUtility.OpenFilePanel("Load .charstat", "Assets", "charstat");
-                if (!string.IsNullOrEmpty(path)) LoadCharStat(File.ReadAllText(path), path);
+                if (EditorGUILayout.DropdownButton(new GUIContent("Presets"), FocusType.Passive, EditorStyles.toolbarDropDown))
+                {
+                    GenericMenu menu = new GenericMenu();
+                    menu.AddItem(new GUIContent("Save as Preset..."), false,
+                        delegate { EditorActionGuard.Run("Save preset failed", SaveAsPreset); });
+                    string[] presets = FindPresets();
+                    if (presets.Length > 0) menu.AddSeparator("");
+                    for (int i = 0; i < presets.Length; i++)
+                    {
+                        string path = presets[i];
+                        menu.AddItem(new GUIContent(Path.GetFileNameWithoutExtension(path)), false,
+                            delegate { EditorActionGuard.Run("Load preset failed", delegate { LoadFrom(path); }); });
+                    }
+                    menu.ShowAsContext();
+                }
+                GUILayout.FlexibleSpace();
             }
-            EditorGUILayout.EndHorizontal();
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                _charStatPath = EditorGUILayout.TextField("CharStat file", _charStatPath);
+                if (GUILayout.Button("Browse...", GUILayout.Width(80)))
+                {
+                    string path = EditorUtility.OpenFilePanel("Load .charstat", "Assets", "charstat");
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        EditorActionGuard.Run("Load .charstat failed", delegate
+                        {
+                            LoadCharStat(File.ReadAllText(path), path);
+                        });
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
 
             if (GUILayout.Button("Rebuild rows from CharStat", GUILayout.Width(200)))
             {
-                RebuildRows();
+                EditorActionGuard.Run("Rebuild rows failed", RebuildRows);
+                GUIUtility.ExitGUI();
             }
 
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
-            for (int i = 0; i < _rows.Count; i++) DrawRow(_rows[i]);
-            EditorGUILayout.EndScrollView();
+            using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
+            {
+                _scroll = scroll.scrollPosition;
+                for (int i = 0; i < _rows.Count; i++) DrawRow(_rows[i]);
+            }
 
             if (!string.IsNullOrEmpty(_status))
                 EditorGUILayout.HelpBox(_status, MessageType.Info);
@@ -96,25 +118,39 @@ namespace RPGCharacterStats.EditorTools
 
         private void DrawRow(Row row)
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            EditorGUILayout.BeginHorizontal();
-            row.type = (StatType)EditorGUILayout.EnumPopup(row.type, GUILayout.Width(60));
-            row.formulaName = EditorGUILayout.TextField(row.formulaName);
-            EditorGUILayout.LabelField(":", GUILayout.Width(8));
-            EditorGUILayout.EndHorizontal();
-
-            string newText = EditorGUILayout.TextArea(row.text ?? "", GUILayout.MinHeight(72));
-            if (newText != row.text)
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                row.text = newText;
-                ValidateRow(row);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    StatType newType = (StatType)EditorGUILayout.EnumPopup(row.type, GUILayout.Width(60));
+                    if (newType != row.type)
+                    {
+                        row.type = newType;
+                        ValidateRow(row);
+                        GUIUtility.ExitGUI();
+                    }
+
+                    string newFormulaName = EditorGUILayout.TextField(row.formulaName);
+                    if (newFormulaName != row.formulaName)
+                    {
+                        row.formulaName = newFormulaName;
+                        ValidateRow(row);
+                        GUIUtility.ExitGUI();
+                    }
+                    EditorGUILayout.LabelField(":", GUILayout.Width(8));
+                }
+
+                string newText = EditorGUILayout.TextArea(row.text ?? "", GUILayout.MinHeight(72));
+                if (newText != row.text)
+                {
+                    row.text = newText;
+                    ValidateRow(row);
+                    GUIUtility.ExitGUI();
+                }
+
+                for (int i = 0; i < row.errors.Count; i++)
+                    EditorGUILayout.HelpBox(row.errors[i], MessageType.Error);
             }
-
-            for (int i = 0; i < row.errors.Count; i++)
-                EditorGUILayout.HelpBox(row.errors[i], MessageType.Error);
-
-            EditorGUILayout.EndVertical();
         }
 
         /// <summary>One row per character stat (section 10.1), names defaulted
@@ -257,6 +293,7 @@ namespace RPGCharacterStats.EditorTools
         private void SaveFile()
         {
             string text = BuildText();
+            if (text == null) return;
             if (_currentPath == "")
             {
                 string abs = EditorUtility.SaveFilePanel("Save .gameplaystat", "Assets", "RPGGameplay", "gameplaystat");
@@ -270,6 +307,9 @@ namespace RPGCharacterStats.EditorTools
 
         private void SaveAsPreset()
         {
+            string text = BuildText();
+            if (text == null) return;
+
             if (!AssetDatabase.IsValidFolder(PresetsFolder))
             {
                 string[] parts = PresetsFolder.Split('/');
@@ -283,7 +323,7 @@ namespace RPGCharacterStats.EditorTools
             }
             string abs = EditorUtility.SaveFilePanel("Save preset", PresetsFolder, "NewGameplayPreset", "gameplaystat");
             if (abs == "") return;
-            File.WriteAllText(abs, BuildText());
+            File.WriteAllText(abs, text);
             AssetDatabase.Refresh();
             _status = "Preset saved: " + abs;
         }
@@ -323,7 +363,7 @@ namespace RPGCharacterStats.EditorTools
                 catch (System.Exception ex)
                 {
                     EditorUtility.DisplayDialog("Cannot save — row \"" + row.formulaName + "\" has errors", ex.Message, "OK");
-                    return "";
+                    return null;
                 }
             }
             return GameplayStatFormat.Write(formulas);
@@ -332,7 +372,16 @@ namespace RPGCharacterStats.EditorTools
         private static string[] FindPresets()
         {
             if (!AssetDatabase.IsValidFolder(PresetsFolder)) return new string[0];
-            return AssetDatabase.FindAssets("t:TextAsset", new[] { PresetsFolder });
+            string[] guids = AssetDatabase.FindAssets("", new[] { PresetsFolder });
+            List<string> paths = new List<string>();
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.Equals(Path.GetExtension(path), ".gameplaystat",
+                    System.StringComparison.OrdinalIgnoreCase))
+                    paths.Add(path);
+            }
+            return paths.ToArray();
         }
     }
 }

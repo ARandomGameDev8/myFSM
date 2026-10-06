@@ -25,13 +25,44 @@ namespace RPGCharacterStats.EditorTools
             CharacterBuilderServer server = CharacterBuilderServer.Instance;
             if (server != null) return server;
 
+#if UNITY_2022_2_OR_NEWER
             server = Object.FindFirstObjectByType<CharacterBuilderServer>();
+#else
+            // The newer API is not available in the Unity 2019.4+ versions
+            // supported by myFSM; this fallback keeps the editor utility
+            // compilable there (there should be only one server in a scene).
+            server = Object.FindObjectOfType<CharacterBuilderServer>();
+#endif
             if (server != null) return server;
 
             if (!createIfMissing) return null;
             GameObject go = new GameObject("CharacterBuilderServer");
             Undo.RegisterCreatedObjectUndo(go, "Create CharacterBuilderServer");
             return go.AddComponent<CharacterBuilderServer>();
+        }
+    }
+
+    /// <summary>Runs editor commands invoked from an IMGUI callback without
+    /// allowing an I/O, spawn, or asset error to unwind through open layout
+    /// groups. The exception is still logged with its full stack trace.</summary>
+    internal static class EditorActionGuard
+    {
+        public static void Run(string action, System.Action callback)
+        {
+            if (callback == null) return;
+            try
+            {
+                callback();
+            }
+            catch (ExitGUIException)
+            {
+                throw;
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogException(ex);
+                EditorUtility.DisplayDialog(action, ex.Message, "OK");
+            }
         }
     }
 }

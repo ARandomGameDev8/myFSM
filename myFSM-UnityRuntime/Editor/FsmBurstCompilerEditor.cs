@@ -61,31 +61,52 @@ namespace MyFSM.Editor
             DrawFolderRow(_defaultScript);
             DrawFolderRow(_inputFolder);
 
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Sweep Folder"))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                serializedObject.ApplyModifiedProperties();
-                int n = c.SweepFolder();
-                Debug.Log("[myFSM] sweep added " + n + " entr" +
-                          (n == 1 ? "y" : "ies") + ".");
+                if (GUILayout.Button("Sweep Folder"))
+                {
+                    RunGuiAction("Sweep failed", delegate
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        Undo.RecordObject(c, "Sweep myFSM Folder");
+                        int n = c.SweepFolder();
+                        EditorUtility.SetDirty(c);
+                        if (c.gameObject.scene.IsValid())
+                            EditorSceneManager.MarkSceneDirty(c.gameObject.scene);
+                        Debug.Log("[myFSM] sweep added " + n + " entr" +
+                                  (n == 1 ? "y" : "ies") + ".");
+                    });
+                    GUIUtility.ExitGUI();
+                }
+                if (GUILayout.Button("Compile All"))
+                {
+                    RunGuiAction("Compile failed", delegate
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        FsmBurstStats s = c.CompileAll();
+                        QueueAssetDatabaseRefresh();
+                        Debug.Log("[myFSM] burst: " + s.Succeeded + "/" + s.Total + " compiled.");
+                    });
+                    GUIUtility.ExitGUI();
+                }
+                if (GUILayout.Button("Sweep + Compile"))
+                {
+                    RunGuiAction("Sweep and compile failed", delegate
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        Undo.RecordObject(c, "Sweep and Compile myFSM Folder");
+                        int n = c.SweepFolder();
+                        EditorUtility.SetDirty(c);
+                        if (c.gameObject.scene.IsValid())
+                            EditorSceneManager.MarkSceneDirty(c.gameObject.scene);
+                        FsmBurstStats s = c.CompileAll();
+                        QueueAssetDatabaseRefresh();
+                        Debug.Log("[myFSM] sweep added " + n + "; burst: " +
+                                  s.Succeeded + "/" + s.Total + " compiled.");
+                    });
+                    GUIUtility.ExitGUI();
+                }
             }
-            if (GUILayout.Button("Compile All"))
-            {
-                serializedObject.ApplyModifiedProperties();
-                FsmBurstStats s = c.CompileAll();
-                AssetDatabase.Refresh();
-                Debug.Log("[myFSM] burst: " + s.Succeeded + "/" + s.Total + " compiled.");
-            }
-            if (GUILayout.Button("Sweep + Compile"))
-            {
-                serializedObject.ApplyModifiedProperties();
-                int n = c.SweepFolder();
-                FsmBurstStats s = c.CompileAll();
-                AssetDatabase.Refresh();
-                Debug.Log("[myFSM] sweep added " + n + "; burst: " +
-                          s.Succeeded + "/" + s.Total + " compiled.");
-            }
-            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Entries (" + _entries.arraySize + ")",
@@ -115,114 +136,137 @@ namespace MyFSM.Editor
             SerializedProperty ep = _entries.GetArrayElementAtIndex(i);
             FsmBurstEntry live = (c.Entries != null && i < c.Entries.Count)
                 ? c.Entries[i] : null;
-            EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.PropertyField(ep.FindPropertyRelative("Name"));
-            DrawFileRow(ep);
-            EditorGUILayout.PropertyField(ep.FindPropertyRelative("OutputFolder"));
-            EditorGUILayout.PropertyField(ep.FindPropertyRelative("ClassName"));
-            EditorGUILayout.PropertyField(ep.FindPropertyRelative("ScriptFolder"));
-            SerializedProperty targetP = ep.FindPropertyRelative("Target");
-            EditorGUILayout.PropertyField(targetP);
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Compile", GUILayout.Width(90)))
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                serializedObject.ApplyModifiedProperties();
-                FsmBurstEntry toCompile = (c.Entries != null && i < c.Entries.Count)
-                    ? c.Entries[i] : null;
-                if (toCompile != null && c.CompileEntry(toCompile) &&
-                    !Application.isPlaying)
-                {
-                    // Attach straight away when the class already exists (a
-                    // recompile). On the FIRST compile Unity has not imported
-                    // the new .cs yet, so no type exists to add: queue it and
-                    // the post-reload hook attaches it automatically.
-                    GameObject target = targetP.objectReferenceValue as GameObject;
-                    if (target != null)
-                    {
-                        if (TryAttach(toCompile, target))
-                        {
-                            Debug.Log("[myFSM] compiled + attached " +
-                                      EffectiveClassName(toCompile) + " to '" +
-                                      target.name + "'.");
-                        }
-                        else if (FindComponentType(EffectiveClassName(toCompile)) == null)
-                        {
-                            QueuePendingAttach(toCompile, target);
-                            Debug.Log("[myFSM] compiled " + EffectiveClassName(toCompile) +
-                                      " - attaching to '" + target.name +
-                                      "' as soon as Unity finishes importing the script.");
-                        }
-                    }
-                }
-                AssetDatabase.Refresh();
-            }
-            bool playing = Application.isPlaying;
-            if (!playing && targetP.objectReferenceValue == null)
-            {
-                if (GUILayout.Button("Generate", GUILayout.Width(90)))
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(ep.FindPropertyRelative("Name"));
+                DrawFileRow(ep);
+                EditorGUILayout.PropertyField(ep.FindPropertyRelative("OutputFolder"));
+                EditorGUILayout.PropertyField(ep.FindPropertyRelative("ClassName"));
+                EditorGUILayout.PropertyField(ep.FindPropertyRelative("ScriptFolder"));
+                SerializedProperty targetP = ep.FindPropertyRelative("Target");
+                EditorGUILayout.PropertyField(targetP);
+                if (EditorGUI.EndChangeCheck())
                 {
                     serializedObject.ApplyModifiedProperties();
-                    if (c.Entries != null && i < c.Entries.Count)
-                        GenerateForEntry(c.Entries[i], targetP);
+                    GUIUtility.ExitGUI();
                 }
-            }
-            else if (!playing && targetP.objectReferenceValue != null)
-            {
-                GameObject go = (GameObject)targetP.objectReferenceValue;
-                Type t = FindComponentType(EffectiveClassName(live));
-                if (t != null && go.GetComponent(t) == null)
+
+                bool playing = Application.isPlaying;
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("Attach", GUILayout.Width(90)))
+                    if (GUILayout.Button("Compile", GUILayout.Width(90)))
                     {
+                        RunGuiAction("Compile failed", delegate
+                        {
+                            serializedObject.ApplyModifiedProperties();
+                            FsmBurstEntry toCompile = (c.Entries != null && i < c.Entries.Count)
+                                ? c.Entries[i] : null;
+                            if (toCompile != null && c.CompileEntry(toCompile) && !Application.isPlaying)
+                            {
+                                // Attach immediately on recompiles. On the first
+                                // compile Unity must import the generated .cs;
+                                // the reload hook completes the queued attach.
+                                GameObject target = targetP.objectReferenceValue as GameObject;
+                                if (target != null)
+                                {
+                                    if (TryAttach(toCompile, target))
+                                    {
+                                        Debug.Log("[myFSM] compiled + attached " +
+                                                  EffectiveClassName(toCompile) + " to '" +
+                                                  target.name + "'.");
+                                    }
+                                    else if (FindComponentType(EffectiveClassName(toCompile)) == null)
+                                    {
+                                        QueuePendingAttach(toCompile, target);
+                                        Debug.Log("[myFSM] compiled " + EffectiveClassName(toCompile) +
+                                                  " - attaching to '" + target.name +
+                                                  "' as soon as Unity finishes importing the script.");
+                                    }
+                                }
+                            }
+                            // Import generated C# only after this inspector event
+                            // has exited, so SerializedProperty/layout state is
+                            // not invalidated by a script compile/domain reload.
+                            QueueAssetDatabaseRefresh();
+                        });
+                        GUIUtility.ExitGUI();
+                    }
+
+                    if (!playing && targetP.objectReferenceValue == null)
+                    {
+                        if (GUILayout.Button("Generate", GUILayout.Width(90)))
+                        {
+                            RunGuiAction("Generate failed", delegate
+                            {
+                                serializedObject.ApplyModifiedProperties();
+                                if (c.Entries != null && i < c.Entries.Count)
+                                    GenerateForEntry(c.Entries[i], targetP);
+                            });
+                            GUIUtility.ExitGUI();
+                        }
+                    }
+                    else if (!playing && targetP.objectReferenceValue != null)
+                    {
+                        GameObject go = (GameObject)targetP.objectReferenceValue;
+                        Type t = FindComponentType(EffectiveClassName(live));
+                        if (t != null && go.GetComponent(t) == null)
+                        {
+                            if (GUILayout.Button("Attach", GUILayout.Width(90)))
+                            {
+                                RunGuiAction("Attach failed", delegate
+                                {
+                                    serializedObject.ApplyModifiedProperties();
+                                    FsmBurstEntry fresh = (c.Entries != null && i < c.Entries.Count)
+                                        ? c.Entries[i] : null;
+                                    TryAttach(fresh, go);
+                                });
+                                GUIUtility.ExitGUI();
+                            }
+                        }
+                    }
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("X", GUILayout.Width(28)))
+                    {
+                        _entries.DeleteArrayElementAtIndex(i);
                         serializedObject.ApplyModifiedProperties();
-                        FsmBurstEntry fresh = (c.Entries != null && i < c.Entries.Count)
-                            ? c.Entries[i] : null;
-                        TryAttach(fresh, go);
+                        // The entry/control count changed. End this IMGUI event
+                        // instead of repainting against the previous layout.
+                        GUIUtility.ExitGUI();
+                        return;
+                    }
+                }
+
+                FsmBurstEntry cur = (c.Entries != null && i < c.Entries.Count)
+                    ? c.Entries[i] : null;
+                if (cur != null)
+                {
+                    EditorGUILayout.HelpBox(cur.LastStatus,
+                        cur.LastOk ? MessageType.Info : MessageType.None);
+
+                    // Compile -> script written -> Unity must import + compile it
+                    // before the component type exists. Show that state explicitly.
+                    GameObject targetGo = targetP.objectReferenceValue as GameObject;
+                    if (cur.LastOk && !playing && targetGo != null &&
+                        FindComponentType(EffectiveClassName(cur)) == null)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Script written, but '" + EffectiveClassName(cur) +
+                            "' does not exist yet - Unity is still importing it. It " +
+                            "will be attached to '" + targetGo.name +
+                            "' automatically as soon as it compiles.",
+                            MessageType.Warning);
+                    }
+                    else if (playing && targetGo != null &&
+                             FindComponentType(EffectiveClassName(cur)) != null &&
+                             targetGo.GetComponent(FindComponentType(EffectiveClassName(cur))) == null)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Cannot attach while in play mode - exit play mode, then " +
+                            "press Attach.", MessageType.Warning);
                     }
                 }
             }
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("X", GUILayout.Width(28)))
-            {
-                _entries.DeleteArrayElementAtIndex(i);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndVertical();
-                return;
-            }
-            EditorGUILayout.EndHorizontal();
-
-            FsmBurstEntry cur = (c.Entries != null && i < c.Entries.Count)
-                ? c.Entries[i] : null;
-            if (cur != null)
-            {
-                EditorGUILayout.HelpBox(cur.LastStatus,
-                    cur.LastOk ? MessageType.Info : MessageType.None);
-
-                // Compile -> script written -> Unity must import + compile it
-                // before the component type exists. Say so, instead of leaving
-                // the author wondering why nothing was attached.
-                GameObject targetGo = targetP.objectReferenceValue as GameObject;
-                if (cur.LastOk && !playing && targetGo != null &&
-                    FindComponentType(EffectiveClassName(cur)) == null)
-                {
-                    EditorGUILayout.HelpBox(
-                        "Script written, but '" + EffectiveClassName(cur) +
-                        "' does not exist yet - Unity is still importing it. It " +
-                        "will be attached to '" + targetGo.name +
-                        "' automatically as soon as it compiles.",
-                        MessageType.Warning);
-                }
-                else if (playing && targetGo != null &&
-                         FindComponentType(EffectiveClassName(cur)) != null &&
-                         targetGo.GetComponent(FindComponentType(EffectiveClassName(cur))) == null)
-                {
-                    EditorGUILayout.HelpBox(
-                        "Cannot attach while in play mode - exit play mode, then " +
-                        "press Attach.", MessageType.Warning);
-                }
-            }
-            EditorGUILayout.EndVertical();
         }
 
         // ----------------------------------------------------------
@@ -359,42 +403,79 @@ namespace MyFSM.Editor
         private void DrawFileRow(SerializedProperty ep)
         {
             SerializedProperty p = ep.FindPropertyRelative("FsmPath");
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.PropertyField(p);
-            if (GUILayout.Button("...", GUILayout.Width(32)))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                string picked = EditorUtility.OpenFilePanel(
-                    "Pick .fsm", Application.dataPath, "fsm");
-                if (!string.IsNullOrEmpty(picked))
+                EditorGUILayout.PropertyField(p);
+                if (GUILayout.Button("...", GUILayout.Width(32)))
                 {
-                    string asset = FsmBurstCompiler.ToAssetPath(picked);
-                    if (asset == null)
-                        Debug.LogError("[myFSM] pick a file inside the project (under Assets/).");
-                    else
-                        p.stringValue = asset;
+                    string picked = EditorUtility.OpenFilePanel(
+                        "Pick .fsm", Application.dataPath, "fsm");
+                    if (!string.IsNullOrEmpty(picked))
+                    {
+                        string asset = FsmBurstCompiler.ToAssetPath(picked);
+                        if (asset == null)
+                            Debug.LogError("[myFSM] pick a file inside the project (under Assets/).");
+                        else
+                            p.stringValue = asset;
+                    }
                 }
             }
-            EditorGUILayout.EndHorizontal();
         }
 
         private void DrawFolderRow(SerializedProperty p)
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.PropertyField(p);
-            if (GUILayout.Button("...", GUILayout.Width(32)))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                string picked = EditorUtility.OpenFolderPanel(
-                    "Pick folder", Application.dataPath, "");
-                if (!string.IsNullOrEmpty(picked))
+                EditorGUILayout.PropertyField(p);
+                if (GUILayout.Button("...", GUILayout.Width(32)))
                 {
-                    string asset = FsmBurstCompiler.ToAssetPath(picked);
-                    if (asset == null)
-                        Debug.LogError("[myFSM] pick a folder inside the project (under Assets/).");
-                    else
-                        p.stringValue = asset;
+                    string picked = EditorUtility.OpenFolderPanel(
+                        "Pick folder", Application.dataPath, "");
+                    if (!string.IsNullOrEmpty(picked))
+                    {
+                        string asset = FsmBurstCompiler.ToAssetPath(picked);
+                        if (asset == null)
+                            Debug.LogError("[myFSM] pick a folder inside the project (under Assets/).");
+                        else
+                            p.stringValue = asset;
+                    }
                 }
             }
-            EditorGUILayout.EndHorizontal();
+        }
+
+        private static void RunGuiAction(string title, Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (ExitGUIException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+                EditorUtility.DisplayDialog(title, ex.Message, "OK");
+            }
+        }
+
+        private static void QueueAssetDatabaseRefresh()
+        {
+            // Refreshing generated .cs files can trigger compilation and a
+            // domain reload. Do not invalidate this inspector's serialized
+            // properties or IMGUI state in the middle of OnInspectorGUI.
+            EditorApplication.delayCall += delegate
+            {
+                try
+                {
+                    AssetDatabase.Refresh();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                }
+            };
         }
 
         private static string EffectiveClassName(FsmBurstEntry e)

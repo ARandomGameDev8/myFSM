@@ -319,21 +319,46 @@ namespace RPGCharacterStats
                 {
                     Type type = types[t];
                     if (type.IsAbstract || !type.IsSubclassOf(typeof(CharacterDefinition))) continue;
-                    string fullName = type.FullName;
-                    if (string.IsNullOrEmpty(fullName)) fullName = type.Name;
-                    Type hit = Type.GetType(fullName, false);
-                    if (hit == null)
-                    {
-                        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-                        {
-                            hit = assembly.GetType(fullName, false);
-                            if (hit != null && !hit.IsAbstract) break;
-                        }
-                    }
-                    if (hit != null) guids.Add(fullName);
+                    string guid = ScriptGuidForType(type);
+                    if (!string.IsNullOrEmpty(guid)) guids.Add(guid);
                 }
             }
             return guids;
+        }
+
+        /// <summary>Resolve the actual Unity .meta GUID for a definition's
+        /// MonoScript. A C# type's FullName is not an asset GUID and must never
+        /// be written into a YAML PPtr's m_Script.guid field.</summary>
+        private static string ScriptGuidForType(Type type)
+        {
+            if (type == null) return null;
+            ScriptableObject temporary = null;
+            try
+            {
+                temporary = ScriptableObject.CreateInstance(type);
+                if (temporary == null) return null;
+                UnityEditor.MonoScript script =
+                    UnityEditor.MonoScript.FromScriptableObject(temporary);
+                if (script == null) return null;
+
+                string path = UnityEditor.AssetDatabase.GetAssetPath(script);
+                if (string.IsNullOrEmpty(path)) return null;
+                string guid = UnityEditor.AssetDatabase.AssetPathToGUID(path);
+                if (string.IsNullOrEmpty(guid) ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(guid, @"\A[0-9a-fA-F]{32}\z"))
+                    return null;
+                return guid.ToLowerInvariant();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[RPGStats] could not resolve script GUID for " +
+                    type.FullName + ": " + ex.Message);
+                return null;
+            }
+            finally
+            {
+                if (temporary != null) UnityEngine.Object.DestroyImmediate(temporary);
+            }
         }
 
         private static string ScriptGuidOf(string file)
@@ -342,12 +367,20 @@ namespace RPGCharacterStats
             // m_Script line; a stale/removed script still leaves that line
             // behind with a GUID that no longer resolves. Read it so the
             // heal pass can tell a broken row from a row of a different
-            // (still-healthy) script class.
+            // (still-healthy) script class. Return empty (not null) when the
+            // PPtr line exists but its GUID text is malformed, so the layout-
+            // based relinker gets a chance to repair it.
+            string yaml = System.IO.File.ReadAllText(file);
             System.Text.RegularExpressions.Match match =
                 System.Text.RegularExpressions.Regex.Match(
-                    System.IO.File.ReadAllText(file),
+                    yaml,
                     @"m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})");
-            return match.Success ? match.Groups[1].Value.ToLowerInvariant() : null;
+            if (match.Success) return match.Groups[1].Value.ToLowerInvariant();
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                yaml, @"^\s*m_Script\s*:",
+                System.Text.RegularExpressions.RegexOptions.Multiline))
+                return string.Empty;
+            return null;
         }
 
         /// <summary>Re-link a row whose m_Script guid went stale: identify the
@@ -379,23 +412,14 @@ namespace RPGCharacterStats
             }
             if (type == null) return false;
 
-            string fullName = type.FullName;
-            if (string.IsNullOrEmpty(fullName)) fullName = type.Name;
-            Type hit = Type.GetType(fullName, false);
-            if (hit == null)
-            {
-                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    hit = assembly.GetType(fullName, false);
-                    if (hit != null && !hit.IsAbstract) break;
-                }
-            }
-            string newGuid = hit != null ? fullName : null;
+            string newGuid = ScriptGuidForType(type);
             if (string.IsNullOrEmpty(newGuid)) return false;
 
+            // Replace the complete value, not just a 32-hex GUID: a previous
+            // bad relink may have written the class name into this field.
             string replaced = System.Text.RegularExpressions.Regex.Replace(
                 yaml,
-                @"(m_Script:\s*\{[^}]*guid:\s*)([0-9a-fA-F]{32})",
+                @"(m_Script:\s*\{[^}]*guid:\s*)([^,}\r\n]*)(?=\s*[,}])",
                 "$1" + newGuid);
             if (replaced == yaml) return false;
 

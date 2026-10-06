@@ -45,18 +45,21 @@ namespace RPGCharacterStats.EditorTools
         {
             DrawToolbar();
 
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
-            EditorGUILayout.HelpBox("What stats does this character type have? "
-                + "This file is the vocabulary every character of its kind shares.", MessageType.None);
-
-            DrawHeader();
-            for (int i = 0; i < _rows.Count; i++) DrawRow(_rows[i], i);
-
-            if (GUILayout.Button("+ Add Stat", GUILayout.Width(110)))
+            using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
             {
-                _rows.Add(new Row { defaultValue = "0" });
+                _scroll = scroll.scrollPosition;
+                EditorGUILayout.HelpBox("What stats does this character type have? "
+                    + "This file is the vocabulary every character of its kind shares.", MessageType.None);
+
+                DrawHeader();
+                for (int i = 0; i < _rows.Count; i++) DrawRow(_rows[i], i);
+
+                if (GUILayout.Button("+ Add Stat", GUILayout.Width(110)))
+                {
+                    _rows.Add(new Row { defaultValue = "0" });
+                    GUIUtility.ExitGUI();
+                }
             }
-            EditorGUILayout.EndScrollView();
 
             if (!string.IsNullOrEmpty(_status))
                 EditorGUILayout.HelpBox(_status, MessageType.Info);
@@ -64,74 +67,102 @@ namespace RPGCharacterStats.EditorTools
 
         private void DrawToolbar()
         {
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            if (GUILayout.Button("New", EditorStyles.toolbarButton)) NewSchema();
-            if (GUILayout.Button("Load", EditorStyles.toolbarButton)) LoadFile();
-            if (GUILayout.Button("Save", EditorStyles.toolbarButton)) SaveFile();
-
-            if (EditorGUILayout.DropdownButton(new GUIContent("Presets"), FocusType.Passive, EditorStyles.toolbarDropDown))
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                GenericMenu menu = new GenericMenu();
-                menu.AddItem(new GUIContent("Save as Preset..."), false, SaveAsPreset);
-                string[] presets = FindPresets();
-                if (presets.Length > 0) menu.AddSeparator("");
-                for (int i = 0; i < presets.Length; i++)
+                if (GUILayout.Button("New", EditorStyles.toolbarButton))
                 {
-                    string path = presets[i];
-                    menu.AddItem(new GUIContent(Path.GetFileNameWithoutExtension(path)), false,
-                        delegate { LoadFrom(path); });
+                    EditorActionGuard.Run("New schema failed", NewSchema);
+                    GUIUtility.ExitGUI();
                 }
-                menu.ShowAsContext();
-            }
+                if (GUILayout.Button("Load", EditorStyles.toolbarButton))
+                {
+                    EditorActionGuard.Run("Load failed", LoadFile);
+                    GUIUtility.ExitGUI();
+                }
+                if (GUILayout.Button("Save", EditorStyles.toolbarButton))
+                {
+                    EditorActionGuard.Run("Save failed", SaveFile);
+                    GUIUtility.ExitGUI();
+                }
 
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
+                if (EditorGUILayout.DropdownButton(new GUIContent("Presets"), FocusType.Passive, EditorStyles.toolbarDropDown))
+                {
+                    GenericMenu menu = new GenericMenu();
+                    menu.AddItem(new GUIContent("Save as Preset..."), false,
+                        delegate { EditorActionGuard.Run("Save preset failed", SaveAsPreset); });
+                    string[] presets = FindPresets();
+                    if (presets.Length > 0) menu.AddSeparator("");
+                    for (int i = 0; i < presets.Length; i++)
+                    {
+                        string path = presets[i];
+                        menu.AddItem(new GUIContent(Path.GetFileNameWithoutExtension(path)), false,
+                            delegate { EditorActionGuard.Run("Load preset failed", delegate { LoadFrom(path); }); });
+                    }
+                    menu.ShowAsContext();
+                }
+
+                GUILayout.FlexibleSpace();
+            }
         }
 
         private void DrawHeader()
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Name", EditorStyles.boldLabel, GUILayout.MinWidth(120));
-            EditorGUILayout.LabelField("Type", EditorStyles.boldLabel, GUILayout.Width(70));
-            EditorGUILayout.LabelField("Min", EditorStyles.boldLabel, GUILayout.Width(90));
-            EditorGUILayout.LabelField("Max", EditorStyles.boldLabel, GUILayout.Width(90));
-            EditorGUILayout.LabelField("Default", EditorStyles.boldLabel, GUILayout.Width(90));
-            GUILayout.Space(60);
-            EditorGUILayout.EndHorizontal();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("Name", EditorStyles.boldLabel, GUILayout.MinWidth(120));
+                EditorGUILayout.LabelField("Type", EditorStyles.boldLabel, GUILayout.Width(70));
+                EditorGUILayout.LabelField("Min", EditorStyles.boldLabel, GUILayout.Width(90));
+                EditorGUILayout.LabelField("Max", EditorStyles.boldLabel, GUILayout.Width(90));
+                EditorGUILayout.LabelField("Default", EditorStyles.boldLabel, GUILayout.Width(90));
+                GUILayout.Space(60);
+            }
         }
 
         private void DrawRow(Row row, int index)
         {
-            EditorGUILayout.BeginHorizontal();
-            row.name = EditorGUILayout.TextField(row.name, GUILayout.MinWidth(120));
-
-            StatType newType = (StatType)EditorGUILayout.EnumPopup(row.type, GUILayout.Width(70));
-            if (newType != row.type)
+            using (new EditorGUILayout.HorizontalScope())
             {
-                row.type = newType;
-                row.defaultValue = newType == StatType.Bool ? "false" : "0";
+                row.name = EditorGUILayout.TextField(row.name, GUILayout.MinWidth(120));
+
+                StatType newType = (StatType)EditorGUILayout.EnumPopup(row.type, GUILayout.Width(70));
+                if (newType != row.type)
+                {
+                    row.type = newType;
+                    row.defaultValue = newType == StatType.Bool ? "false" : "0";
+                    GUIUtility.ExitGUI();
+                }
+
+                if (row.type == StatType.Bool)
+                {
+                    GUILayout.Space(90);
+                    GUILayout.Space(90);
+                    row.defaultValue = EditorGUILayout.Toggle(
+                        row.defaultValue == "true", GUILayout.Width(90)) ? "true" : "false";
+                }
+                else
+                {
+                    row.hasMin = EditorGUILayout.ToggleLeft("", row.hasMin, GUILayout.Width(14));
+                    row.min = EditorGUILayout.FloatField(row.hasMin ? row.min : 0f, GUILayout.Width(76));
+                    row.hasMax = EditorGUILayout.ToggleLeft("", row.hasMax, GUILayout.Width(14));
+                    row.max = EditorGUILayout.FloatField(row.hasMax ? row.max : 0f, GUILayout.Width(76));
+                    row.defaultValue = EditorGUILayout.TextField(row.defaultValue, GUILayout.Width(90));
+                }
+
+                if (GUILayout.Button("Remove", GUILayout.Width(60)))
+                {
+                    _rows.RemoveAt(index);
+                    // The row/control count changed; let Unity rebuild Layout
+                    // before drawing the remaining rows.
+                    GUIUtility.ExitGUI();
+                }
             }
 
-            if (row.type == StatType.Bool)
+            string updatedError = Validate(row);
+            if (row.error != updatedError)
             {
-                GUILayout.Space(90);
-                GUILayout.Space(90);
-                row.defaultValue = EditorGUILayout.Toggle(
-                    row.defaultValue == "true", GUILayout.Width(90)) ? "true" : "false";
+                row.error = updatedError;
+                GUIUtility.ExitGUI();
             }
-            else
-            {
-                row.hasMin = EditorGUILayout.ToggleLeft("", row.hasMin, GUILayout.Width(14));
-                row.min = EditorGUILayout.FloatField(row.hasMin ? row.min : 0f, GUILayout.Width(76));
-                row.hasMax = EditorGUILayout.ToggleLeft("", row.hasMax, GUILayout.Width(14));
-                row.max = EditorGUILayout.FloatField(row.hasMax ? row.max : 0f, GUILayout.Width(76));
-                row.defaultValue = EditorGUILayout.TextField(row.defaultValue, GUILayout.Width(90));
-            }
-
-            if (GUILayout.Button("Remove", GUILayout.Width(60))) _rows.RemoveAt(index);
-            EditorGUILayout.EndHorizontal();
-
-            row.error = Validate(row);
             if (!string.IsNullOrEmpty(row.error))
                 EditorGUILayout.HelpBox(row.error, MessageType.Error);
         }
@@ -280,7 +311,16 @@ namespace RPGCharacterStats.EditorTools
         private static string[] FindPresets()
         {
             if (!AssetDatabase.IsValidFolder(PresetsFolder)) return new string[0];
-            return AssetDatabase.FindAssets("t:TextAsset", new[] { PresetsFolder });
+            string[] guids = AssetDatabase.FindAssets("", new[] { PresetsFolder });
+            List<string> paths = new List<string>();
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.Equals(Path.GetExtension(path), ".charstat",
+                    System.StringComparison.OrdinalIgnoreCase))
+                    paths.Add(path);
+            }
+            return paths.ToArray();
         }
     }
 }

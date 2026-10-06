@@ -37,6 +37,7 @@ test: build
 check:
 	$(PYTHON) myFSM-UnityRuntime/Sandbox/check.py
 	$(PYTHON) myFSM-UnityRuntime/Tests/Tools/verify_classes.py
+	$(PYTHON) -m unittest discover -s installers/unity/tests
 
 # make compile INPUT=my_state.fsm [OUT=my_state.fsmb]
 compile: build

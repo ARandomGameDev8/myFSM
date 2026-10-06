@@ -124,10 +124,14 @@ Linking scripts to GameObjects:
    links the GameObject and tells you to wait, then press **Attach** (which
    appears when a linked GameObject lacks the script component).
 
-Timing note: Compile writes `.cs` files and refreshes the AssetDatabase;
-Unity then compiles scripts asynchronously. Generate/Attach immediately after
-Compile may find the type missing — wait for the compile spinner, then click.
-This is Unity's pipeline, not a bug in the burst flow.
+Timing note: Compile writes `.cs` files and queues the AssetDatabase refresh
+for after the inspector GUI event, so a script import/domain reload cannot
+invalidate the open IMGUI layout or serialized properties. Unity then compiles
+scripts asynchronously. Generate/Attach immediately after Compile may find the
+type missing — wait for the compile spinner, then click. The generated `.cs`
+file is a normal visible project asset (default `Assets/MyFSM`), not an
+in-memory component; recompiling regenerates it. This is Unity's pipeline, not
+a bug in the burst flow.
 
 ## Expected behavior + failure modes
 

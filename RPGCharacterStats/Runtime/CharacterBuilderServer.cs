@@ -41,6 +41,18 @@ namespace RPGCharacterStats
             Instance = this;
         }
 
+#if UNITY_2019_4_OR_NEWER
+        /// <summary>Install the optional runtime inspector in Play Mode. It is
+        /// a normal UGUI Canvas, not an IMGUI callback, and is created only
+        /// once on the scene's singleton server.</summary>
+        protected virtual void Start()
+        {
+            if (!Application.isPlaying || Instance != this) return;
+            if (GetComponent<RuntimeCharacterMonitorMenu>() == null)
+                gameObject.AddComponent<RuntimeCharacterMonitorMenu>();
+        }
+#endif
+
         protected virtual void OnDestroy()
         {
             if (Instance == this) Instance = null;
@@ -211,8 +223,12 @@ namespace RPGCharacterStats
         /// never saves a scene) — so Materialize saves the open scenes. A
         /// character left as unsaved scene state, or spawned in play mode,
         /// dies with the cycle; that is Unity's engine policy, not a component
-        /// deletion. Custom scripts keep their identity across the cycle
-        /// because every script's GUID lives in a stable .cs.meta on disk.
+        /// deletion. This pipeline does not remove user-added components.
+        /// Unity serializes each MonoBehaviour's script link through that
+        /// script asset's .meta GUID; if a .meta is deleted or regenerated,
+        /// existing scene components can no longer resolve it. Keep the
+        /// package's tracked sidecars unchanged and preserve Unity-generated
+        /// sidecars for any new scripts.
         ///
         /// The pipeline is deliberately linear and auditable:
         ///   1. add the character itself (always first),
@@ -226,9 +242,10 @@ namespace RPGCharacterStats
         ///   8. persist (edit mode: the scene is saved to disk),
         ///   9. mark spawned (only after persistence).
         ///
-        /// Everything the character is is attached, configured and saved before
-        /// MarkSpawned is called, so an edit-mode spawn is on disk (scene
-        /// written) before it is registered — nothing vanishes on Play → Stop.
+        /// Everything this pipeline attaches is configured and saved before
+        /// MarkSpawned is called, so an edit-mode spawn is on disk first. A
+        /// play-mode spawn is intentionally session-only; user-added components
+        /// attached later need the scene saved separately in Edit Mode.
         public Character Materialize(CharacterEntry entry, CharacterTag tag)
         {
             CharacterDefinition def = entry.definition;
@@ -290,8 +307,8 @@ namespace RPGCharacterStats
             }
 
             // ---- 6) Animator, HealthBar, stats, AI (all optional layers) ----
-            // Order matters: the HealthBar hookup reads the stats the very first
-            // frame they exist, so InitializeStats runs before the bar is added.
+            // Add the bar first so InitializeStats can hook it up as soon as
+            // the character's own stats and gameplay formulas are initialized.
             character.healthBar = go.AddComponent<HealthBar>();
             character.InitializeStats(def.charStatText, def.statValues, def.gameplayStatText);
             if (def.Kind == CharacterKind.NPC)
@@ -369,9 +386,9 @@ namespace RPGCharacterStats
         {
             // The component the player actually sees as its behaviour. It carries
             // the definition-provided identity, stats, and (for players) the
-            // movement component. It is added FIRST and ONLY — custom scripts
-            // survive Play → Stop on their own as long as their .cs.meta files
-            // (the script's GUID) stay stable; nothing extra is needed here.
+            // movement component. It is added FIRST and ONLY. This method does
+            // not strip extra components. Their scene references survive only
+            // while Unity can resolve the script asset's stable .meta GUID.
             if (def.Kind == CharacterKind.NPC)
             {
                 if (def is EnemyCharacterDefinition)
@@ -389,7 +406,7 @@ namespace RPGCharacterStats
             pc.description = def.description;
             pc.dimension = def.dimension;
             pc.physicsMode = def.physicsMode;
-            pc.InitializeStats(def.charStatText, def.statValues, def.gameplayStatText);
+            // Materialize initializes stats once, after the complete rig exists.
             return pc;
         }
 

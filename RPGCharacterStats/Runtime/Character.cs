@@ -128,9 +128,17 @@ namespace RPGCharacterStats
                     if (seeded) gameplayStats.Recalculate();
                 }
             }
+            else
+            {
+                // Keep this character's server explicitly bound to its own
+                // CharacterStats even when there are no formulas. The server
+                // simply has zero clients until a .gameplaystat is supplied.
+                gameplayStats.Bind(characterStats, new List<FormulaCheckResult>());
+            }
 
             // Mirror gameplay outputs into the blackboard after every pass —
             // the FSM blackboard leg of section 19's fan-out.
+            gameplayStats.server.OnRecalculated -= SyncBlackboard;
             gameplayStats.server.OnRecalculated += SyncBlackboard;
             SyncBlackboard();
 
