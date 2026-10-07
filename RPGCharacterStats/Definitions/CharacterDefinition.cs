@@ -90,6 +90,14 @@ namespace RPGCharacterStats
         public CharacterKind kind = CharacterKind.NPC;
         public PhysicsMode physicsMode = PhysicsMode.PhysicsBased;
 
+        [Header("3D Visual (render only; physics stays unchanged)")]
+        public CharacterVisual3D visual3D = CharacterVisual3D.Capsule;
+        [Tooltip("Path relative to a Resources folder. Used only when visual3D is Model.")]
+        public string modelResourcesPath = "";
+
+        [Header("Camera (3D Players)")]
+        public CharacterCameraMode cameraMode = CharacterCameraMode.DoNotAlter;
+
         [Header("Stat sources")]
         [Multiline(10)] public string charStatText = "";
         [Multiline(12)] public string gameplayStatText = "";

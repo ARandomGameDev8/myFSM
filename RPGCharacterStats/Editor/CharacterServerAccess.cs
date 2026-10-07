@@ -23,7 +23,7 @@ namespace RPGCharacterStats.EditorTools
         public static CharacterBuilderServer Resolve(bool createIfMissing)
         {
             CharacterBuilderServer server = CharacterBuilderServer.Instance;
-            if (server != null) return server;
+            if (server != null) return AttachFactories(server);
 
 #if UNITY_2022_2_OR_NEWER
             server = Object.FindFirstObjectByType<CharacterBuilderServer>();
@@ -33,12 +33,79 @@ namespace RPGCharacterStats.EditorTools
             // compilable there (there should be only one server in a scene).
             server = Object.FindObjectOfType<CharacterBuilderServer>();
 #endif
-            if (server != null) return server;
+            if (server != null) return AttachFactories(server);
 
             if (!createIfMissing) return null;
             GameObject go = new GameObject("CharacterBuilderServer");
             Undo.RegisterCreatedObjectUndo(go, "Create CharacterBuilderServer");
-            return go.AddComponent<CharacterBuilderServer>();
+            return AttachFactories(go.AddComponent<CharacterBuilderServer>());
+        }
+
+        public static void EnsureFactories(CharacterBuilderServer server)
+        {
+            AttachFactories(server);
+        }
+
+        private static CharacterBuilderServer AttachFactories(CharacterBuilderServer server)
+        {
+            if (server != null && !server.EditorFactoriesAttached)
+                server.AttachEditorFactories(new StatsFactory(), new CharacterFactory());
+            return server;
+        }
+    }
+
+    /// <summary>Editor builder windows are products held by their owning
+    /// CharacterBuilderServer. The owner reference is transient and is rebound
+    /// whenever a factory focuses an existing window.</summary>
+    public abstract class ServerOwnedBuilderWindow : EditorWindow, IEditorBuilderProduct
+    {
+        [System.NonSerialized] private CharacterBuilderServer _ownerServer;
+
+        internal void BindOwner(CharacterBuilderServer server)
+        {
+            _ownerServer = server;
+        }
+
+        protected CharacterBuilderServer OwnerServer
+        {
+            get
+            {
+                if (_ownerServer == null) _ownerServer = CharacterServerAccess.Resolve(true);
+                return _ownerServer;
+            }
+        }
+
+        public void Activate()
+        {
+            Show();
+            Focus();
+        }
+    }
+
+    /// <summary>Factory family for the two stats-build pipelines.
+    /// CharacterStatsBuilder and GameplayStatsBuilder are its products.</summary>
+    internal sealed class StatsFactory : IEditorBuilderFactory
+    {
+        public IEditorBuilderProduct CreateBuilder(string builderId, CharacterBuilderServer owner)
+        {
+            if (builderId == "character-stats")
+                return CharacterStatsBuilderWindow.CreateFromFactory(owner);
+            if (builderId == "gameplay-stats")
+                return GameplayStatsBuilderWindow.CreateFromFactory(owner);
+            Debug.LogError("[RPGStats] StatsFactory does not recognize builder \"" + builderId + "\"");
+            return null;
+        }
+    }
+
+    /// <summary>Factory for the definition/character builder window.</summary>
+    internal sealed class CharacterFactory : IEditorBuilderFactory
+    {
+        public IEditorBuilderProduct CreateBuilder(string builderId, CharacterBuilderServer owner)
+        {
+            if (builderId == "character")
+                return CharacterBuilderWindow.CreateFromFactory(owner);
+            Debug.LogError("[RPGStats] CharacterFactory does not recognize builder \"" + builderId + "\"");
+            return null;
         }
     }
 

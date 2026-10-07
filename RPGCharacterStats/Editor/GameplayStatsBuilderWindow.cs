@@ -15,7 +15,7 @@ using RPGCharacterStats;
 
 namespace RPGCharacterStats.EditorTools
 {
-    public class GameplayStatsBuilderWindow : EditorWindow
+    public class GameplayStatsBuilderWindow : ServerOwnedBuilderWindow
     {
         private const string PresetsFolder = "Assets/RPGPresets/GameplayStats";
 
@@ -45,7 +45,14 @@ namespace RPGCharacterStats.EditorTools
         [MenuItem("RPG/Gameplay Stats Builder", priority = 1)]
         public static void Open()
         {
-            GetWindow<GameplayStatsBuilderWindow>("Gameplay Stats Builder");
+            CharacterServerAccess.Resolve(true).OpenGameplayStatsBuilder();
+        }
+
+        internal static IEditorBuilderProduct CreateFromFactory(CharacterBuilderServer owner)
+        {
+            GameplayStatsBuilderWindow window = GetWindow<GameplayStatsBuilderWindow>("Gameplay Stats Builder");
+            window.BindOwner(owner);
+            return window;
         }
 
         private void OnGUI()

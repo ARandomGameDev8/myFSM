@@ -14,7 +14,7 @@ using RPGCharacterStats;
 
 namespace RPGCharacterStats.EditorTools
 {
-    public class CharacterStatsBuilderWindow : EditorWindow
+    public class CharacterStatsBuilderWindow : ServerOwnedBuilderWindow
     {
         private const string PresetsFolder = "Assets/RPGPresets/CharStats";
 
@@ -38,7 +38,14 @@ namespace RPGCharacterStats.EditorTools
         [MenuItem("RPG/Character Stats Builder", priority = 0)]
         public static void Open()
         {
-            GetWindow<CharacterStatsBuilderWindow>("Character Stats Builder");
+            CharacterServerAccess.Resolve(true).OpenCharacterStatsBuilder();
+        }
+
+        internal static IEditorBuilderProduct CreateFromFactory(CharacterBuilderServer owner)
+        {
+            CharacterStatsBuilderWindow window = GetWindow<CharacterStatsBuilderWindow>("Character Stats Builder");
+            window.BindOwner(owner);
+            return window;
         }
 
         private void OnGUI()
@@ -48,6 +55,9 @@ namespace RPGCharacterStats.EditorTools
             using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
             {
                 _scroll = scroll.scrollPosition;
+                // Change error-helpbox presence only on Layout so Layout and
+                // Repaint use the same number of GUILayout controls.
+                if (Event.current.type == EventType.Layout) RefreshRowErrors();
                 EditorGUILayout.HelpBox("What stats does this character type have? "
                     + "This file is the vocabulary every character of its kind shares.", MessageType.None);
 
@@ -157,14 +167,17 @@ namespace RPGCharacterStats.EditorTools
                 }
             }
 
-            string updatedError = Validate(row);
-            if (row.error != updatedError)
-            {
-                row.error = updatedError;
-                GUIUtility.ExitGUI();
-            }
             if (!string.IsNullOrEmpty(row.error))
                 EditorGUILayout.HelpBox(row.error, MessageType.Error);
+        }
+
+        /// <summary>Refresh validation before drawing any row controls. Keeping
+        /// the error-helpbox decision stable for the whole Layout/Repaint pass
+        /// avoids changing GUILayout control counts midway through an event.</summary>
+        private void RefreshRowErrors()
+        {
+            for (int i = 0; i < _rows.Count; i++)
+                _rows[i].error = Validate(_rows[i]);
         }
 
         private static string Validate(Row row)

@@ -23,6 +23,7 @@ namespace RPGCharacterStats.EditorTools
         public override void OnInspectorGUI()
         {
             CharacterBuilderServer server = (CharacterBuilderServer)target;
+            CharacterServerAccess.EnsureFactories(server);
 
             EditorGUILayout.HelpBox(
                 "The RPG tools are editor windows, not components — open them " +
@@ -33,11 +34,11 @@ namespace RPGCharacterStats.EditorTools
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Tool windows", EditorStyles.boldLabel);
             if (GUILayout.Button("Character Stats Builder   (.charstat schema)"))
-                CharacterStatsBuilderWindow.Open();
+                server.OpenCharacterStatsBuilder();
             if (GUILayout.Button("Gameplay Stats Builder   (.gameplaystat formulas)"))
-                GameplayStatsBuilderWindow.Open();
+                server.OpenGameplayStatsBuilder();
             if (GUILayout.Button("Character Builder   (definition assets)"))
-                CharacterBuilderWindow.Open();
+                server.OpenCharacterBuilder();
             if (GUILayout.Button("Character Registry   (browse / spawn)"))
                 RegistryWindow.Open();
 

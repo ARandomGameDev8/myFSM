@@ -32,6 +32,24 @@ namespace RPGCharacterStats
         NonPhysics = 1,
     }
 
+    /// <summary>The render-only 3D body chosen in the Character Builder.
+    /// It does not replace or change the character's physics collider.</summary>
+    public enum CharacterVisual3D
+    {
+        Cube = 0,
+        Capsule = 1,
+        Model = 2,
+    }
+
+    /// <summary>Camera behavior for 3D player characters. DoNotAlter is the
+    /// compatibility default and leaves all scene cameras untouched.</summary>
+    public enum CharacterCameraMode
+    {
+        DoNotAlter = 0,
+        FirstPerson = 1,
+        ThirdPerson = 2,
+    }
+
     /// <summary>The value kind of a stat field. The formula language, the
     /// schema, the overrides, and the blackboard all speak this one enum.</summary>
     public enum StatType

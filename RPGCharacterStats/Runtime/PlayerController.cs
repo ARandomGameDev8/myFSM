@@ -6,12 +6,11 @@
 // parent it, or skip the camera entirely — this component only ever moves its
 // own capsule; whatever camera the game has (or doesn't) is someone else's job.
 //
-// The spawn pipeline attaches it automatically to a 3D non-physics Player
-// (the section 2.5 CharacterController case) INSTEAD of the internal
-// CharacterControllerMovement strategy — exactly one thing may call
-// CharacterController.Move or the motion doubles. You can also add it by hand
-// to any GameObject that already has a CharacterController; nothing else is
-// required (the RPG stats/AI layers are entirely optional here).
+// CharacterBuilderServer currently attaches PlayerMovement to spawned Players;
+// it does NOT add this script. PlayerController is an ordinary, optional
+// standalone alternative for a manually assembled GameObject with a
+// CharacterController. Do not attach both movers to one object, or they will
+// both call CharacterController.Move. The RPG stats/AI layers are optional.
 
 using UnityEngine;
 

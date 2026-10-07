@@ -70,6 +70,8 @@ namespace RPGCharacterStatsTests
             Spawn2DPhysicsPlayer();
             Spawn2DNonPhysicsPlayer();
             Spawn3DNonPhysicsNPC();
+            SpawnCharacterVisuals();
+            PlayerCameraModes();
             SpawnInitializesStats();
             SpawnWithoutAIWarnsButSpawns();
             DefinitionToCharacterConvention();
@@ -762,6 +764,9 @@ namespace RPGCharacterStatsTests
             def.dimension = CharacterDimension.ThreeD;
             def.kind = CharacterKind.Player;
             def.physicsMode = PhysicsMode.NonPhysics;
+            def.visual3D = CharacterVisual3D.Model;
+            def.modelResourcesPath = "Characters/HeroModel";
+            def.cameraMode = CharacterCameraMode.ThirdPerson;
             def.charStatText = SampleCharStat;
             def.gameplayStatText = SampleFormulas;
             def.inputAxisPrefix = "P1_";
@@ -778,6 +783,10 @@ namespace RPGCharacterStatsTests
             Expect(decoded.description == def.description, "text with quotes/newlines survives");
             Expect(decoded.dimension == def.dimension && decoded.kind == def.kind
                 && decoded.physicsMode == def.physicsMode, "configuration survives");
+            Expect(decoded.visual3D == CharacterVisual3D.Model
+                && decoded.modelResourcesPath == "Characters/HeroModel"
+                && decoded.cameraMode == CharacterCameraMode.ThirdPerson,
+                "3D visual and camera choices survive the unchanged CharacterDB record pipeline");
             Expect(decoded.charStatText == def.charStatText
                 && decoded.gameplayStatText == def.gameplayStatText, "stat sources survive");
             Expect(((PlayerCharacterDefinition)decoded).inputAxisPrefix == "P1_", "player field survives");
@@ -885,6 +894,11 @@ namespace RPGCharacterStatsTests
             Expect(c.rigidbody3D.useGravity, "physics mode = gravity ON");
             Expect(!c.rigidbody3D.isKinematic, "physics NPC body is not kinematic");
             Expect(c.collider3D != null, "3D NPC has a collider");
+            Expect(c.visualObject != null && c.visualObject.name.Contains("Capsule"),
+                "Capsule is the default 3D visual choice");
+            if (c.visualObject != null)
+                Expect(!c.visualObject.GetComponent<Collider>().enabled,
+                    "default render capsule collider is disabled");
             Expect(c.controller == null, "NPC never gets a CharacterController");
             Expect(c.animator != null, "animator attached");
             Expect(c.attachedAI == null, "no AI script assigned in this definition");
@@ -914,9 +928,8 @@ namespace RPGCharacterStatsTests
             PlayerCharacter pc = (PlayerCharacter)c;
             // The player is self-contained: one MonoBehaviour (PlayerMovement)
             // reads WASD/Space, applies gravity by hand, and calls
-            // CharacterController.Move. The user-facing PlayerController is a
-            // proper WASD/Space CharacterController mover with no camera, and
-            // it is the single thing that moves the character — nothing else.
+            // CharacterController.Move. Its default DoNotAlter mode keeps the
+            // legacy camera-independent movement path.
             PlayerMovement movement = c.GetComponent<PlayerMovement>();
             Expect(movement != null, "PlayerMovement attached (WASD + Space + gravity, no camera)");
             Expect(pc.movement != null, "the character carries its movement as a real component");
@@ -1017,6 +1030,148 @@ namespace RPGCharacterStatsTests
             Expect(!c.rigidbody3D.useGravity, "non-physics NPC gravity OFF");
             Expect(!c.rigidbody3D.isKinematic, "non-physics NPC body is NOT kinematic (AI drives it)");
             Expect(c.collider3D != null, "non-physics NPC keeps its collider");
+        }
+
+        private static void SpawnCharacterVisuals()
+        {
+            CharacterBuilderServer server = NewServer();
+            EnemyCharacterDefinition cubeDefinition = NewOrcDefinition();
+            cubeDefinition.characterID = "cube_orc";
+            cubeDefinition.visual3D = CharacterVisual3D.Cube;
+            server.registry.Add(cubeDefinition);
+            Character cube = server.Spawn("cube_orc");
+            Expect(cube != null && cube.visualObject != null
+                && cube.visualObject.name.Contains("Cube"), "Cube choice creates a cube visual child");
+            if (cube != null && cube.visualObject != null)
+            {
+                Collider visualCollider = cube.visualObject.GetComponent<Collider>();
+                Expect(cube.visualObject.transform.parent == cube.transform,
+                    "3D visual is parented without replacing the character root");
+                Expect(visualCollider != null && !visualCollider.enabled,
+                    "visual primitive collider is disabled");
+                Expect(cube.collider3D != null && cube.collider3D.enabled,
+                    "the existing physics collider matrix remains enabled");
+            }
+
+            GameObject modelPrefab = new GameObject("TestHeroModel");
+            modelPrefab.AddComponent<Collider>();
+            Resources.store["CharacterModels/TestHero"] = modelPrefab;
+            PlayerCharacterDefinition modelDefinition = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            modelDefinition.characterID = "model_hero";
+            modelDefinition.characterName = "ModelHero";
+            modelDefinition.dimension = CharacterDimension.ThreeD;
+            modelDefinition.kind = CharacterKind.Player;
+            modelDefinition.visual3D = CharacterVisual3D.Model;
+            modelDefinition.modelResourcesPath = "CharacterModels/TestHero";
+            modelDefinition.charStatText = SampleCharStat;
+            server.registry.Add(modelDefinition);
+            Character modelCharacter = server.Spawn("model_hero");
+            Expect(modelCharacter != null && modelCharacter.visualObject != null
+                && modelCharacter.visualObject != modelPrefab,
+                "model choice instantiates the Resources prefab as a child");
+            if (modelCharacter != null && modelCharacter.visualObject != null)
+            {
+                Collider modelCollider = modelCharacter.visualObject.GetComponent<Collider>();
+                Expect(modelCollider != null && !modelCollider.enabled,
+                    "colliders supplied by the model are disabled");
+                Expect(modelCharacter.collider3D != null && modelCharacter.collider3D.enabled,
+                    "model visuals do not change the root collision setup");
+            }
+        }
+
+        private static void PlayerCameraModes()
+        {
+            Application.isPlaying = false;
+            Input.MouseXAxis = 0f;
+            Input.MouseYAxis = 0f;
+            Time.deltaTime = 0.1f;
+
+            GameObject sceneCameraObject = new GameObject("Scene Camera For Modes");
+            sceneCameraObject.tag = "MainCamera";
+            Camera sceneCamera = sceneCameraObject.AddComponent<Camera>();
+            sceneCamera.transform.position = new Vector3(3f, 4f, 5f);
+            sceneCamera.transform.rotation = Quaternion.Euler(10f, 20f, 0f);
+            Vector3 originalPosition = sceneCamera.transform.position;
+            Quaternion originalRotation = sceneCamera.transform.rotation;
+
+            CharacterBuilderServer server = NewServer();
+            PlayerCharacterDefinition doNotAlterDefinition = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            doNotAlterDefinition.characterID = "camera_unchanged";
+            doNotAlterDefinition.characterName = "CameraUnchanged";
+            doNotAlterDefinition.dimension = CharacterDimension.ThreeD;
+            doNotAlterDefinition.kind = CharacterKind.Player;
+            doNotAlterDefinition.physicsMode = PhysicsMode.NonPhysics;
+            doNotAlterDefinition.cameraMode = CharacterCameraMode.DoNotAlter;
+            doNotAlterDefinition.charStatText = SampleCharStat;
+            server.registry.Add(doNotAlterDefinition);
+            Character noCameraCharacter = server.Spawn("camera_unchanged");
+            PlayerMovement noCameraMovement = noCameraCharacter != null
+                ? noCameraCharacter.GetComponent<PlayerMovement>() : null;
+            Expect(noCameraMovement != null && noCameraMovement.ViewCamera == null,
+                "DoNotAlter does not acquire or create a camera");
+            Expect(sceneCamera.transform.position.x == originalPosition.x
+                && sceneCamera.transform.position.y == originalPosition.y
+                && sceneCamera.transform.position.z == originalPosition.z,
+                "DoNotAlter leaves the scene camera position unchanged");
+            if (noCameraMovement != null)
+            {
+                noCameraMovement.Tick(new PlayerInput { y = 1f });
+                Expect(noCameraCharacter.transform.position.z > 0f,
+                    "DoNotAlter preserves world-axis movement");
+            }
+
+            Application.isPlaying = true;
+            PlayerCharacterDefinition firstPersonDefinition = ScriptableObject.CreateInstance<PlayerCharacterDefinition>();
+            firstPersonDefinition.characterID = "camera_first_person";
+            firstPersonDefinition.characterName = "CameraFirstPerson";
+            firstPersonDefinition.dimension = CharacterDimension.ThreeD;
+            firstPersonDefinition.kind = CharacterKind.Player;
+            firstPersonDefinition.physicsMode = PhysicsMode.NonPhysics;
+            firstPersonDefinition.cameraMode = CharacterCameraMode.FirstPerson;
+            firstPersonDefinition.charStatText = SampleCharStat;
+            server.registry.Add(firstPersonDefinition);
+            Character firstPerson = server.Spawn("camera_first_person");
+            PlayerMovement movement = firstPerson != null ? firstPerson.GetComponent<PlayerMovement>() : null;
+            Expect(movement != null && movement.ViewCamera == sceneCamera,
+                "first person uses the existing main scene camera");
+            if (movement != null)
+            {
+                ExpectNear(sceneCamera.transform.position.y, firstPerson.transform.position.y + movement.firstPersonEyeHeight,
+                    0.001f, "first-person camera is placed at eye height");
+
+                Input.MouseXAxis = 45f; // 45 degrees × sensitivity 2 = 90-degree yaw
+                typeof(PlayerMovement).GetMethod("UpdateCameraLook", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(movement, null);
+                movement.Tick(new PlayerInput { y = 1f });
+                Expect(firstPerson.transform.position.x > 0f,
+                    "first-person movement follows the camera heading");
+                Input.MouseXAxis = 0f;
+
+                Vector3 firstPersonCameraPosition = sceneCamera.transform.position;
+                movement.ConfigureCameraMode(CharacterCameraMode.ThirdPerson);
+                Expect(sceneCamera.transform.position.z != firstPersonCameraPosition.z
+                    || sceneCamera.transform.position.y != firstPersonCameraPosition.y,
+                    "third-person mode moves the camera behind the player");
+                float xBeforeThirdPersonMove = firstPerson.transform.position.x;
+                movement.Tick(new PlayerInput { y = 1f });
+                Expect(firstPerson.transform.position.x > xBeforeThirdPersonMove,
+                    "third-person movement follows the camera heading");
+                movement.ConfigureCameraMode(CharacterCameraMode.DoNotAlter);
+                ExpectNear(sceneCamera.transform.position.x, originalPosition.x, 0.001f,
+                    "switching back to DoNotAlter restores the original camera position");
+                Expect(sceneCamera.transform.rotation.x == originalRotation.x
+                    && sceneCamera.transform.rotation.y == originalRotation.y
+                    && sceneCamera.transform.rotation.z == originalRotation.z
+                    && sceneCamera.transform.rotation.w == originalRotation.w,
+                    "switching back restores the original camera rotation");
+                Expect(Cursor.lockState == CursorLockMode.None && Cursor.visible,
+                    "camera mode restores the previous cursor state");
+            }
+
+            Application.isPlaying = false;
+            Input.MouseXAxis = 0f;
+            Input.MouseYAxis = 0f;
+            Time.deltaTime = 0f;
         }
 
         private static void SpawnInitializesStats()

@@ -1,12 +1,13 @@
 // RPG Character & Stats System — Character Builder (section 7).
 //
-// The workflow window: metadata → dimension → kind → physics → (NPC: AI
-// script) → .charstat file → per-stat value fields generated from it →
+// The workflow window: metadata → dimension → kind → physics → (3D visual /
+// player camera choices) → (NPC: AI script) → .charstat file → per-stat value fields generated from it →
 // .gameplaystat file → Build. Build-time validation (7.5): unique ID, values
 // within min/max, gameplaystat formulas compatible with the charstat (9.1).
 // Built characters land in the registry held by CharacterBuilderServer; the
 // Registry window (section 17) edits and spawns them.
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
@@ -15,7 +16,7 @@ using RPGCharacterStats;
 
 namespace RPGCharacterStats.EditorTools
 {
-    public class CharacterBuilderWindow : EditorWindow
+    public class CharacterBuilderWindow : ServerOwnedBuilderWindow
     {
         // metadata
         private string _name = "";
@@ -26,6 +27,17 @@ namespace RPGCharacterStats.EditorTools
         private CharacterDimension _dimension = CharacterDimension.ThreeD;
         private CharacterKind _kind = CharacterKind.NPC;
         private PhysicsMode _physics = PhysicsMode.PhysicsBased;
+        private CharacterVisual3D _visual3D = CharacterVisual3D.Capsule;
+        private CharacterCameraMode _cameraMode = CharacterCameraMode.DoNotAlter;
+        private GameObject _modelPrefab;
+        private string _modelResourcesPath = "";
+
+        private static readonly string[] CameraModeLabels =
+        {
+            "A) Do not alter camera",
+            "B) First person",
+            "C) Third person",
+        };
 
         // NPC AI
         private MonoScript _aiScript;
@@ -44,7 +56,14 @@ namespace RPGCharacterStats.EditorTools
         [MenuItem("RPG/Character Builder", priority = 2)]
         public static void Open()
         {
-            GetWindow<CharacterBuilderWindow>("Character Builder");
+            CharacterServerAccess.Resolve(true).OpenCharacterBuilder();
+        }
+
+        internal static IEditorBuilderProduct CreateFromFactory(CharacterBuilderServer owner)
+        {
+            CharacterBuilderWindow window = GetWindow<CharacterBuilderWindow>("Character Builder");
+            window.BindOwner(owner);
+            return window;
         }
 
         private void OnGUI()
@@ -60,7 +79,13 @@ namespace RPGCharacterStats.EditorTools
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Configuration", EditorStyles.boldLabel);
-                _dimension = (CharacterDimension)EditorGUILayout.EnumPopup("Dimension", _dimension);
+                CharacterDimension selectedDimension = (CharacterDimension)EditorGUILayout.EnumPopup(
+                    "Dimension", _dimension);
+                if (selectedDimension != _dimension)
+                {
+                    _dimension = selectedDimension;
+                    GUIUtility.ExitGUI();
+                }
                 CharacterKind selectedKind = (CharacterKind)EditorGUILayout.EnumPopup("Kind", _kind);
                 if (selectedKind != _kind)
                 {
@@ -68,6 +93,61 @@ namespace RPGCharacterStats.EditorTools
                     GUIUtility.ExitGUI();
                 }
                 _physics = (PhysicsMode)EditorGUILayout.EnumPopup("Physics", _physics);
+
+                if (_dimension == CharacterDimension.ThreeD)
+                {
+                    CharacterVisual3D selectedVisual = (CharacterVisual3D)EditorGUILayout.EnumPopup(
+                        "3D Visual", _visual3D);
+                    if (selectedVisual != _visual3D)
+                    {
+                        _visual3D = selectedVisual;
+                        GUIUtility.ExitGUI();
+                    }
+                    if (_visual3D == CharacterVisual3D.Model)
+                    {
+                        GameObject selectedModel = (GameObject)EditorGUILayout.ObjectField(
+                            "Model Prefab", _modelPrefab, typeof(GameObject), false);
+                        if (selectedModel != _modelPrefab)
+                        {
+                            _modelPrefab = selectedModel;
+                            GUIUtility.ExitGUI();
+                        }
+
+                        if (_modelPrefab != null)
+                        {
+                            string resourcePath;
+                            string problem;
+                            if (TryGetModelResourcesPath(out resourcePath, out problem))
+                                EditorGUILayout.HelpBox("Loaded at runtime from Resources/" + resourcePath, MessageType.Info);
+                            else
+                                EditorGUILayout.HelpBox(problem, MessageType.Warning);
+                        }
+                        else
+                        {
+                            EditorGUILayout.HelpBox("Choose a model asset located inside a Resources folder.", MessageType.None);
+                        }
+                    }
+                }
+
+                if (_kind == CharacterKind.Player)
+                {
+                    int cameraSelection = EditorGUILayout.Popup("Player Camera",
+                        (int)_cameraMode, CameraModeLabels);
+                    if (cameraSelection != (int)_cameraMode)
+                    {
+                        _cameraMode = (CharacterCameraMode)cameraSelection;
+                        GUIUtility.ExitGUI();
+                    }
+                    if (_dimension != CharacterDimension.ThreeD
+                        && _cameraMode != CharacterCameraMode.DoNotAlter)
+                        EditorGUILayout.HelpBox("First- and third-person modes require a 3D Player. Choose DoNotAlter or switch Dimension to 3D.", MessageType.Warning);
+                    else if (_cameraMode == CharacterCameraMode.DoNotAlter)
+                        EditorGUILayout.HelpBox("Leaves every scene camera and the current movement behavior untouched.", MessageType.None);
+                    else if (_cameraMode == CharacterCameraMode.FirstPerson)
+                        EditorGUILayout.HelpBox("Locks the view to first person. Mouse looks; WASD moves relative to the view.", MessageType.None);
+                    else
+                        EditorGUILayout.HelpBox("Follows the player in third person. Mouse orbits; WASD moves relative to the view.", MessageType.None);
+                }
 
                 if (_kind == CharacterKind.NPC)
                 {
@@ -227,7 +307,7 @@ namespace RPGCharacterStats.EditorTools
         private void Build()
         {
             _buildErrors.Clear();
-            CharacterBuilderServer server = CharacterServerAccess.Resolve(true);
+            CharacterBuilderServer server = OwnerServer;
 
             if (string.IsNullOrEmpty(_name)) _buildErrors.Add("Name is required.");
             if (string.IsNullOrEmpty(_id)) _buildErrors.Add("Character ID is required.");
@@ -238,6 +318,23 @@ namespace RPGCharacterStats.EditorTools
 
             if (_kind == CharacterKind.NPC && _aiScript == null)
                 _buildErrors.Add("NPC characters need an AIInstance script assigned.");
+
+            if (_kind == CharacterKind.Player && _dimension != CharacterDimension.ThreeD
+                && _cameraMode != CharacterCameraMode.DoNotAlter)
+                _buildErrors.Add("First- and third-person camera modes require a 3D Player.");
+
+            _modelResourcesPath = "";
+            if (_dimension == CharacterDimension.ThreeD && _visual3D == CharacterVisual3D.Model)
+            {
+                string resourcePath;
+                string problem;
+                if (_modelPrefab == null)
+                    _buildErrors.Add("Choose a model prefab for the 3D Model visual.");
+                else if (!TryGetModelResourcesPath(out resourcePath, out problem))
+                    _buildErrors.Add(problem);
+                else
+                    _modelResourcesPath = resourcePath;
+            }
 
             if (_schema.entries.Count > 0)
             {
@@ -299,6 +396,39 @@ namespace RPGCharacterStats.EditorTools
 
         private string _status = "";
 
+        private bool TryGetModelResourcesPath(out string resourcePath, out string error)
+        {
+            resourcePath = "";
+            error = null;
+            string assetPath = _modelPrefab != null ? AssetDatabase.GetAssetPath(_modelPrefab) : "";
+            assetPath = (assetPath ?? "").Replace('\\', '/');
+            if (string.IsNullOrEmpty(assetPath)
+                || AssetDatabase.LoadMainAssetAtPath(assetPath) != _modelPrefab)
+            {
+                error = "Select the root model/prefab asset, not a child sub-asset or scene object.";
+                return false;
+            }
+
+            const string resourcesSegment = "/Resources/";
+            int resourcesIndex = assetPath.IndexOf(resourcesSegment, StringComparison.OrdinalIgnoreCase);
+            if (resourcesIndex < 0)
+            {
+                error = "The model must be inside a Resources folder so the CharacterDB record can load it in a build.";
+                return false;
+            }
+
+            resourcePath = assetPath.Substring(resourcesIndex + resourcesSegment.Length);
+            string extension = Path.GetExtension(resourcePath);
+            if (!string.IsNullOrEmpty(extension))
+                resourcePath = resourcePath.Substring(0, resourcePath.Length - extension.Length);
+            if (string.IsNullOrEmpty(resourcePath))
+            {
+                error = "Could not derive a Resources path from the selected model asset.";
+                return false;
+            }
+            return true;
+        }
+
         /// <summary>Creates and configures the in-memory definition. The
         /// SERVER persists it (CharacterDB.Save → Assets/Resources/CharacterDB);
         /// this method must not write assets itself, or characters would
@@ -323,6 +453,11 @@ namespace RPGCharacterStats.EditorTools
             def.dimension = _dimension;
             def.kind = _kind;
             def.physicsMode = _physics;
+            def.visual3D = _visual3D;
+            def.modelResourcesPath = _dimension == CharacterDimension.ThreeD
+                && _visual3D == CharacterVisual3D.Model ? _modelResourcesPath : "";
+            def.cameraMode = _kind == CharacterKind.Player && _dimension == CharacterDimension.ThreeD
+                ? _cameraMode : CharacterCameraMode.DoNotAlter;
             def.charStatText = File.Exists(_charStatPath) ? File.ReadAllText(_charStatPath) : "";
             def.gameplayStatText = _gameplayStatText;
             def.statValues = new List<StatValueOverride>(_values);

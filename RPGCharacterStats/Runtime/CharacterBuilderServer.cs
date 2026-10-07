@@ -17,12 +17,84 @@ using UnityEngine;
 
 namespace RPGCharacterStats
 {
+#if UNITY_EDITOR
+    /// <summary>Editor-only bridge: the runtime assembly owns the factory
+    /// contracts and window products without depending on UnityEditor types.</summary>
+    public interface IEditorBuilderProduct
+    {
+        void Activate();
+    }
+
+    public interface IEditorBuilderFactory
+    {
+        IEditorBuilderProduct CreateBuilder(string builderId, CharacterBuilderServer owner);
+    }
+#endif
+
     [ExecuteAlways]
     public class CharacterBuilderServer : MonoBehaviour
     {
         public static CharacterBuilderServer Instance { get; private set; }
 
         public CharacterRegistry registry = new CharacterRegistry();
+
+#if UNITY_EDITOR
+        // EditorWindow products are transient factory products. The same
+        // singleton retains their references and owns both factory instances.
+        [NonSerialized] private IEditorBuilderFactory _statsFactory;
+        [NonSerialized] private IEditorBuilderFactory _characterFactory;
+        [NonSerialized] private IEditorBuilderProduct _characterStatsBuilder;
+        [NonSerialized] private IEditorBuilderProduct _gameplayStatsBuilder;
+        [NonSerialized] private IEditorBuilderProduct _characterBuilder;
+
+        public bool EditorFactoriesAttached
+        {
+            get { return _statsFactory != null && _characterFactory != null; }
+        }
+
+        public void AttachEditorFactories(IEditorBuilderFactory statsFactory,
+            IEditorBuilderFactory characterFactory)
+        {
+            if (_statsFactory == null) _statsFactory = statsFactory;
+            if (_characterFactory == null) _characterFactory = characterFactory;
+        }
+
+        public void OpenCharacterStatsBuilder()
+        {
+            _characterStatsBuilder = OpenBuilder(_statsFactory, "character-stats", _characterStatsBuilder);
+        }
+
+        public void OpenGameplayStatsBuilder()
+        {
+            _gameplayStatsBuilder = OpenBuilder(_statsFactory, "gameplay-stats", _gameplayStatsBuilder);
+        }
+
+        public void OpenCharacterBuilder()
+        {
+            _characterBuilder = OpenBuilder(_characterFactory, "character", _characterBuilder);
+        }
+
+        private IEditorBuilderProduct OpenBuilder(IEditorBuilderFactory factory, string builderId,
+            IEditorBuilderProduct ownedProduct)
+        {
+            // Editor windows are UnityEngine.Objects. Check through that base
+            // type so Unity's destroyed-object null semantics remain intact.
+            UnityEngine.Object ownedObject = ownedProduct as UnityEngine.Object;
+            if (ownedObject != null)
+            {
+                ownedProduct.Activate();
+                return ownedProduct;
+            }
+            if (factory == null)
+            {
+                Debug.LogError("[RPGStats] editor builder factories are not attached to CharacterBuilderServer");
+                return null;
+            }
+            IEditorBuilderProduct product = factory.CreateBuilder(builderId, this);
+            if (product != null) product.Activate();
+            return product;
+        }
+#endif
 
         protected virtual void Awake()
         {
@@ -236,7 +308,8 @@ namespace RPGCharacterStats
         ///   3. Rigidbody in the character's dimension,
         ///   4. collision in the character's dimension + kind,
         ///   5. CharacterController for 3D non-physics players (it is the
-        ///      collider — no second collider),
+        ///      collider — no second collider), plus an optional render-only
+        ///      3D visual child with its colliders disabled,
         ///   6. Animator, HealthBar, stats, AI,
         ///   7. exactly one Movement component per player,
         ///   8. persist (edit mode: the scene is saved to disk),
@@ -264,6 +337,8 @@ namespace RPGCharacterStats
             character.description = def.description;
             character.dimension = def.dimension;
             character.physicsMode = def.physicsMode;
+            character.visual3D = def.visual3D;
+            character.cameraMode = def.cameraMode;
 
             // ---- 3) Rigidbody, in the character's dimension ----
             if (def.dimension == CharacterDimension.TwoD)
@@ -306,6 +381,10 @@ namespace RPGCharacterStats
                 character.controller = go.AddComponent<CharacterController>();
             }
 
+            // The optional 3D render shape is a child visual; its collider is
+            // disabled so the existing character physics matrix stays intact.
+            Attach3DVisual(go, character, def);
+
             // ---- 6) Animator, HealthBar, stats, AI (all optional layers) ----
             // Add the bar first so InitializeStats can hook it up as soon as
             // the character's own stats and gameplay formulas are initialized.
@@ -321,9 +400,9 @@ namespace RPGCharacterStats
             // PlayerMovement is the single MonoBehaviour a spawned player carries.
             // It reads WASD/Space and drives whatever body step 3-5 gave the
             // player: CharacterController.Move for the 3D non-physics case,
-            // Rigidbody2D/Rigidbody otherwise. No camera code, no invisible
-            // strategy classes — the character moves because it owns its
-            // movement.
+            // Rigidbody2D/Rigidbody otherwise. First/third-person camera
+            // behavior is configured only when selected; the default mode
+            // leaves the scene camera untouched.
             //
             // NOTE: the body's gravity/kinematic configuration is step 3's
             // decision and is NEVER re-touched here — this step used to zero
@@ -333,6 +412,9 @@ namespace RPGCharacterStats
             {
                 PlayerMovement movement = go.AddComponent<PlayerMovement>();
                 ((PlayerCharacter)character).movement = movement;
+                if (def.dimension == CharacterDimension.ThreeD
+                    && def.cameraMode != CharacterCameraMode.DoNotAlter)
+                    movement.ConfigureCameraMode(def.cameraMode);
             }
 
             // ---- 8) persist (edit mode: save the scene the character lives in) ----
@@ -408,6 +490,77 @@ namespace RPGCharacterStats
             pc.physicsMode = def.physicsMode;
             // Materialize initializes stats once, after the complete rig exists.
             return pc;
+        }
+
+        private static void Attach3DVisual(GameObject characterObject, Character character,
+            CharacterDefinition definition)
+        {
+            if (definition.dimension != CharacterDimension.ThreeD) return;
+
+            GameObject visual = null;
+            CharacterVisual3D visualKind = definition.visual3D;
+            if (visualKind == CharacterVisual3D.Model)
+            {
+                if (string.IsNullOrEmpty(definition.modelResourcesPath))
+                    Debug.LogWarning("[RPGStats] model visual has no Resources path; using a capsule instead");
+                else
+                {
+                    GameObject model = Resources.Load<GameObject>(definition.modelResourcesPath);
+                    if (model != null)
+                        visual = UnityEngine.Object.Instantiate(model, characterObject.transform, false);
+                    else
+                        Debug.LogWarning("[RPGStats] model visual \"" + definition.modelResourcesPath +
+                            "\" was not found under a Resources folder; using a capsule instead");
+                }
+            }
+
+            if (visual == null)
+            {
+                PrimitiveType primitive = visualKind == CharacterVisual3D.Cube
+                    ? PrimitiveType.Cube : PrimitiveType.Capsule;
+                visual = GameObject.CreatePrimitive(primitive);
+                visual.transform.SetParent(characterObject.transform, false);
+                visual.transform.localPosition = Vector3.zero;
+                visual.transform.localRotation = Quaternion.identity;
+                visual.transform.localScale = Vector3.one;
+                if (visualKind == CharacterVisual3D.Model)
+                    visualKind = CharacterVisual3D.Capsule;
+            }
+            else
+            {
+                visual.transform.SetParent(characterObject.transform, false);
+                visual.transform.localPosition = Vector3.zero;
+                visual.transform.localRotation = Quaternion.identity;
+            }
+
+            visual.name = "Character Visual (" + visualKind + ")";
+
+            // The CharacterBuilderServer's existing root collider/controller
+            // remains the only character collider; supplied visuals are render-only.
+            Collider[] colliders3D = visual.GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < colliders3D.Length; i++)
+                if (colliders3D[i] != null) colliders3D[i].enabled = false;
+            Collider2D[] colliders2D = visual.GetComponentsInChildren<Collider2D>(true);
+            for (int i = 0; i < colliders2D.Length; i++)
+                if (colliders2D[i] != null) colliders2D[i].enabled = false;
+            Rigidbody[] bodies3D = visual.GetComponentsInChildren<Rigidbody>(true);
+            for (int i = 0; i < bodies3D.Length; i++)
+            {
+                if (bodies3D[i] == null) continue;
+                bodies3D[i].useGravity = false;
+                bodies3D[i].isKinematic = true;
+                bodies3D[i].velocity = Vector3.zero;
+            }
+            Rigidbody2D[] bodies2D = visual.GetComponentsInChildren<Rigidbody2D>(true);
+            for (int i = 0; i < bodies2D.Length; i++)
+            {
+                if (bodies2D[i] == null) continue;
+                bodies2D[i].gravityScale = 0f;
+                bodies2D[i].isKinematic = true;
+                bodies2D[i].velocity = Vector2.zero;
+            }
+
+            character.visualObject = visual;
         }
 
         private Character FindCharacterClassByName(GameObject go, string wanted)

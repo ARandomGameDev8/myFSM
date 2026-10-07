@@ -15,9 +15,9 @@ Full design: `Docs/RPG_Character_Stats_System_Design_Document.md` (the document 
 | `CharacterStats/` | Character Stats system | `.charstat` parse/write, `CharacterStats`, `CharStatAsset` |
 | `GameplayStats/` | Formula DSL + runtime | `.gameplaystat` parse, compile to delegates, recalc server, `Blackboard` |
 | `Definitions/` | Character definitions + registry | `CharacterDefinition` tree, `CharacterRegistry`, tags |
-| `Runtime/` | `Character` hierarchy + `CharacterBuilderServer` + `CharacterDB` | spawn pipeline, 2D/3D movement controllers, `PlayerController` (WASD + Space + gravity via `CharacterController`, no camera — attached automatically to 3D non-physics Players); definitions persist as **JSON records** in `Assets/Resources/CharacterDB/` (one record per character, self-describing, readable in builds via `Resources`), and the registry is the server's **LRU cache** in front of that DB — the server owns every read and write, the cache is Unity-serialized (survives Play → Stop) and auto-reloads from the DB when cold |
+| `Runtime/` | `Character` hierarchy + `CharacterBuilderServer` + `CharacterDB` | spawn pipeline, 2D/3D movement, optional render-only 3D cube/capsule/Resources-model child, and player camera modes (DoNotAlter / first person / third person); the default movement remains camera-independent. Definitions persist as **JSON records** in `Assets/Resources/CharacterDB/` (one record per character, self-describing, readable in builds via `Resources`), and the registry is the server's **LRU cache** in front of that DB — the server owns every read and write, the cache is Unity-serialized (survives Play → Stop) and auto-reloads from the DB when cold |
 | `UI/` | `StatBar`, the five concrete bars, and `RuntimeCharacterMonitorMenu` | health/shield/stamina/magic/XP visuals plus the live in-game character/stat/server inspector |
-| `Editor/` | The four visual editors + the server's inspector | Stats / Gameplay / Character / Registry windows; `CharacterBuilderServer`'s custom inspector opens them and spawns from the scene |
+| `Editor/` | The four visual editors + the server's inspector | The singleton `CharacterBuilderServer` owns both factories and their builder windows: `StatsFactory` groups Character Stats and Gameplay Stats; `CharacterFactory` creates the Character Builder. The workflow remains Character Stats → Gameplay Stats → Character Builder; the Registry window remains separate |
 | `Samples/` | `RPGStats.charstat`, `RPGGameplay.gameplaystat`, `OrcWarriorFSM` | end-to-end example from the design doc |
 | `Sandbox~/` | Headless compile + smoke-test harness | `dotnet run` verification, no Unity needed |
 
@@ -27,12 +27,18 @@ The RPG spawn pipeline does **not** generate C# component scripts. It adds
 compiled component types that are defined in this project: `Character`,
 `PlayerCharacter`, `EnemyCharacter`, and `FriendlyNPC` (`Runtime/Character.cs`
 and `Runtime/CharacterHierarchy.cs`); `PlayerMovement` (`Runtime/PlayerMovement.cs`);
-and `HealthBar` (`UI/StatBars.cs`). It also adds Unity's built-in physics,
-collider, controller, animator, and rigidbody components as required by the
-character definition. `CharacterBuilderServer.Materialize` is the complete
-attachment matrix (`Runtime/CharacterBuilderServer.cs`). These component
-**instances** are created with `AddComponent` during spawn; their C# classes
-are already defined and compiled. The editor may also create a scene
+and `HealthBar` (`UI/StatBars.cs`). `PlayerController`
+(`Runtime/PlayerController.cs`) is another repo-defined, optional standalone
+mover, but the spawn pipeline does not attach it. The pipeline also adds
+Unity's built-in physics, collider, controller, animator, and rigidbody
+components as required by the character definition. Optional 3D visuals are
+child `GameObject` instances made from Unity primitives or a model loaded by
+its `Resources` path; visual
+colliders are disabled, so the existing root-collider matrix stays unchanged.
+`CharacterBuilderServer.Materialize` is the complete attachment matrix
+(`Runtime/CharacterBuilderServer.cs`). These component **instances** are
+created with `AddComponent` during spawn; their C# classes are already defined
+and compiled. The editor may also create a scene
 `CharacterBuilderServer` GameObject if one is missing, then add that existing
 script type—again, no component source is generated.
 

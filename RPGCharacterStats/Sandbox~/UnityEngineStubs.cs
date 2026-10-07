@@ -80,9 +80,19 @@ namespace UnityEngine
 
         public static void DontDestroyOnLoad(Object o) { }
 
+        public static T Instantiate<T>(T original, Transform parent, bool worldPositionStays)
+            where T : Object
+        {
+            GameObject source = original as GameObject;
+            if (source == null) return null;
+            GameObject clone = GameObject.CloneForSandbox(source);
+            if (parent != null) clone.transform.SetParent(parent, worldPositionStays);
+            return clone as T;
+        }
+
         public static T[] FindObjectsOfType<T>() where T : Object
         {
-            return new T[0];
+            return GameObject.FindComponentsOfType<T>();
         }
 
         public static implicit operator bool(Object o)
@@ -472,6 +482,16 @@ namespace UnityEngine
 
     public class MonoBehaviour : Behaviour { }
 
+    public enum PrimitiveType
+    {
+        Sphere,
+        Capsule,
+        Cylinder,
+        Cube,
+        Plane,
+        Quad,
+    }
+
     public sealed class GameObject : Object
     {
         public string tag;
@@ -504,6 +524,51 @@ namespace UnityEngine
             return null;
         }
 
+        public static GameObject CreatePrimitive(PrimitiveType type)
+        {
+            GameObject primitive = new GameObject(type.ToString());
+            if (type == PrimitiveType.Capsule) primitive.AddComponent<CapsuleCollider>();
+            else primitive.AddComponent<Collider>();
+            return primitive;
+        }
+
+        internal static GameObject CloneForSandbox(GameObject original)
+        {
+            GameObject clone = new GameObject(original.name);
+            clone.tag = original.tag;
+            clone.layer = original.layer;
+            clone.transform.position = original.transform.position;
+            clone.transform.rotation = original.transform.rotation;
+            clone.transform.localPosition = original.transform.localPosition;
+            clone.transform.localRotation = original.transform.localRotation;
+            clone.transform.localScale = original.transform.localScale;
+            for (int i = 0; i < original._components.Count; i++)
+            {
+                Component component = original._components[i];
+                if (component == null || component.destroyed) continue;
+                try { clone.AddComponent(component.GetType()); }
+                catch { /* A headless prefab may contain a component with no public constructor. */ }
+            }
+            return clone;
+        }
+
+        internal static T[] FindComponentsOfType<T>() where T : Object
+        {
+            List<T> found = new List<T>();
+            for (int i = 0; i < _all.Count; i++)
+            {
+                GameObject go = _all[i];
+                if (go == null || go.destroyed || !go.activeSelf) continue;
+                T[] components = go.GetComponents<T>();
+                for (int c = 0; c < components.Length; c++)
+                {
+                    Object component = components[c] as Object;
+                    if (component != null && !component.destroyed) found.Add(components[c]);
+                }
+            }
+            return found.ToArray();
+        }
+
         public void SetActive(bool value) { activeSelf = value; }
 
         public T GetComponent<T>()
@@ -525,6 +590,23 @@ namespace UnityEngine
                 if (_components[i] is T) found.Add((T)(object)_components[i]);
             }
             return found.ToArray();
+        }
+
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false)
+        {
+            List<T> found = new List<T>();
+            CollectComponentsInChildren(this, includeInactive, found);
+            return found.ToArray();
+        }
+
+        private static void CollectComponentsInChildren<T>(GameObject root, bool includeInactive,
+            List<T> found)
+        {
+            if (root == null || (!includeInactive && !root.activeSelf)) return;
+            T[] own = root.GetComponents<T>();
+            found.AddRange(own);
+            for (int i = 0; i < root.transform.childCount; i++)
+                CollectComponentsInChildren(root.transform.GetChild(i).gameObject, includeInactive, found);
         }
 
         public T AddComponent<T>() where T : Component, new()
@@ -571,25 +653,55 @@ namespace UnityEngine
     {
         public Vector3 position;
         public Quaternion rotation = Quaternion.identity;
+        public Vector3 localPosition;
+        public Quaternion localRotation = Quaternion.identity;
         public Vector3 localScale = new Vector3(1f, 1f, 1f);
+
+        private Transform _parent;
+        private readonly List<Transform> _children = new List<Transform>();
 
         public Vector3 eulerAngles
         {
-            get { return new Vector3(); }
-            set { }
+            get { return rotation.eulerAngles; }
+            set { rotation = Quaternion.Euler(value.x, value.y, value.z); }
         }
 
-        public Vector3 forward
+        public Vector3 forward { get { return rotation * Vector3.forward; } }
+        public Vector3 right { get { return rotation * Vector3.right; } }
+        public int childCount { get { return _children.Count; } }
+
+        public Transform parent
         {
-            get { return new Vector3(0f, 0f, 1f); }
+            get { return _parent; }
+            set { SetParent(value, true); }
         }
 
-        public Vector3 right
+        public Transform GetChild(int index) { return _children[index]; }
+
+        public void SetParent(Transform newParent, bool worldPositionStays = true)
         {
-            get { return new Vector3(1f, 0f, 0f); }
-        }
+            Vector3 worldPosition = position;
+            Quaternion worldRotation = rotation;
+            if (_parent != null) _parent._children.Remove(this);
+            _parent = newParent;
+            if (_parent != null && !_parent._children.Contains(this)) _parent._children.Add(this);
 
-        public Transform parent { get; set; }
+            if (worldPositionStays)
+            {
+                position = worldPosition;
+                rotation = worldRotation;
+            }
+            else if (_parent == null)
+            {
+                position = localPosition;
+                rotation = localRotation;
+            }
+            else
+            {
+                position = _parent.position + localPosition;
+                rotation = _parent.rotation * localRotation;
+            }
+        }
     }
 
     // ---- math ----
@@ -712,14 +824,68 @@ namespace UnityEngine
             get { Quaternion q; q.x = 0; q.y = 0; q.z = 0; q.w = 1; return q; }
         }
 
+        public Vector3 eulerAngles
+        {
+            get
+            {
+                float sinPitch = 2f * (w * x - y * z);
+                float pitch = Math.Abs(sinPitch) >= 1f
+                    ? (float)(Math.Sign(sinPitch) * Math.PI / 2f)
+                    : (float)Math.Asin(sinPitch);
+                float yaw = (float)Math.Atan2(2f * (w * y + z * x), 1f - 2f * (x * x + y * y));
+                float roll = (float)Math.Atan2(2f * (w * z + x * y), 1f - 2f * (x * x + z * z));
+                return new Vector3(pitch * Mathf.Rad2Deg, yaw * Mathf.Rad2Deg, roll * Mathf.Rad2Deg);
+            }
+        }
+
         public static Quaternion Euler(float x, float y, float z)
         {
-            return identity;
+            float halfX = x * Mathf.Deg2Rad * 0.5f;
+            float halfY = y * Mathf.Deg2Rad * 0.5f;
+            float halfZ = z * Mathf.Deg2Rad * 0.5f;
+            Quaternion qx = new Quaternion
+            {
+                x = (float)Math.Sin(halfX), y = 0f, z = 0f, w = (float)Math.Cos(halfX)
+            };
+            Quaternion qy = new Quaternion
+            {
+                x = 0f, y = (float)Math.Sin(halfY), z = 0f, w = (float)Math.Cos(halfY)
+            };
+            Quaternion qz = new Quaternion
+            {
+                x = 0f, y = 0f, z = (float)Math.Sin(halfZ), w = (float)Math.Cos(halfZ)
+            };
+            return qy * qx * qz;
         }
 
         public static Quaternion LookRotation(Vector3 forward)
         {
-            return identity;
+            float yaw = (float)Math.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
+            float pitch = (float)-Math.Asin(Mathf.Clamp(forward.y, -1f, 1f)) * Mathf.Rad2Deg;
+            return Euler(pitch, yaw, 0f);
+        }
+
+        public static Quaternion operator *(Quaternion a, Quaternion b)
+        {
+            return new Quaternion
+            {
+                x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+            };
+        }
+
+        public static Vector3 operator *(Quaternion rotation, Vector3 point)
+        {
+            Vector3 q = new Vector3(rotation.x, rotation.y, rotation.z);
+            float dot = Vector3.Dot(q, point);
+            float qLength = Vector3.Dot(q, q);
+            Vector3 cross = new Vector3(
+                q.y * point.z - q.z * point.y,
+                q.z * point.x - q.x * point.z,
+                q.x * point.y - q.y * point.x);
+            return q * (2f * dot) + point * (rotation.w * rotation.w - qLength) + cross * (2f * rotation.w);
         }
     }
 
@@ -781,6 +947,22 @@ namespace UnityEngine
     }
 
     public class Sprite : Object { }
+
+    public class Camera : Behaviour
+    {
+        public float fieldOfView = 60f;
+
+        public static Camera main
+        {
+            get
+            {
+                Camera[] cameras = Object.FindObjectsOfType<Camera>();
+                for (int i = 0; i < cameras.Length; i++)
+                    if (cameras[i].enabled && cameras[i].gameObject.tag == "MainCamera") return cameras[i];
+                return null;
+            }
+        }
+    }
 
     public class Animator : Behaviour
     {
@@ -997,14 +1179,40 @@ namespace UnityEngine
     /// methods in the headless tests instead.</summary>
     public static class Input
     {
+        public static float MouseXAxis;
+        public static float MouseYAxis;
+
         public static bool GetKey(KeyCode key) { return false; }
         public static bool GetKeyDown(KeyCode key) { return false; }
         public static bool GetKeyUp(KeyCode key) { return false; }
-        public static float GetAxis(string axisName) { return 0f; }
-        public static float GetAxisRaw(string axisName) { return 0f; }
+        public static float GetAxis(string axisName)
+        {
+            if (axisName == "Mouse X") return MouseXAxis;
+            if (axisName == "Mouse Y") return MouseYAxis;
+            return 0f;
+        }
+        public static float GetAxisRaw(string axisName) { return GetAxis(axisName); }
     }
 
     // ---- environment ----
+
+    public enum CursorLockMode
+    {
+        None,
+        Locked,
+        Confined,
+    }
+
+    public static class Cursor
+    {
+        public static CursorLockMode lockState = CursorLockMode.None;
+        public static bool visible = true;
+    }
+
+    public static class Application
+    {
+        public static bool isPlaying;
+    }
 
     public static class Debug
     {

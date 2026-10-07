@@ -27,6 +27,11 @@ namespace RPGCharacterStats
         [Header("Configuration (read-only after spawn)")]
         public CharacterDimension dimension;
         public PhysicsMode physicsMode;
+        public CharacterVisual3D visual3D = CharacterVisual3D.Capsule;
+        public CharacterCameraMode cameraMode = CharacterCameraMode.DoNotAlter;
+
+        [Header("Visual")]
+        public GameObject visualObject;
 
         [Header("Stats (populated by the spawn pipeline)")]
         public CharacterStats characterStats = new CharacterStats();
